@@ -74,6 +74,7 @@ export class PgDbClient implements DbClient {
       },
     };
 
+    let releaseError: Error | undefined;
     try {
       await client.query("BEGIN");
       const result = await work(tx);
@@ -82,14 +83,16 @@ export class PgDbClient implements DbClient {
     } catch (err) {
       try {
         await client.query("ROLLBACK");
-      } catch {
-        // Preserve the original failure. A broken rollback means the
-        // connection is discarded/released below; callers still receive the
-        // operation failure that caused the rollback attempt.
+      } catch (rollbackErr) {
+        // A rollback failure means the connection may be poisoned. Pass an
+        // error to pg's release() so the pool destroys it instead of making
+        // it available to another request. Preserve the original operation
+        // failure for the caller.
+        releaseError = rollbackErr instanceof Error ? rollbackErr : new Error(String(rollbackErr));
       }
       throw wrapDbError(err);
     } finally {
-      client.release();
+      client.release(releaseError);
     }
   }
 

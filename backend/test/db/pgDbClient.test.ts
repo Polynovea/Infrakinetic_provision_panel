@@ -84,6 +84,29 @@ describe("db/pgDbClient", () => {
     expect(release).toHaveBeenCalledTimes(1);
   });
 
+  it("transaction() destroys the pinned client when rollback itself fails", async () => {
+    const rollbackError = new Error("socket closed during rollback");
+    const query = vi.fn(async (sql: string) => {
+      if (sql === "SELECT explode") throw new Error("original operation failure");
+      if (sql === "ROLLBACK") throw rollbackError;
+      return { rows: [] };
+    });
+    const release = vi.fn();
+    const connect = vi.fn().mockResolvedValue({ query, release });
+    const fakePool = { connect, query: vi.fn(), end: vi.fn() } as unknown as pg.Pool;
+    const client = new PgDbClient(fakePool);
+
+    await expect(
+      client.transaction(async (tx) => {
+        await tx.query("SELECT explode");
+      }),
+    ).rejects.toThrow(/original operation failure/);
+
+    expect(query.mock.calls.map((call) => call[0])).toEqual(["BEGIN", "SELECT explode", "ROLLBACK"]);
+    expect(release).toHaveBeenCalledTimes(1);
+    expect(release).toHaveBeenCalledWith(rollbackError);
+  });
+
   it("end() delegates to the underlying pool", async () => {
     const end = vi.fn().mockResolvedValue(undefined);
     const fakePool = { query: vi.fn(), end } as unknown as pg.Pool;
