@@ -46,11 +46,15 @@ async function deny(
 }
 
 export function requireRole(role: Role, auditSink: AuditSink): RequestHandler {
-  return (req: Request, res: Response, next: NextFunction) => {
+  return async (req: Request, res: Response, next: NextFunction) => {
     const ctx = operatorContextOrDeny(req, res);
     if (!ctx) return;
     if (!ctx.roles.includes(role)) {
-      void deny(auditSink, req, res, new MissingRoleError(role));
+      try {
+        await deny(auditSink, req, res, new MissingRoleError(role));
+      } catch (err) {
+        next(err);
+      }
       return;
     }
     next();
@@ -58,11 +62,15 @@ export function requireRole(role: Role, auditSink: AuditSink): RequestHandler {
 }
 
 export function requireScope(scope: Scope, auditSink: AuditSink): RequestHandler {
-  return (req: Request, res: Response, next: NextFunction) => {
+  return async (req: Request, res: Response, next: NextFunction) => {
     const ctx = operatorContextOrDeny(req, res);
     if (!ctx) return;
     if (!ctx.scopes.includes(scope)) {
-      void deny(auditSink, req, res, new MissingScopeError(scope));
+      try {
+        await deny(auditSink, req, res, new MissingScopeError(scope));
+      } catch (err) {
+        next(err);
+      }
       return;
     }
     next();
@@ -76,14 +84,18 @@ export function requireScope(scope: Scope, auditSink: AuditSink): RequestHandler
 // be wired to only this check until the real challenge exists.
 export function requireStepUp(maxAgeSeconds: number, sessionStore: OperatorSessionStore, auditSink: AuditSink): RequestHandler {
   return async (req: Request, res: Response, next: NextFunction) => {
-    const ctx = operatorContextOrDeny(req, res);
-    if (!ctx) return;
-    const stepUp = await sessionStore.getStepUp(ctx.operatorSessionId);
-    const ageSeconds = stepUp ? (Date.now() - Date.parse(stepUp.verifiedAt)) / 1000 : Infinity;
-    if (!stepUp || ageSeconds > maxAgeSeconds) {
-      void deny(auditSink, req, res, new StepUpRequiredError());
-      return;
+    try {
+      const ctx = operatorContextOrDeny(req, res);
+      if (!ctx) return;
+      const stepUp = await sessionStore.getStepUp(ctx.operatorSessionId);
+      const ageSeconds = stepUp ? (Date.now() - Date.parse(stepUp.verifiedAt)) / 1000 : Infinity;
+      if (!stepUp || stepUp.method === "skeleton-unverified" || ageSeconds > maxAgeSeconds) {
+        await deny(auditSink, req, res, new StepUpRequiredError());
+        return;
+      }
+      next();
+    } catch (err) {
+      next(err);
     }
-    next();
   };
 }

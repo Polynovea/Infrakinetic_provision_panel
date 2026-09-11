@@ -24,10 +24,10 @@ function required(name: string): string {
   if (!value || value.trim() === "") {
     throw new ConfigurationError(
       `Missing required environment variable ${name}. Phase 1A.2 Cognito ` +
-        `verification cannot start until the dedicated ` +
-        `polynovea-platform-operators pool exists and its region/pool ` +
-        `id/app client id are provided via environment configuration — see ` +
-        `docs/1A.2_status.md "AWS resources required to finish live 1A.2".`,
+        `verification cannot start until the operator identity boundary is ` +
+        `configured with a Cognito user pool plus the dedicated Governance ` +
+        `app client/audience. The current plan prefers reusing the existing ` +
+        `pool only if its live MFA posture is proven sufficient — see docs/1A.2_status.md.`,
     );
   }
   return value;

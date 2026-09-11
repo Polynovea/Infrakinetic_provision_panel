@@ -34,6 +34,7 @@ export interface SignOptions {
   issuedAtSecondsAgo?: number;
   omitSub?: boolean;
   omitJti?: boolean;
+  tokenUse?: string;
 }
 
 export async function signTestToken(keyPair: TestKeyPair, options: SignOptions = {}): Promise<string> {
@@ -41,7 +42,7 @@ export async function signTestToken(keyPair: TestKeyPair, options: SignOptions =
   const iat = nowSeconds - (options.issuedAtSecondsAgo ?? 0);
   const exp = iat + (options.expiresInSeconds ?? 3600);
 
-  let builder = new SignJWT({})
+  let builder = new SignJWT({ token_use: options.tokenUse ?? "id" })
     .setProtectedHeader({ alg: "RS256", kid: keyPair.kid })
     .setIssuedAt(iat)
     .setExpirationTime(exp)

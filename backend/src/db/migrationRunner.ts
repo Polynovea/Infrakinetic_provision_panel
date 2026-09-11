@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -9,26 +10,9 @@ export interface MigrationResult {
   applied: boolean;
 }
 
-// Strips full-line `--` comments, then splits on `;`. Every migration file
-// in this repository (0001, 0002) uses only full-line comments and no
-// dollar-quoted function/trigger bodies, so this simple approach is safe for
-// them; it is NOT a general SQL statement splitter and would need
-// strengthening (or a real SQL-aware split) before a migration used
-// dollar-quoting or a `;` inside a string literal. Chosen over passing the
-// whole file to a single query() call because that relies on the "simple
-// query protocol" supporting multiple statements per call — true for `pg`
-// today, unverified for pg-mem's pg-compatible adapter used in tests — so
-// splitting keeps the runner's behavior identical (and testable) against
-// both.
-function splitStatements(sql: string): string[] {
-  const withoutLineComments = sql
-    .split("\n")
-    .filter((line) => !line.trim().startsWith("--"))
-    .join("\n");
-  return withoutLineComments
-    .split(";")
-    .map((statement) => statement.trim())
-    .filter((statement) => statement.length > 0);
+interface AppliedMigrationRow {
+  id: string;
+  checksum: string;
 }
 
 export function listMigrationFiles(migrationsDir: string): string[] {
@@ -37,34 +21,18 @@ export function listMigrationFiles(migrationsDir: string): string[] {
     .sort();
 }
 
-// Create-then-tolerate-already-exists, rather than an existence check
-// followed by a plain CREATE TABLE, or `CREATE TABLE IF NOT EXISTS`. Two
-// independent tooling limitations ruled out the more obvious forms:
-//   - `CREATE TABLE IF NOT EXISTS` fails pg-mem's AST-coverage check when
-//     the table already exists (a pg-mem parser limitation, not a real
-//     Postgres restriction).
-//   - An existence check via `information_schema.tables WHERE table_schema
-//     = 'governance'` always returns zero rows against pg-mem — it reports
-//     every table's table_schema as 'public' regardless of which schema it
-//     was actually created in (confirmed by direct probe; pg_namespace/
-//     pg_class are similarly non-functional stubs in pg-mem). Real
-//     Postgres reports this correctly; pg-mem does not.
-// This form sidesteps both: attempt the CREATE, and treat "already exists"
-// as success. It is also strictly safer than a check-then-create pattern
-// against a REAL database — no TOCTOU race if two migration runs started
-// simultaneously against a brand-new database.
-//
-// Lives in the `governance` schema, like every other object this
-// application owns (CORRECTED 2026-09-11 — see docs/1A.3_status.md
-// "Architecture correction"). governance_app owns that schema (granted by
-// provisioning/001_create_role_database_and_schema.sql), so it can create this
-// table without any further grant; it has no privilege to create anything
-// in `public`.
+function migrationChecksum(sql: string): string {
+  return createHash("sha256").update(sql, "utf8").digest("hex");
+}
+
+// The tracking table itself is a single DDL statement, so it does not need a
+// multi-statement transaction. Create-then-tolerate avoids a check/create race.
 export async function ensureMigrationsTable(client: DbClient): Promise<void> {
   try {
     await client.query(
       `CREATE TABLE governance.schema_migrations (
         id TEXT PRIMARY KEY,
+        checksum TEXT NOT NULL,
         applied_at TIMESTAMPTZ NOT NULL
       )`,
     );
@@ -79,44 +47,59 @@ export async function appliedMigrationIds(client: DbClient): Promise<Set<string>
   return new Set(result.rows.map((row) => row.id));
 }
 
-// Applies every migration file in migrationsDir, in filename order, that is
-// not already recorded in schema_migrations. Idempotent: re-running with
-// nothing new to apply is a safe no-op that reports every file as
-// already-applied.
+async function appliedMigrationRows(client: DbClient): Promise<Map<string, string>> {
+  const result = await client.query<AppliedMigrationRow>(
+    "SELECT id, checksum FROM governance.schema_migrations",
+  );
+  return new Map(result.rows.map((row) => [row.id, row.checksum]));
+}
+
+// Applies each migration file atomically on one pinned PostgreSQL connection.
+// The SQL file is sent as one simple-query payload inside that transaction;
+// node-postgres supports multi-statement text when no parameters are supplied,
+// so this avoids a home-grown SQL splitter that would break on dollar-quoted
+// functions or semicolons inside string literals.
 //
-// NOT transactional across statements or across files — each statement is
-// its own query() call (see splitStatements' comment for why), and this
-// module's minimal DbClient interface has no cross-call transaction
-// primitive. Acceptable for 1A.3's own small, additive-only migrations
-// (0001, 0002); a partially-applied migration on failure is a known,
-// documented limitation (see docs/1A.3_status.md), not a claim of
-// atomicity, and should be hardened before this runner is trusted with a
-// migration large or risky enough for partial application to matter.
+// Applied migrations are content-addressed with SHA-256. Editing an already-
+// applied migration is therefore a hard failure rather than silent drift.
 export async function runMigrations(
   client: DbClient,
   migrationsDir: string,
   options: { dryRun?: boolean } = {},
 ): Promise<MigrationResult[]> {
   await ensureMigrationsTable(client);
-  const applied = await appliedMigrationIds(client);
+  const applied = await appliedMigrationRows(client);
   const files = listMigrationFiles(migrationsDir);
   const results: MigrationResult[] = [];
 
   for (const file of files) {
-    if (applied.has(file)) {
+    const sql = readFileSync(join(migrationsDir, file), "utf8");
+    const checksum = migrationChecksum(sql);
+    const existingChecksum = applied.get(file);
+
+    if (existingChecksum !== undefined) {
+      if (existingChecksum !== checksum) {
+        throw new Error(
+          `Migration checksum mismatch for ${file}: database=${existingChecksum}, source=${checksum}. ` +
+            "Applied migrations are immutable; add a new migration instead of editing history.",
+        );
+      }
       results.push({ id: file, applied: false });
       continue;
     }
+
     if (options.dryRun) {
       results.push({ id: file, applied: true });
       continue;
     }
 
-    const sql = readFileSync(join(migrationsDir, file), "utf8");
-    for (const statement of splitStatements(sql)) {
-      await client.query(statement);
-    }
-    await client.query("INSERT INTO governance.schema_migrations (id, applied_at) VALUES ($1, now())", [file]);
+    await client.transaction(async (tx) => {
+      await tx.query(sql);
+      await tx.query(
+        "INSERT INTO governance.schema_migrations (id, checksum, applied_at) VALUES ($1, $2, now())",
+        [file, checksum],
+      );
+    });
     results.push({ id: file, applied: true });
   }
 

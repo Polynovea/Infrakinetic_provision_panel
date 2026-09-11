@@ -65,6 +65,14 @@ export class WrongAudienceError extends ManagementAuthError {
   }
 }
 
+export class WrongTokenUseError extends ManagementAuthError {
+  readonly code = "TOKEN_WRONG_USE";
+  readonly httpStatus = 401;
+  constructor(actual: unknown) {
+    super(`Management bearer token must be a Cognito ID token (token_use='id'); received '${String(actual)}'.`);
+  }
+}
+
 // --- Operator/session state --------------------------------------------------
 
 export class OperatorNotProvisionedError extends ManagementAuthError {
@@ -80,6 +88,14 @@ export class OperatorDisabledError extends ManagementAuthError {
   readonly httpStatus = 403;
   constructor(status: string) {
     super(`Operator account is ${status}.`);
+  }
+}
+
+export class OperatorMfaRequiredError extends ManagementAuthError {
+  readonly code = "OPERATOR_MFA_REQUIRED";
+  readonly httpStatus = 403;
+  constructor() {
+    super("Platform operator is not marked as MFA-enrolled in the Governance directory.");
   }
 }
 
@@ -122,6 +138,14 @@ export class StepUpRequiredError extends ManagementAuthError {
   readonly httpStatus = 403;
   constructor() {
     super("Route requires a fresh step-up verification.");
+  }
+}
+
+export class StepUpNotConfiguredError extends ManagementAuthError {
+  readonly code = "STEP_UP_NOT_CONFIGURED";
+  readonly httpStatus = 501;
+  constructor() {
+    super("Real operator step-up verification is not configured yet; caller-asserted step-up is never accepted.");
   }
 }
 

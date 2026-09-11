@@ -6,6 +6,7 @@ import {
   MalformedTokenError,
   WrongAudienceError,
   WrongIssuerError,
+  WrongTokenUseError,
 } from "../../src/identity/errors.js";
 import { buildTestIdentityProvider } from "../helpers/testProvider.js";
 import { generateTestKeyPair, signTestToken, TEST_AUDIENCE, TEST_ISSUER } from "../helpers/testToken.js";
@@ -77,6 +78,14 @@ describe("CognitoIdentityProvider — the Cognito JWT verification boundary", ()
     const tenantShapedToken = await signTestToken(keyPair, { audience: "tenant-app-client-id" });
 
     await expect(provider.verifyToken(tenantShapedToken)).rejects.toBeInstanceOf(WrongAudienceError);
+  });
+
+  it("rejects an access-token-shaped JWT even when it is signed by the same pool", async () => {
+    const keyPair = await generateTestKeyPair();
+    const provider = buildTestIdentityProvider(keyPair);
+    const accessToken = await signTestToken(keyPair, { tokenUse: "access" });
+
+    await expect(provider.verifyToken(accessToken)).rejects.toBeInstanceOf(WrongTokenUseError);
   });
 
   it("rejects a token missing the 'sub' claim", async () => {

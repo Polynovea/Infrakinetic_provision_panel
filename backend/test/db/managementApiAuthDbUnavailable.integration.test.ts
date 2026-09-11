@@ -4,9 +4,12 @@ import { beforeEach, describe, expect, it } from "vitest";
 
 import { DatabaseUnavailableError } from "../../src/db/errors.js";
 import { InMemoryAuditSink } from "../../src/identity/adapters/inMemoryAuditSink.js";
+import { InMemoryOperatorDirectory } from "../../src/identity/adapters/inMemoryOperatorDirectory.js";
 import { InMemorySessionStore } from "../../src/identity/adapters/inMemorySessionStore.js";
 import type { CognitoIdentityProvider } from "../../src/identity/providers/cognitoIdentityProvider.js";
+import type { OperatorSessionStore } from "../../src/identity/sessionStore.js";
 import { createManagementRouter } from "../../src/routes/management/index.js";
+import { activeAdminOperator } from "../helpers/operators.js";
 import { buildTestIdentityProvider } from "../helpers/testProvider.js";
 import { generateTestKeyPair, signTestToken, type TestKeyPair } from "../helpers/testToken.js";
 
@@ -53,5 +56,42 @@ describe("requireManagementApiAuth — Governance DB unavailable (fail-closed)",
     expect(res.body.error).toBe("GOVERNANCE_DB_UNAVAILABLE");
     // No operator context leaked, no default-allow.
     expect(res.body).not.toHaveProperty("operator");
+  });
+
+  it("returns typed 503 when the DB fails after authentication during logout", async () => {
+    const app = express();
+    const op = activeAdminOperator();
+    const sessionStore: OperatorSessionStore = {
+      isRevoked: async () => false,
+      revoke: async () => {
+        throw new DatabaseUnavailableError("database connection dropped during logout");
+      },
+      recordStepUp: async () => undefined,
+      getStepUp: async () => undefined,
+    };
+    const auditSink = new InMemoryAuditSink();
+
+    app.use(
+      "/management/v1",
+      createManagementRouter({
+        identityProvider: provider,
+        operatorDirectory: new InMemoryOperatorDirectory([op]),
+        sessionStore,
+        auditSink,
+      }),
+    );
+
+    const token = await signTestToken(keyPair, { subject: op.cognitoSub });
+    const res = await request(app)
+      .post("/management/v1/session/logout")
+      .set("authorization", `Bearer ${token}`);
+
+    expect(res.status).toBe(503);
+    expect(res.body.error).toBe("GOVERNANCE_DB_UNAVAILABLE");
+    expect(
+      auditSink.events.some(
+        (event) => event.eventType === "authz.denied" && event.reasonCode === "GOVERNANCE_DB_UNAVAILABLE",
+      ),
+    ).toBe(true);
   });
 });

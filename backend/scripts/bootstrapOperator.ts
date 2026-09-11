@@ -22,7 +22,7 @@
 // Usage:
 //   npx tsx scripts/bootstrapOperator.ts \
 //     --cognito-sub <sub> --email <email> --display-name <name> \
-//     --role platform_admin --actor <your name> --reason <why> \
+//     --role platform_admin --actor <your name> --reason <why> --mfa-verified \
 //     [--bootstrap-root] [--dry-run] [--seed-path <path>]
 //
 //   npx tsx scripts/bootstrapOperator.ts --list [--seed-path <path>]
@@ -46,6 +46,7 @@ interface Args {
   role?: string;
   actor?: string;
   reason?: string;
+  mfaVerified: boolean;
   bootstrapRoot: boolean;
   dryRun: boolean;
   list: boolean;
@@ -55,6 +56,7 @@ interface Args {
 
 function parseArgs(argv: string[]): Args {
   const args: Args = {
+    mfaVerified: false,
     bootstrapRoot: false, dryRun: false, list: false,
     seedPath: DEFAULT_SEED_PATH, auditPath: DEFAULT_AUDIT_PATH,
   };
@@ -67,6 +69,7 @@ function parseArgs(argv: string[]): Args {
       case "--role": args.role = argv[++i]; break;
       case "--actor": args.actor = argv[++i]; break;
       case "--reason": args.reason = argv[++i]; break;
+      case "--mfa-verified": args.mfaVerified = true; break;
       case "--seed-path": args.seedPath = argv[++i]; break;
       case "--audit-path": args.auditPath = argv[++i]; break;
       case "--bootstrap-root": args.bootstrapRoot = true; break;
@@ -99,6 +102,7 @@ interface AuditEntry {
   email?: string;
   role?: string;
   reason?: string;
+  mfaVerified: boolean;
   bootstrapRoot: boolean;
   detail?: string;
 }
@@ -144,8 +148,11 @@ function main(): void {
   if (!cognitoSub || !email || !displayName || !role || !actor || !reason) {
     fail(
       "missing required argument(s). Required: --cognito-sub --email --display-name --role --actor --reason " +
-        "(optional: --bootstrap-root --dry-run --seed-path --list)",
+        "--mfa-verified (optional: --bootstrap-root --dry-run --seed-path --list)",
     );
+  }
+  if (!args.mfaVerified) {
+    fail("--mfa-verified is required before creating an active operator; this CLI never silently claims MFA enrollment.");
   }
   if (!isRole(role)) {
     fail(`'${role}' is not a known role. Valid roles are defined in src/identity/roles.ts.`);
@@ -164,7 +171,7 @@ function main(): void {
   if (args.bootstrapRoot && operators.length > 0 && !existingBySub) {
     recordAudit(args.auditPath, {
       timestamp: new Date().toISOString(), actor, action: "bootstrap_operator",
-      result: "refused", cognitoSub, email, role, reason, bootstrapRoot: true,
+      result: "refused", cognitoSub, email, role, reason, mfaVerified: args.mfaVerified, bootstrapRoot: true,
       detail: `seed store already has ${operators.length} operator(s), none matching this cognito_sub — platform root already bootstrapped`,
     }, args.dryRun);
     fail(`--bootstrap-root requires an empty operator seed store (or one containing only this same cognito_sub), but it already has ${operators.length} other entry(ies). The platform root has already been bootstrapped.`);
@@ -173,7 +180,7 @@ function main(): void {
   if (existingByEmail) {
     recordAudit(args.auditPath, {
       timestamp: new Date().toISOString(), actor, action: "bootstrap_operator",
-      result: "refused", cognitoSub, email, role, reason, bootstrapRoot: args.bootstrapRoot,
+      result: "refused", cognitoSub, email, role, reason, mfaVerified: args.mfaVerified, bootstrapRoot: args.bootstrapRoot,
       detail: `email already bound to a different cognito_sub (${existingByEmail.cognitoSub})`,
     }, args.dryRun);
     fail(`email '${email}' is already bound to a different operator record (cognito_sub=${existingByEmail.cognitoSub}). Ambiguous state — resolve manually, this script will not guess which is correct.`);
@@ -187,7 +194,7 @@ function main(): void {
     status: "active",
     roles: [role as Role],
     scopes: ROLE_SCOPE_CEILING[role as Role],
-    mfaEnrolled: true,
+    mfaEnrolled: args.mfaVerified,
     createdAt: existingBySub?.createdAt ?? new Date().toISOString(),
   };
 
@@ -195,7 +202,7 @@ function main(): void {
     if (recordsEqual(existingBySub, candidate)) {
       recordAudit(args.auditPath, {
         timestamp: new Date().toISOString(), actor, action: "bootstrap_operator",
-        result: "no_change", cognitoSub, email, role, reason, bootstrapRoot: args.bootstrapRoot,
+        result: "no_change", cognitoSub, email, role, reason, mfaVerified: args.mfaVerified, bootstrapRoot: args.bootstrapRoot,
       }, args.dryRun);
       console.log(`bootstrap_operator: no change — an identical operator record already exists for cognito_sub=${cognitoSub}.`);
       return;
@@ -204,7 +211,7 @@ function main(): void {
     // than silently overwriting a role/scope grant someone else set.
     recordAudit(args.auditPath, {
       timestamp: new Date().toISOString(), actor, action: "bootstrap_operator",
-      result: "refused", cognitoSub, email, role, reason, bootstrapRoot: args.bootstrapRoot,
+      result: "refused", cognitoSub, email, role, reason, mfaVerified: args.mfaVerified, bootstrapRoot: args.bootstrapRoot,
       detail: "an operator record already exists for this cognito_sub with different attributes",
     }, args.dryRun);
     fail(
@@ -228,7 +235,7 @@ function main(): void {
 
   recordAudit(args.auditPath, {
     timestamp: new Date().toISOString(), actor, action: "bootstrap_operator",
-    result: "created", cognitoSub, email, role, reason, bootstrapRoot: args.bootstrapRoot,
+    result: "created", cognitoSub, email, role, reason, mfaVerified: args.mfaVerified, bootstrapRoot: args.bootstrapRoot,
   }, args.dryRun);
 
   console.log(args.dryRun ? "[dry-run] no files were written." : `Done. ${args.seedPath} and ${args.auditPath} updated.`);

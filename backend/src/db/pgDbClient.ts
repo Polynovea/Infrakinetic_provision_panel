@@ -1,22 +1,20 @@
 import pg from "pg";
 
 import { loadDbConfig } from "./dbConfig.js";
-import type { DbClient } from "./dbClient.js";
+import type { DbClient, DbExecutor } from "./dbClient.js";
 import { DatabaseUnavailableError } from "./errors.js";
 
 const { Pool } = pg;
 
+function wrapDbError(err: unknown): DatabaseUnavailableError {
+  if (err instanceof DatabaseUnavailableError) return err;
+  const message = err instanceof Error ? err.message : String(err);
+  return new DatabaseUnavailableError(`Governance database query failed: ${message}`);
+}
+
 // Real Postgres-backed DbClient. Never constructed at import time — only via
 // fromEnv(), called lazily by LazyDbClient on first actual query, so server
-// boot and /healthz never require GOVERNANCE_DB_* to be set (identical
-// invariant to identity/providers/cognitoIdentityProvider.ts).
-//
-// UNVERIFIED AGAINST A REAL POSTGRES SERVER as of 1A.3 — this session has
-// no reachable Postgres instance (local or RDS). Tested only against
-// pg-mem's pg-compatible adapter (test/db/pgDbClient.test.ts), which
-// exercises this exact class's query()/error-wrapping logic with a
-// structurally-compatible in-memory Pool substituted for the real one. See
-// docs/1A.3_status.md.
+// boot and /healthz never require GOVERNANCE_DB_* to be set.
 export class PgDbClient implements DbClient {
   private readonly pool: pg.Pool;
 
@@ -34,16 +32,9 @@ export class PgDbClient implements DbClient {
       password: config.password,
       ssl: config.ssl ? { rejectUnauthorized: true } : undefined,
       max: config.poolMax,
-      // Defense in depth alongside `ALTER ROLE governance_app SET
-      // search_path = governance` in provisioning/001_create_role_database_and_schema.sql
-      // (the authoritative, server-enforced layer — this applies even if a
-      // future connection somehow authenticates as a different role).
-      // Deliberately excludes `public`: an unqualified reference to a table
-      // that only exists in `public` (any Infrakinetic table) must fail to
-      // resolve, not silently succeed against the wrong table. Every query
-      // in this codebase also schema-qualifies its own table references
-      // explicitly (see identity/adapters/postgres*.ts), so this is a
-      // second, independent layer, not the only one.
+      // Defense in depth alongside ALTER ROLE governance_app SET
+      // search_path=governance. Every application query remains schema-
+      // qualified as well.
       options: "-c search_path=governance",
     });
     return new PgDbClient(pool);
@@ -57,9 +48,48 @@ export class PgDbClient implements DbClient {
       const result = await this.pool.query<T>(text, params as unknown[] | undefined);
       return { rows: result.rows };
     } catch (err) {
-      if (err instanceof DatabaseUnavailableError) throw err;
-      const message = err instanceof Error ? err.message : String(err);
-      throw new DatabaseUnavailableError(`Governance database query failed: ${message}`);
+      throw wrapDbError(err);
+    }
+  }
+
+  async transaction<T>(work: (tx: DbExecutor) => Promise<T>): Promise<T> {
+    let client: pg.PoolClient;
+    try {
+      client = await this.pool.connect();
+    } catch (err) {
+      throw wrapDbError(err);
+    }
+
+    const tx: DbExecutor = {
+      query: async <R extends object = Record<string, unknown>>(
+        text: string,
+        params?: readonly unknown[],
+      ): Promise<{ rows: R[] }> => {
+        try {
+          const result = await client.query<R>(text, params as unknown[] | undefined);
+          return { rows: result.rows };
+        } catch (err) {
+          throw wrapDbError(err);
+        }
+      },
+    };
+
+    try {
+      await client.query("BEGIN");
+      const result = await work(tx);
+      await client.query("COMMIT");
+      return result;
+    } catch (err) {
+      try {
+        await client.query("ROLLBACK");
+      } catch {
+        // Preserve the original failure. A broken rollback means the
+        // connection is discarded/released below; callers still receive the
+        // operation failure that caused the rollback attempt.
+      }
+      throw wrapDbError(err);
+    } finally {
+      client.release();
     }
   }
 

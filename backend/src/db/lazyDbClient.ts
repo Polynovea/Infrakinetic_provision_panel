@@ -1,12 +1,8 @@
-import type { DbClient } from "./dbClient.js";
+import type { DbClient, DbExecutor } from "./dbClient.js";
 
 // Defers construction of the wrapped DbClient (and therefore validation of
-// GOVERNANCE_DB_* env vars) until the first query, exactly mirroring
-// identity/providers/lazyIdentityProvider.ts for Cognito. Server startup and
-// /healthz never depend on the Governance database existing — only an
-// actual /management/v1/* request that reaches the operator directory or
-// session store does, and it fails closed with a typed
-// DatabaseUnavailableError (503) rather than crashing the process.
+// GOVERNANCE_DB_* env vars) until the first real database operation. Server
+// startup and /healthz never depend on the Governance database existing.
 export class LazyDbClient implements DbClient {
   private instance: DbClient | undefined;
 
@@ -24,6 +20,10 @@ export class LazyDbClient implements DbClient {
     params?: readonly unknown[],
   ): Promise<{ rows: T[] }> {
     return this.resolve().query<T>(text, params);
+  }
+
+  async transaction<T>(work: (tx: DbExecutor) => Promise<T>): Promise<T> {
+    return this.resolve().transaction(work);
   }
 
   async end(): Promise<void> {

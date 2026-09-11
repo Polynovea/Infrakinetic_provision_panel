@@ -1,79 +1,91 @@
 # Governance DB provisioning
 
-Infrastructure setup, run once by a human/session with privileged access to
-the existing RDS instance. Not part of the application's own migration
-chain (`backend/migrations/`, applied by `npm run db:migrate` as the
-`governance_app` role against the already-existing database/schema) — this
-is what makes that role, database and schema exist in the first place.
+Infrastructure setup, run once by a human/session with privileged access to the existing RDS instance. This is not part of the application's normal migration chain (`backend/migrations/`); it creates the dedicated Governance role/database/schema that the migration runner then uses.
 
-**Topology** (see `001_create_role_database_and_schema.sql`'s own header
-for the full record of two corrections along the way): same RDS instance
-as Infrakinetic, but a SEPARATE database (`polynovea_governance`, not
-`polynoveacrm`) and a separate role (`governance_app`). The `governance`
-schema inside `polynovea_governance` is defense in depth on top of the
-database-level separation, not a substitute for it.
+## Topology
 
-**Not executed anywhere as of 1A.3.** This session has neither AWS
-credentials nor a reachable path to the production RDS instance. See
-`docs/1A.3_status.md`.
+Same RDS PostgreSQL instance as Infrakinetic, but a separate database and role:
+
+```text
+RDS PostgreSQL instance
+├── polynoveacrm
+│   └── Infrakinetic application/admin roles
+└── polynovea_governance
+    └── governance schema
+        └── governance_app
+```
+
+`governance_app` is intentionally **not** the database owner. The provisioning admin owns `polynovea_governance`; `governance_app` owns only the `governance` schema. `PUBLIC` receives no privileges on the new Governance database.
+
+Nothing in this directory has been executed against live RDS as part of the local 1A.3 implementation. Live evidence remains required before 1A.3 can close.
 
 ## Steps
 
-1. Generate a strong random password out-of-band (not derived from, or
-   related to, any Infrakinetic credential).
-2. Edit `001_create_role_database_and_schema.sql` locally, replacing the
-   placeholder password. **Never commit the edited file with a real
-   password** — run it and discard the local edit, or keep the real
-   version only in a secret manager.
-3. Open a tunnel to the existing production RDS instance (through the
-   existing EC2 host — do not treat EC2 itself as a development
-   environment; it is only the path to RDS). Run the script with **psql
-   specifically** (it uses `\connect` to switch databases mid-script,
-   which only psql supports) as the existing database admin identity:
-   `psql -h <tunnel-local-host> -p <tunnel-local-port> -U <admin> -d polynoveacrm -f 001_create_role_database_and_schema.sql`.
-4. **Immediately after running it, prove the negative path before doing
-   anything else** — record the exact output of each in
-   `docs/1A.3_status.md`:
-   - `psql -h <host> -p <port> -U governance_app -d polynoveacrm` — must
-     fail to even connect (`REVOKE CONNECT` from the script).
-   - As `governance_app` connected to `polynovea_governance`: attempt
-     `CREATE DATABASE x;` and `CREATE ROLE y;` — both must fail
-     (`NOCREATEDB`/`NOCREATEROLE`).
-5. Prove the positive path: as `governance_app` connected to
-   `polynovea_governance`, confirm `SHOW search_path;` reports `governance`
-   and `\dn` shows the `governance` schema owned by `governance_app`.
-6. Run the application's own migrations against the new database:
-   `GOVERNANCE_DB_HOST=<tunnel-local-host> GOVERNANCE_DB_PORT=<tunnel-local-port> GOVERNANCE_DB_NAME=polynovea_governance GOVERNANCE_DB_USER=governance_app GOVERNANCE_DB_PASSWORD=... npm run db:migrate` (from `backend/`).
-7. Set the same `GOVERNANCE_DB_*` values on the deployed backend's
-   environment (see `backend/.env.example`).
-8. Verify: boot the backend, confirm `/healthz` still returns 200 (it must
-   never depend on the database — see `src/db/dbConfig.ts`), then exercise
-   one real `/management/v1/whoami` call with a valid bearer token and
-   confirm the operator record now round-trips through Postgres instead of
-   the in-memory fixture.
+1. Generate a strong random `governance_app` password out of band. Never copy an Infrakinetic credential.
+2. Establish the existing SSH tunnel through EC2 to the RDS instance. Use EC2 only as the bastion path; do not treat it as the development environment.
+3. Run `001_create_role_database_and_schema.sql` with **psql** as the existing privileged RDS admin/master identity. Pass the Governance password as a psql variable rather than editing it into the tracked file:
+
+   ```text
+   psql -h 127.0.0.1 -p 5433 -U <admin> -d polynoveacrm \
+     -v governance_password='<generated-secret>' \
+     -f backend/provisioning/001_create_role_database_and_schema.sql
+   ```
+
+4. Still as the privileged admin, run the read-only effective-privilege audit against the existing Infrakinetic database:
+
+   ```text
+   psql -h 127.0.0.1 -p 5433 -U <admin> -d polynoveacrm \
+     -f backend/provisioning/002_verify_cross_database_isolation.sql
+   ```
+
+   This is deliberately an **effective privilege** check, not a direct-GRANT check. PostgreSQL permissions are additive: `REVOKE ... FROM governance_app` does not override privileges inherited from `PUBLIC`. The verifier therefore fails if `governance_app` can effectively `CONNECT` to `polynoveacrm`, has administrative role attributes, or inherits another role.
+
+5. If the verifier reports that `PUBLIC` still gives effective access to `polynoveacrm`, do **not** guess an allow-list and do not blindly revoke `PUBLIC` in production. First inventory every legitimate login role that currently needs the database, then perform a separately reviewed ACL hardening change that revokes `CONNECT` from `PUBLIC` and explicitly grants the legitimate roles. Rerun the verifier until it passes.
+
+6. Positive-path checks as `governance_app` against `polynovea_governance`:
+   - connection succeeds;
+   - `SHOW search_path` resolves `governance`;
+   - `governance` schema exists and is owned by `governance_app`;
+   - `CREATE ROLE` fails;
+   - `CREATE DATABASE` fails.
+
+7. Run the Governance migrations as `governance_app`:
+
+   ```text
+   GOVERNANCE_DB_HOST=127.0.0.1
+   GOVERNANCE_DB_PORT=5433
+   GOVERNANCE_DB_NAME=polynovea_governance
+   GOVERNANCE_DB_USER=governance_app
+   GOVERNANCE_DB_PASSWORD=<secret>
+   npm run db:migrate
+   ```
+
+   The migration runner applies each migration on one pinned PostgreSQL connection inside a transaction and records a SHA-256 checksum. Re-running is idempotent; modifying an already-applied migration is rejected as checksum drift.
+
+8. Re-run `npm run db:migrate` to prove idempotency, then run `npm run db:migrate -- --dry-run` and the full test suite against the real database where applicable.
+9. Configure the deployed Governance backend with the same `GOVERNANCE_DB_*` runtime values. The RDS admin/master credential must never appear in Governance runtime configuration.
+10. Boot the backend and prove `/healthz` remains independent of DB/Cognito configuration. Then perform the real Postgres-backed operator/session smoke tests required by `docs/1A.3_status.md`.
+
+## Important isolation details
+
+A direct statement such as:
+
+```sql
+REVOKE CONNECT ON DATABASE polynoveacrm FROM governance_app;
+```
+
+is **not a deny rule**. If `PUBLIC` has `CONNECT`, `governance_app` still has effective `CONNECT`. PostgreSQL also commonly grants function `EXECUTE` to `PUBLIC`; Infrakinetic contains `SECURITY DEFINER` functions. This is why 1A.3 must certify effective cross-database privileges against real RDS rather than infer isolation from an absence of explicit grants.
+
+The bootstrap script therefore does not make blind ACL changes inside `polynoveacrm`. It creates the new Governance database safely, while `002_verify_cross_database_isolation.sql` supplies the mandatory live gate for the existing database.
 
 ## What this deliberately does not do
 
-- Does not put Governance objects inside `polynoveacrm` (Infrakinetic's own
-  database) — even with a dedicated schema, that was an earlier, corrected
-  mistake. See `docs/1A.3_status.md` "Architecture correction".
-- Does not grant `governance_app` anything on `polynoveacrm` — and
-  explicitly revokes `CONNECT` on it, rather than relying on "nothing was
-  ever granted" (PostgreSQL grants `CONNECT` to `PUBLIC` on every database
-  by default, so an explicit revoke is required to actually prove
-  isolation — see the script's own comment).
-- Does not grant `governance_app` `SUPERUSER`, `CREATEDB`, `CREATEROLE`, or
-  `BYPASSRLS` — see the `CREATE ROLE` statement's explicit `NO*` flags.
-- Does not configure backups or connection pooling infrastructure
-  (PgBouncer, RDS Proxy, etc.) — none of those are 1A.3 deliverables per
-  the master plan's §64 "1A.3 — Governance DB" scope.
+- It does not put Governance objects in `polynoveacrm`.
+- It does not give `governance_app` `SUPERUSER`, `CREATEDB`, `CREATEROLE`, or `BYPASSRLS`.
+- It does not make `governance_app` owner of the whole Governance database.
+- It does not create or modify Cognito, EC2, DNS, Vercel, tenants, or real operators.
+- It does not configure backups, PgBouncer, or RDS Proxy; those are outside 1A.3.
 
-## Known, separately-tracked historical finding (not 1A.3 scope)
+## Separate Infrakinetic credential finding
 
-If the RDS master/admin identity used for this bootstrap is *also*
-Infrakinetic's own ordinary runtime application credential (as it appears
-to be, per `api-server/INFRASTRUCTURE.md` and `api-server/.env` — the same
-`polynovea2021` account is both), that is a pre-existing condition on the
-shared instance unrelated to Governance. Record it as a security-hardening
-finding (least-privilege: an application should not run as the instance's
-master/admin account); do not fold remediating it into 1A.3 scope.
+If the RDS admin/master identity used for the one-time bootstrap is also used as an Infrakinetic runtime credential, treat that as an Infrakinetic least-privilege/security-hardening item. Governance must still use only `governance_app` at runtime. Do not expand 1A.3 into a general Infrakinetic DB-role migration unless that issue directly blocks Governance provisioning.

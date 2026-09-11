@@ -57,6 +57,15 @@ describe("requireManagementApiAuth — end-to-end through a real Express router"
     expect(res.body.error).toBe("OPERATOR_DISABLED");
   });
 
+  it("rejects an active operator that is not marked MFA-enrolled in the Governance directory", async () => {
+    const op = activeAdminOperator({ mfaEnrolled: false });
+    const { app: server } = app([op]);
+    const token = await signTestToken(keyPair, { subject: op.cognitoSub });
+    const res = await request(server).get("/management/v1/whoami").set("authorization", `Bearer ${token}`);
+    expect(res.status).toBe(403);
+    expect(res.body.error).toBe("OPERATOR_MFA_REQUIRED");
+  });
+
   it("rejects a revoked operator", async () => {
     const op = revokedOperator();
     const { app: server } = app([op]);
@@ -124,20 +133,34 @@ describe("requireManagementApiAuth — end-to-end through a real Express router"
       expect(res.body.error).toBe("STEP_UP_REQUIRED");
     });
 
-    it("allows access after step-up is recorded, then rejects a non-admin role even with fresh step-up", async () => {
+    it("never lets the caller self-assert step-up, but accepts separately-recorded verified MFA evidence", async () => {
       const admin = activeAdminOperator();
       const viewer = activeViewerOperator();
-      const { app: server } = app([admin, viewer]);
+      const { app: server, sessionStore } = app([admin, viewer]);
 
-      const adminToken = await signTestToken(keyPair, { subject: admin.cognitoSub });
-      await request(server).post("/management/v1/session/step-up").set("authorization", `Bearer ${adminToken}`);
+      const adminJti = "11111111-1111-4111-8111-111111111111";
+      const adminToken = await signTestToken(keyPair, { subject: admin.cognitoSub, jti: adminJti });
+      const selfAssert = await request(server)
+        .post("/management/v1/session/step-up")
+        .set("authorization", `Bearer ${adminToken}`);
+      expect(selfAssert.status).toBe(501);
+      expect(selfAssert.body.error).toBe("STEP_UP_NOT_CONFIGURED");
+
+      const stillBlocked = await request(server)
+        .get("/management/v1/audit/self-test/step-up")
+        .set("authorization", `Bearer ${adminToken}`);
+      expect(stillBlocked.status).toBe(403);
+      expect(stillBlocked.body.error).toBe("STEP_UP_REQUIRED");
+
+      await sessionStore.recordStepUp(adminJti, { verifiedAt: new Date().toISOString(), method: "cognito-mfa" });
       const adminRes = await request(server)
         .get("/management/v1/audit/self-test/step-up")
         .set("authorization", `Bearer ${adminToken}`);
       expect(adminRes.status).toBe(200);
 
-      const viewerToken = await signTestToken(keyPair, { subject: viewer.cognitoSub });
-      await request(server).post("/management/v1/session/step-up").set("authorization", `Bearer ${viewerToken}`);
+      const viewerJti = "22222222-2222-4222-8222-222222222222";
+      const viewerToken = await signTestToken(keyPair, { subject: viewer.cognitoSub, jti: viewerJti });
+      await sessionStore.recordStepUp(viewerJti, { verifiedAt: new Date().toISOString(), method: "cognito-mfa" });
       const viewerRes = await request(server)
         .get("/management/v1/audit/self-test/step-up")
         .set("authorization", `Bearer ${viewerToken}`);

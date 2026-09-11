@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
@@ -62,6 +63,17 @@ describe("db/migrationRunner", () => {
     expect(secondRun.every((r) => r.applied === false)).toBe(true);
   });
 
+  it("fails closed when an applied migration checksum no longer matches source", async () => {
+    const client = buildEmptyPgMemClient();
+    await runMigrations(client, migrationsDir);
+    await client.query(
+      "UPDATE governance.schema_migrations SET checksum = 'tampered' WHERE id = $1",
+      ["0001_operator_identity_schema.sql"],
+    );
+
+    await expect(runMigrations(client, migrationsDir)).rejects.toThrow(/Migration checksum mismatch/);
+  });
+
   it("dry-run reports pending migrations without applying them", async () => {
     const client = buildEmptyPgMemClient();
 
@@ -89,10 +101,12 @@ describe("db/migrationRunner", () => {
     // branch, not its "apply" branch, for 0001.
     await client.query(migration0001Sql);
     await client.query(
-      `CREATE TABLE governance.schema_migrations (id TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL)`,
+      `CREATE TABLE governance.schema_migrations (id TEXT PRIMARY KEY, checksum TEXT NOT NULL, applied_at TIMESTAMPTZ NOT NULL)`,
     );
-    await client.query("INSERT INTO governance.schema_migrations (id, applied_at) VALUES ($1, now())", [
+    const checksum = createHash("sha256").update(migration0001Sql, "utf8").digest("hex");
+    await client.query("INSERT INTO governance.schema_migrations (id, checksum, applied_at) VALUES ($1, $2, now())", [
       "0001_operator_identity_schema.sql",
+      checksum,
     ]);
 
     const results = await runMigrations(client, migrationsDir);

@@ -1,75 +1,44 @@
--- 1A.3 — Governance DB provisioning script.
+\set ON_ERROR_STOP on
+
+-- 1A.3 — Governance DB initial provisioning.
 --
--- Topology (corrected 2026-09-11, twice — see docs/1A.3_status.md
--- "Architecture correction" for the full record of both passes):
+-- Final topology:
 --
 --   existing RDS PostgreSQL instance
---   ├── existing Infrakinetic database (polynoveacrm)
---   │   └── existing Infrakinetic application role(s)
---   └── polynovea_governance database   <- this script creates this
---       └── governance_app role         <- and this
---           └── governance schema       <- and this, inside the new database
+--   ├── polynoveacrm                 (existing Infrakinetic DB)
+--   └── polynovea_governance         (new, separate DB)
+--       └── governance               (Governance-owned schema)
+--           └── governance_app       (runtime + migration role for 1A.3)
 --
--- Same RDS instance as Infrakinetic (co-location is an explicitly allowed
--- temporary deployment optimization per the master plan's §14/§18) —
--- SEPARATE database, separate role. The `governance` schema inside
--- `polynovea_governance` is defense in depth on top of that, not a
--- substitute for it.
+-- Same RDS instance, separate PostgreSQL database, separate role. No
+-- Infrakinetic application credential is reused by Governance.
 --
--- STATUS: authored, NOT executed anywhere. This session has no reachable
--- Postgres server/AWS access to run it yet — see docs/1A.3_status.md.
--- This is infrastructure setup, run once by a human/session with
--- privileged access to the existing RDS instance (the existing admin
--- identity documented in api-server/INFRASTRUCTURE.md — no new admin
--- account is created by this script).
+-- This script is intentionally one-time and non-idempotent. It must be run by
+-- the existing privileged RDS admin/master identity through the established
+-- EC2-bastion tunnel. It must NEVER be run by the Governance application.
 --
--- REQUIRES psql specifically (not just any Postgres client / the `pg`
--- driver): the `\connect` meta-commands below switch databases mid-script,
--- which is a psql feature, not standard SQL — a single Postgres connection
--- cannot change which database it is attached to. Run as:
---   psql -h <tunnel-local-host> -p <tunnel-local-port> -U <admin> -d polynoveacrm -f 001_create_role_database_and_schema.sql
+-- Password handling: do not edit a real password into this file. Invoke psql
+-- with a session variable, for example:
 --
--- Usage:
---   1. Replace CHANGE_ME_BEFORE_RUNNING below with a real, generated secret
---      (this file must never be committed with a real password — it is
---      checked into git as a template with an intentionally-invalid
---      placeholder value so it cannot be run as-is by accident).
---   2. Run as above.
---   3. Record the resulting host/port/database/role in whatever secret
---      store deploys GOVERNANCE_DB_* to the backend — never in this repo.
+--   psql -h 127.0.0.1 -p 5433 -U <admin> -d polynoveacrm \
+--     -v governance_password='<generated-secret>' \
+--     -f backend/provisioning/001_create_role_database_and_schema.sql
 --
--- Bootstrap credential: per explicit instruction, it is acceptable to use
--- the existing privileged RDS master/admin identity for this ONE-TIME
--- role/database/schema creation, provided (a) it is verified to actually
--- have sufficient authority on this instance before relying on it, (b) it
--- is used only for this bootstrap step, never copied into
--- GOVERNANCE_DB_USER/PASSWORD, and (c) its password is never committed.
--- After this script finishes, every subsequent Governance operation
--- (migrations, runtime) connects as governance_app only. If that admin
--- identity is also currently reused as an ordinary Infrakinetic runtime
--- application credential, that is a pre-existing condition on the shared
--- instance, not something this script changes or is responsible for
--- correcting — record it separately as a security-hardening finding
--- (see docs/1A.3_status.md) rather than expanding this subphase's scope.
+-- psql substitutes :'governance_password' as a quoted SQL literal. Shell
+-- history/secret-manager handling still matters; use the deployment secret
+-- mechanism available in the real provisioning session.
 
--- --- Role -------------------------------------------------------------
+\if :{?governance_password}
+\else
+  \echo 'ERROR: governance_password psql variable is required; refusing to provision.'
+  \quit 3
+\endif
+
+-- --- Runtime/migration role ------------------------------------------------
 --
--- Dedicated role for this application only. LOGIN so the backend and the
--- migration runner can both connect as it. Explicitly denied every
--- privilege that would let it act as an administrator of this shared
--- instance or read/write outside its own database:
---   NOSUPERUSER  — cannot bypass any permission check
---   NOCREATEDB   — cannot create further databases
---   NOCREATEROLE — cannot create or alter other roles (cannot escalate
---                  itself or create a new privileged identity)
---   NOBYPASSRLS  — cannot bypass row-level security on any table, including
---                  Infrakinetic's own RLS-protected tenant tables
---   NOINHERIT    — does not automatically inherit privileges of any group
---                  role it might later be added to (explicit grants only)
--- Password policy at least as strong as Infrakinetic's own credentials —
--- this placeholder is intentionally invalid (fails Postgres's minimum
--- password requirements in most configurations) so this script cannot be
--- run unmodified and silently succeed with a known/weak password.
+-- This role is deliberately incapable of administering the shared RDS
+-- instance. NOINHERIT does not negate PUBLIC privileges; effective privileges
+-- on the existing Infrakinetic DB are verified separately by 002.
 CREATE ROLE governance_app WITH
   LOGIN
   NOSUPERUSER
@@ -77,84 +46,63 @@ CREATE ROLE governance_app WITH
   NOCREATEROLE
   NOBYPASSRLS
   NOINHERIT
-  PASSWORD 'CHANGE_ME_BEFORE_RUNNING__min_32_random_chars';
+  PASSWORD :'governance_password';
 
--- --- Database -----------------------------------------------------------
+-- --- Separate Governance database -----------------------------------------
 --
--- Separate database on the SAME RDS instance — co-location is allowed
--- (master plan §14/§18); a separate physical instance is a later,
--- independently-authorized move, not required for 1A.3. Owned by
--- governance_app directly: it has NOCREATEDB (cannot create further
--- databases) but full authority to administer this one database it
--- already owns — no further per-object grants are needed for it to run
--- its own migrations or serve its own runtime queries inside it.
-CREATE DATABASE polynovea_governance OWNER governance_app;
+-- Do NOT make governance_app the database owner. The provisioning admin owns
+-- the database, so governance_app cannot create arbitrary schemas or change
+-- database-level ACLs merely because it is the application role.
+CREATE DATABASE polynovea_governance;
 
--- --- Explicit isolation proof, not an absence-of-grant assumption -------
---
--- A brand-new role is not automatically able to read/write any existing
--- table (Postgres denies table-level DML by default), but it CAN by
--- default CONNECT to every existing database — `CONNECT` is granted to
--- the `PUBLIC` pseudo-role on every database unless explicitly revoked,
--- and every role is implicitly a member of PUBLIC. Without the statement
--- below, governance_app could open a session against `polynoveacrm` (even
--- though it could not read/write anything once connected, absent further
--- grants) — "we never granted it anything" is not the same claim as "it
--- cannot even connect." This makes the boundary explicit and independently
--- provable: attempting to connect as governance_app to polynoveacrm after
--- this line must fail at the connection step itself.
---
--- Database-level GRANT/REVOKE targets a cluster-wide object and does not
--- require being connected to that specific database, so this line runs
--- here, before the \connect below.
-REVOKE CONNECT ON DATABASE polynoveacrm FROM governance_app;
+-- A new PostgreSQL database normally inherits CONNECT/TEMP privileges for the
+-- PUBLIC pseudo-role. This is a brand-new Governance-only database, so it is
+-- safe to remove those defaults before any workload exists and grant only the
+-- Governance role explicit CONNECT. The database owner/admin retains implicit
+-- owner rights.
+REVOKE ALL ON DATABASE polynovea_governance FROM PUBLIC;
+GRANT CONNECT ON DATABASE polynovea_governance TO governance_app;
 
--- Belt-and-suspenders inside polynoveacrm itself, in case CONNECT is ever
--- mistakenly re-granted later: explicit schema/table/sequence/function
--- revokes rather than relying on nothing having been granted. Safe no-ops
--- if nothing was ever granted (REVOKE on a privilege that was never held
--- is not an error).
-\connect polynoveacrm
-REVOKE ALL ON SCHEMA public FROM governance_app;
-REVOKE ALL ON ALL TABLES IN SCHEMA public FROM governance_app;
-REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM governance_app;
-REVOKE ALL ON ALL FUNCTIONS IN SCHEMA public FROM governance_app;
-
--- --- Schema, inside the new Governance database --------------------------
---
--- Schemas are per-database objects — creating one requires being connected
--- to the database it will live in, hence the \connect. Defense in depth on
--- top of the database-level separation above, not a substitute for it:
--- even within its own database, governance_app's objects are confined to
--- this schema rather than the default `public` schema of
--- polynovea_governance.
 \connect polynovea_governance
 
+-- Keep Governance objects out of the default public schema. On PostgreSQL
+-- versions/upgrades where PUBLIC might retain schema privileges, remove them
+-- explicitly before creating any application object.
+REVOKE CREATE, USAGE ON SCHEMA public FROM PUBLIC;
+
+-- governance_app owns only its application schema. Schema ownership is enough
+-- for the migration runner to CREATE/ALTER Governance tables while leaving the
+-- surrounding database under the bootstrap/admin owner.
 CREATE SCHEMA governance AUTHORIZATION governance_app;
 
--- Makes `governance` the ONLY schema governance_app resolves unqualified
--- names against by default, for every future connection authenticated as
--- this role — server-enforced, not dependent on the application
--- remembering to set it. (The application layer additionally sets this
--- per-connection for defense in depth — see backend/src/db/pgDbClient.ts —
--- but this is the authoritative, harder-to-bypass layer.) Deliberately
--- does NOT include `public` — an unqualified reference to a table that
--- only exists in polynovea_governance's own default `public` schema will
--- fail to resolve at all for this role, rather than silently succeeding
--- against the wrong table.
-ALTER ROLE governance_app SET search_path = governance;
+-- Scope the search_path setting to the Governance database. A global
+-- `ALTER ROLE ... SET search_path` would also apply if the credential were
+-- mistakenly pointed at another database on the same RDS instance.
+ALTER ROLE governance_app IN DATABASE polynovea_governance SET search_path = governance;
 
--- No further GRANT statement of any kind appears below. governance_app
--- owns both the database and the schema it will use, which already grants
--- it everything it needs for its own migrations/runtime — and it has no
--- privilege of any kind, anywhere, on `polynoveacrm`, per the explicit
--- revokes above.
+-- --- Existing Infrakinetic database: do not mutate blindly -----------------
 --
--- Live certification (docs/1A.3_status.md) must record, verbatim, the
--- actual SQL output of:
---   - connecting as governance_app to polynovea_governance and running the
---     Governance migrations (positive path);
---   - attempting to connect as governance_app to polynoveacrm (must fail
---     at the connection step — negative path);
---   - attempting CREATE ROLE / CREATE DATABASE as governance_app (must
---     fail — self-escalation path).
+-- PostgreSQL permissions are additive. In particular, a direct
+--
+--   REVOKE CONNECT ON DATABASE polynoveacrm FROM governance_app;
+--
+-- does NOT override CONNECT inherited from the PUBLIC pseudo-role. The same
+-- issue applies to PUBLIC EXECUTE on functions, and Infrakinetic contains
+-- SECURITY DEFINER functions. Therefore this bootstrap script deliberately
+-- makes no ACL changes inside polynoveacrm and makes no false claim that a
+-- per-role REVOKE is a DENY.
+--
+-- Before 1A.3 may close, run the read-only effective-privilege audit in:
+--
+--   backend/provisioning/002_verify_cross_database_isolation.sql
+--
+-- If that audit finds dangerous PUBLIC-derived access, harden polynoveacrm's
+-- PUBLIC posture only after inventorying every legitimate production/admin
+-- role and explicitly re-granting what those roles require. That is safer than
+-- embedding a guessed production allow-list in this one-time bootstrap.
+--
+-- Required live evidence also includes:
+--   * governance_app connects to polynovea_governance and runs migrations;
+--   * governance_app cannot CREATE ROLE or CREATE DATABASE;
+--   * effective cross-database privileges satisfy the 002 verifier;
+--   * Governance runtime/migrations use governance_app, never the admin user.

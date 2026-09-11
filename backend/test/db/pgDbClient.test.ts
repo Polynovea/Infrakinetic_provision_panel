@@ -46,6 +46,44 @@ describe("db/pgDbClient", () => {
     await expect(client.query("SELECT 1")).rejects.toThrow(/connection refused/);
   });
 
+  it("transaction() pins one pool client and commits on success", async () => {
+    const query = vi.fn().mockResolvedValue({ rows: [] });
+    const release = vi.fn();
+    const connect = vi.fn().mockResolvedValue({ query, release });
+    const fakePool = { connect, query: vi.fn(), end: vi.fn() } as unknown as pg.Pool;
+    const client = new PgDbClient(fakePool);
+
+    const result = await client.transaction(async (tx) => {
+      await tx.query("SELECT 42");
+      return "ok";
+    });
+
+    expect(result).toBe("ok");
+    expect(connect).toHaveBeenCalledTimes(1);
+    expect(query.mock.calls.map((call) => call[0])).toEqual(["BEGIN", "SELECT 42", "COMMIT"]);
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("transaction() rolls back and releases the pinned client when work fails", async () => {
+    const query = vi.fn(async (sql: string) => {
+      if (sql === "SELECT explode") throw new Error("boom");
+      return { rows: [] };
+    });
+    const release = vi.fn();
+    const connect = vi.fn().mockResolvedValue({ query, release });
+    const fakePool = { connect, query: vi.fn(), end: vi.fn() } as unknown as pg.Pool;
+    const client = new PgDbClient(fakePool);
+
+    await expect(
+      client.transaction(async (tx) => {
+        await tx.query("SELECT explode");
+      }),
+    ).rejects.toThrow(DatabaseUnavailableError);
+
+    expect(query.mock.calls.map((call) => call[0])).toEqual(["BEGIN", "SELECT explode", "ROLLBACK"]);
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
   it("end() delegates to the underlying pool", async () => {
     const end = vi.fn().mockResolvedValue(undefined);
     const fakePool = { query: vi.fn(), end } as unknown as pg.Pool;

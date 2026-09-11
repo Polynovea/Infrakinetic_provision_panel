@@ -7,6 +7,7 @@ import {
   ManagementAuthError,
   MissingTokenError,
   OperatorDisabledError,
+  OperatorMfaRequiredError,
   OperatorNotProvisionedError,
   SessionRevokedError,
   InsufficientPrivilegeError,
@@ -88,6 +89,11 @@ export function requireManagementApiAuth(deps: ManagementAuthDeps): RequestHandl
 
       if (operator.status !== "active") {
         await fail(new OperatorDisabledError(operator.status), operator.operatorId);
+        return;
+      }
+
+      if (!operator.mfaEnrolled) {
+        await fail(new OperatorMfaRequiredError(), operator.operatorId);
         return;
       }
 

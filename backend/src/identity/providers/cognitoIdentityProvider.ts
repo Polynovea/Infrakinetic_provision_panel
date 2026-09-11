@@ -7,6 +7,7 @@ import {
   MalformedTokenError,
   WrongAudienceError,
   WrongIssuerError,
+  WrongTokenUseError,
 } from "../errors.js";
 import type { IdentityProvider, VerifiedTokenClaims } from "../identityProvider.js";
 
@@ -63,6 +64,7 @@ export class CognitoIdentityProvider implements IdentityProvider {
 
     try {
       const { payload } = await jwtVerify(rawToken, this.getKey, {
+        algorithms: ["RS256"],
         issuer: this.issuer,
         audience: this.audience,
         clockTolerance: this.clockToleranceSeconds,
@@ -72,6 +74,13 @@ export class CognitoIdentityProvider implements IdentityProvider {
       const tokenId = typeof payload.jti === "string" ? payload.jti : undefined;
       const issuedAt = payload.iat;
       const expiresAt = payload.exp;
+
+      // Management auth accepts Cognito ID tokens only. Access tokens are
+      // signed by the same pool but use `client_id` rather than `aud` and
+      // must never be accepted by this operator boundary accidentally.
+      if (payload.token_use !== "id") {
+        throw new WrongTokenUseError(payload.token_use);
+      }
 
       if (typeof subject !== "string" || subject.trim() === "") {
         throw new MalformedTokenError("token is missing a 'sub' claim");
@@ -96,6 +105,7 @@ export class CognitoIdentityProvider implements IdentityProvider {
   }
 
   private mapVerificationError(err: unknown): Error {
+    if (err instanceof WrongTokenUseError) return err;
     if (err instanceof joseErrors.JWTExpired) {
       return new ExpiredTokenError();
     }

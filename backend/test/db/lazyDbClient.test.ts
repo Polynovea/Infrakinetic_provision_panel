@@ -6,6 +6,7 @@ import type { DbClient } from "../../src/db/dbClient.js";
 function fakeClient(): DbClient {
   return {
     query: vi.fn().mockResolvedValue({ rows: [] }),
+    transaction: vi.fn(async (work) => work({ query: vi.fn().mockResolvedValue({ rows: [] }) })),
     end: vi.fn().mockResolvedValue(undefined),
   };
 }
