@@ -25,12 +25,14 @@ app.get("/healthz", (_req, res) => {
 });
 
 // 1A.2 — privileged operator identity boundary. The operator directory is
-// fixture-seeded (no Governance DB yet — that is 1A.3, see
-// docs/1A.2_status.md), and the Cognito identity provider is constructed
-// lazily so server boot never requires GOVERNANCE_COGNITO_* to be set while
-// real Cognito provisioning is pending authorization.
-const operatorsFixturePath = fileURLToPath(new URL("../fixtures/operators.fixture.json", import.meta.url));
-const seedOperators = JSON.parse(readFileSync(operatorsFixturePath, "utf8")) as OperatorRecord[];
+// seeded from config/operators.seed.json (no Governance DB yet — that is
+// 1A.3, see docs/1A.2_status.md) — entries are added only by
+// scripts/bootstrap_operator.mjs, never edited by hand. The Cognito
+// identity provider is constructed lazily so server boot never requires
+// GOVERNANCE_COGNITO_* to be set while real Cognito provisioning is
+// pending authorization.
+const operatorsSeedPath = fileURLToPath(new URL("../config/operators.seed.json", import.meta.url));
+const seedOperators = JSON.parse(readFileSync(operatorsSeedPath, "utf8")) as OperatorRecord[];
 
 const managementDeps = {
   identityProvider: new LazyIdentityProvider(() => CognitoIdentityProvider.fromEnv()),

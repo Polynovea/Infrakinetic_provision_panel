@@ -9,9 +9,11 @@
     "start": "node dist/index.js",
     "lint": "eslint src --ext .ts",
     "lint:test": "eslint test --ext .ts",
+    "lint:scripts": "eslint scripts --ext .ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "typecheck:test": "tsc -p tsconfig.test.json --noEmit",
     "test": "vitest run",
+    "bootstrap:operator": "tsx scripts/bootstrapOperator.ts",
     "check:domain-portability": "node scripts/check_domain_portability.mjs",
     "check:no-infrakinetic-imports": "node scripts/check_no_infrakinetic_imports.mjs"
   },
