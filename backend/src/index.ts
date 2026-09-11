@@ -7,7 +7,10 @@ import { PostgresOperatorDirectory } from "./identity/adapters/postgresOperatorD
 import { PostgresSessionStore } from "./identity/adapters/postgresSessionStore.js";
 import { CognitoIdentityProvider } from "./identity/providers/cognitoIdentityProvider.js";
 import { LazyIdentityProvider } from "./identity/providers/lazyIdentityProvider.js";
+import { getManagementSigningKeysLazy } from "./management/lazyManagementKeys.js";
+import { buildManagementJwks } from "./management/managementJwks.js";
 import { createManagementRouter } from "./routes/management/index.js";
+import { DatabaseUnavailableError } from "./db/errors.js";
 
 // 1A.1 — infrastructure-only, still true: no database connection, no calls
 // to Infrakinetic's api-server of any kind. /healthz must pass with zero
@@ -48,6 +51,25 @@ const managementDeps = {
 };
 
 app.use("/management/v1", createManagementRouter(managementDeps));
+
+// 1A.4 — public verification material for the assertions Governance mints
+// for Infrakinetic's `/management/v1/*`. Deliberately unauthenticated, same
+// as any JWKS endpoint (Cognito's own included) — the security boundary is
+// the signature check on the other end, not secrecy of the public key.
+// Lazily loaded: GOVERNANCE_MANAGEMENT_SIGNING_* is not required for server
+// boot or /healthz, only for a request that reaches this route.
+app.get("/.well-known/management-jwks.json", async (_req, res, next) => {
+  try {
+    const keys = await getManagementSigningKeysLazy();
+    res.status(200).json(buildManagementJwks(keys));
+  } catch (err) {
+    if (err instanceof DatabaseUnavailableError) {
+      res.status(err.httpStatus).json({ error: err.code, message: err.message });
+      return;
+    }
+    next(err);
+  }
+});
 
 // Every other route 404s — no other surface exists yet.
 app.use((_req, res) => {
