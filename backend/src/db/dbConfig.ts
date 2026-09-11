@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+
 import { DatabaseUnavailableError } from "./errors.js";
 
 // 1A.3 — Governance database connection configuration. Every value comes
@@ -25,6 +27,18 @@ export interface DbConfig {
   user: string;
   password: string;
   ssl: boolean;
+  // Trusted CA bundle contents (e.g. the Amazon RDS combined CA bundle),
+  // read once at config-load time. Required for real certificate
+  // verification when the client reaches the server through an SSH tunnel
+  // (host is the local tunnel endpoint, e.g. 127.0.0.1) rather than the
+  // real hostname the server's certificate was issued for.
+  sslCa: string | undefined;
+  // Overrides the hostname used for TLS certificate verification (SNI +
+  // subjectAltName/CN matching). Needed whenever `host` is a tunnel/proxy
+  // address rather than the server's own real DNS name — without this,
+  // certificate verification would check the wrong hostname and either
+  // fail or (worse) silently match nothing meaningful.
+  sslServername: string | undefined;
   poolMax: number;
 }
 
@@ -59,6 +73,28 @@ function optionalPositiveInt(name: string, fallback: number): number {
   return parsed;
 }
 
+function optionalString(name: string): string | undefined {
+  const value = process.env[name]?.trim();
+  return value === undefined || value === "" ? undefined : value;
+}
+
+// Reads the trusted CA bundle from disk once, at config-load time (same
+// lazy-on-first-use posture as every other value here). Fails closed: a
+// configured path that cannot be read must never silently fall back to an
+// unverified connection.
+function optionalCaFile(name: string): string | undefined {
+  const path = optionalString(name);
+  if (path === undefined) return undefined;
+  try {
+    return readFileSync(path, "utf8");
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new DatabaseUnavailableError(
+      `${name} is set to "${path}" but the CA bundle could not be read: ${message}`,
+    );
+  }
+}
+
 export function loadDbConfig(): DbConfig {
   const host = required("GOVERNANCE_DB_HOST");
   const port = optionalPositiveInt("GOVERNANCE_DB_PORT", 5432);
@@ -68,7 +104,14 @@ export function loadDbConfig(): DbConfig {
   // Defaults to true (encrypted by default); explicit opt-out only for local
   // development against a Postgres instance with no TLS configured.
   const ssl = optionalBool("GOVERNANCE_DB_SSL", true);
+  // Trusted CA bundle for real certificate verification (e.g. the Amazon RDS
+  // combined CA bundle) and an optional hostname override for verification
+  // when `host` is a local SSH-tunnel endpoint rather than the server's own
+  // DNS name. Both optional; rejectUnauthorized stays true regardless (see
+  // pgDbClient.ts) — these only supply what strict verification needs.
+  const sslCa = optionalCaFile("GOVERNANCE_DB_SSL_CA_FILE");
+  const sslServername = optionalString("GOVERNANCE_DB_SSL_SERVERNAME");
   const poolMax = optionalPositiveInt("GOVERNANCE_DB_POOL_MAX", 10);
 
-  return { host, port, database, user, password, ssl, poolMax };
+  return { host, port, database, user, password, ssl, sslCa, sslServername, poolMax };
 }

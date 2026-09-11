@@ -1,10 +1,29 @@
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type pg from "pg";
 
-import { PgDbClient } from "../../src/db/pgDbClient.js";
-import { DatabaseUnavailableError } from "../../src/db/errors.js";
+const PoolMock = vi.fn().mockImplementation(() => ({
+  query: vi.fn(),
+  connect: vi.fn(),
+  end: vi.fn(),
+}));
+vi.mock("pg", () => ({ default: { Pool: PoolMock } }));
 
-const DB_ENV_VARS = ["GOVERNANCE_DB_HOST", "GOVERNANCE_DB_NAME", "GOVERNANCE_DB_USER", "GOVERNANCE_DB_PASSWORD"] as const;
+const { PgDbClient } = await import("../../src/db/pgDbClient.js");
+const { DatabaseUnavailableError } = await import("../../src/db/errors.js");
+
+const DB_ENV_VARS = [
+  "GOVERNANCE_DB_HOST",
+  "GOVERNANCE_DB_NAME",
+  "GOVERNANCE_DB_USER",
+  "GOVERNANCE_DB_PASSWORD",
+  "GOVERNANCE_DB_SSL",
+  "GOVERNANCE_DB_SSL_CA_FILE",
+  "GOVERNANCE_DB_SSL_SERVERNAME",
+] as const;
 const savedEnv: Record<string, string | undefined> = {};
 
 describe("db/pgDbClient", () => {
@@ -24,6 +43,57 @@ describe("db/pgDbClient", () => {
 
   it("fromEnv() throws DatabaseUnavailableError (not a raw pg connection attempt) when config is missing", () => {
     expect(() => PgDbClient.fromEnv()).toThrow(DatabaseUnavailableError);
+  });
+
+  describe("fromEnv() TLS configuration passed to pg.Pool", () => {
+    let tmpDir: string;
+
+    beforeEach(() => {
+      tmpDir = mkdtempSync(join(tmpdir(), "pgdbclient-tls-test-"));
+      PoolMock.mockClear();
+      process.env.GOVERNANCE_DB_HOST = "127.0.0.1";
+      process.env.GOVERNANCE_DB_NAME = "db";
+      process.env.GOVERNANCE_DB_USER = "u";
+      process.env.GOVERNANCE_DB_PASSWORD = "p";
+    });
+
+    afterEach(() => {
+      rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    it("SSL disabled: passes ssl: undefined to pg.Pool", () => {
+      process.env.GOVERNANCE_DB_SSL = "false";
+
+      PgDbClient.fromEnv();
+
+      expect(PoolMock).toHaveBeenCalledTimes(1);
+      expect(PoolMock.mock.calls[0][0].ssl).toBeUndefined();
+    });
+
+    it("SSL enabled with a CA bundle and servername: rejectUnauthorized stays true, ca and servername are passed through", () => {
+      const caPath = join(tmpDir, "ca.pem");
+      writeFileSync(caPath, "-----BEGIN CERTIFICATE-----\nfake\n-----END CERTIFICATE-----\n");
+      process.env.GOVERNANCE_DB_SSL = "true";
+      process.env.GOVERNANCE_DB_SSL_CA_FILE = caPath;
+      process.env.GOVERNANCE_DB_SSL_SERVERNAME = "real-rds-host.example.com";
+
+      PgDbClient.fromEnv();
+
+      expect(PoolMock).toHaveBeenCalledTimes(1);
+      const ssl = PoolMock.mock.calls[0][0].ssl;
+      expect(ssl.rejectUnauthorized).toBe(true);
+      expect(ssl.ca).toContain("BEGIN CERTIFICATE");
+      expect(ssl.servername).toBe("real-rds-host.example.com");
+    });
+
+    it("SSL enabled with neither CA nor servername set: rejectUnauthorized stays true with no extra fields", () => {
+      process.env.GOVERNANCE_DB_SSL = "true";
+
+      PgDbClient.fromEnv();
+
+      const ssl = PoolMock.mock.calls[0][0].ssl;
+      expect(ssl).toEqual({ rejectUnauthorized: true });
+    });
   });
 
   it("query() passes through rows on success", async () => {

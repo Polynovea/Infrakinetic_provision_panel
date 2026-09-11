@@ -1,3 +1,7 @@
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { loadDbConfig } from "../../src/db/dbConfig.js";
@@ -10,6 +14,8 @@ const DB_ENV_VARS = [
   "GOVERNANCE_DB_USER",
   "GOVERNANCE_DB_PASSWORD",
   "GOVERNANCE_DB_SSL",
+  "GOVERNANCE_DB_SSL_CA_FILE",
+  "GOVERNANCE_DB_SSL_SERVERNAME",
   "GOVERNANCE_DB_POOL_MAX",
 ] as const;
 
@@ -50,6 +56,8 @@ describe("db/dbConfig", () => {
       user: "governance_app",
       password: "test-password",
       ssl: true,
+      sslCa: undefined,
+      sslServername: undefined,
       poolMax: 10,
     });
   });
@@ -88,5 +96,61 @@ describe("db/dbConfig", () => {
     process.env.GOVERNANCE_DB_POOL_MAX = "0";
 
     expect(() => loadDbConfig()).toThrow(DatabaseUnavailableError);
+  });
+
+  describe("TLS trust configuration (GOVERNANCE_DB_SSL_CA_FILE / _SERVERNAME)", () => {
+    let tmpDir: string;
+
+    beforeEach(() => {
+      tmpDir = mkdtempSync(join(tmpdir(), "governance-db-ca-test-"));
+      process.env.GOVERNANCE_DB_HOST = "127.0.0.1";
+      process.env.GOVERNANCE_DB_NAME = "db";
+      process.env.GOVERNANCE_DB_USER = "u";
+      process.env.GOVERNANCE_DB_PASSWORD = "p";
+    });
+
+    afterEach(() => {
+      rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    it("SSL disabled: sslCa/sslServername are not read even if set", () => {
+      process.env.GOVERNANCE_DB_SSL = "false";
+      process.env.GOVERNANCE_DB_SSL_SERVERNAME = "real-host.example.com";
+
+      const config = loadDbConfig();
+
+      expect(config.ssl).toBe(false);
+      expect(config.sslCa).toBeUndefined();
+      expect(config.sslServername).toBe("real-host.example.com");
+    });
+
+    it("SSL enabled with a valid CA file: reads and returns its contents", () => {
+      const caPath = join(tmpDir, "ca.pem");
+      writeFileSync(caPath, "-----BEGIN CERTIFICATE-----\nfake\n-----END CERTIFICATE-----\n");
+      process.env.GOVERNANCE_DB_SSL = "true";
+      process.env.GOVERNANCE_DB_SSL_CA_FILE = caPath;
+
+      const config = loadDbConfig();
+
+      expect(config.ssl).toBe(true);
+      expect(config.sslCa).toContain("BEGIN CERTIFICATE");
+    });
+
+    it("optional TLS servername is passed through for tunnelled connections", () => {
+      process.env.GOVERNANCE_DB_SSL = "true";
+      process.env.GOVERNANCE_DB_SSL_SERVERNAME = "polynovea.example.rds.amazonaws.com";
+
+      const config = loadDbConfig();
+
+      expect(config.sslServername).toBe("polynovea.example.rds.amazonaws.com");
+    });
+
+    it("fails closed when GOVERNANCE_DB_SSL_CA_FILE points at a file that cannot be read", () => {
+      process.env.GOVERNANCE_DB_SSL = "true";
+      process.env.GOVERNANCE_DB_SSL_CA_FILE = join(tmpDir, "does-not-exist.pem");
+
+      expect(() => loadDbConfig()).toThrow(DatabaseUnavailableError);
+      expect(() => loadDbConfig()).toThrow(/GOVERNANCE_DB_SSL_CA_FILE/);
+    });
   });
 });

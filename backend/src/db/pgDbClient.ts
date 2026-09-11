@@ -30,7 +30,18 @@ export class PgDbClient implements DbClient {
       database: config.database,
       user: config.user,
       password: config.password,
-      ssl: config.ssl ? { rejectUnauthorized: true } : undefined,
+      // rejectUnauthorized stays true unconditionally when SSL is enabled —
+      // never weakened to false. GOVERNANCE_DB_SSL_CA_FILE/_SERVERNAME exist
+      // so real verification can succeed even when `host` is a local
+      // SSH-tunnel endpoint rather than the server's own DNS name (the
+      // certificate is issued for the real hostname, not 127.0.0.1).
+      ssl: config.ssl
+        ? {
+            rejectUnauthorized: true,
+            ...(config.sslCa !== undefined ? { ca: config.sslCa } : {}),
+            ...(config.sslServername !== undefined ? { servername: config.sslServername } : {}),
+          }
+        : undefined,
       max: config.poolMax,
       // Defense in depth alongside ALTER ROLE governance_app SET
       // search_path=governance. Every application query remains schema-
