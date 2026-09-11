@@ -2,11 +2,16 @@ import { DatabaseUnavailableError } from "./errors.js";
 
 // 1A.3 — Governance database connection configuration. Every value comes
 // from the environment; nothing is a hardcoded host, database name,
-// username or password (README.md hard rule #2: no shared database
-// credentials with Infrakinetic's business database — provable in part by
-// there being no default value here that could accidentally coincide with
-// one). This module is only ever called lazily, at first real database use
-// (see pool.ts's LazyDbClient) — never at import time — so `npm run
+// username or password. CORRECTED 2026-09-11: Phase 1A Governance connects
+// to the SAME existing production database Infrakinetic uses (so
+// GOVERNANCE_DB_NAME/HOST/PORT are expected to match Infrakinetic's own —
+// that is not a violation of README.md hard rule #2, which is about the
+// *credential*, i.e. GOVERNANCE_DB_USER/PASSWORD, never being Infrakinetic's
+// application role; isolation is the dedicated `governance_app` role/schema,
+// not a distinct database). There is still no default value here for any
+// field, so nothing here could silently coincide with a real value by
+// accident. This module is only ever called lazily, at first real database
+// use (see lazyDbClient.ts) — never at import time — so `npm run
 // build`/`typecheck` and the /healthz path never require these variables to
 // be set, matching the identical invariant already established for Cognito
 // (identity/cognitoConfig.ts) and the original 1A.1 zero-dependency health

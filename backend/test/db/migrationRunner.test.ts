@@ -24,9 +24,19 @@ describe("db/migrationRunner", () => {
     ]);
     expect(results.every((r) => r.applied)).toBe(true);
 
+    // Not filtered by table_schema: pg-mem always reports 'public' in
+    // information_schema.tables.table_schema regardless of the table's
+    // real schema (confirmed by direct probe — a pg-mem introspection
+    // limitation, not a real Postgres restriction). This proves every
+    // expected table and the runner's own bookkeeping table exist and were
+    // created via the qualified `governance.*` DDL in the migration files
+    // (which pg-mem DOES resolve/execute correctly — only its
+    // introspection views mislabel the result); it does not re-prove true
+    // schema isolation, which can only be certified against a real
+    // Postgres server (see docs/1A.3_status.md "Architecture correction").
     const tables = (
       await client.query<{ table_name: string }>(
-        "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' ORDER BY table_name",
+        "SELECT table_name FROM information_schema.tables ORDER BY table_name",
       )
     ).rows.map((r) => r.table_name);
     expect(tables).toEqual(
@@ -64,9 +74,7 @@ describe("db/migrationRunner", () => {
     expect(applied.size).toBe(0);
 
     const tables = (
-      await client.query<{ table_name: string }>(
-        "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' ORDER BY table_name",
-      )
+      await client.query<{ table_name: string }>("SELECT table_name FROM information_schema.tables ORDER BY table_name")
     ).rows.map((r) => r.table_name);
     expect(tables).not.toContain("operators");
   });
@@ -76,14 +84,14 @@ describe("db/migrationRunner", () => {
 
     // Simulate "0001 was applied previously, in a prior run of this same
     // runner" by actually applying 0001's real DDL and recording it in
-    // schema_migrations directly — not via the runner under test, so this
-    // test exercises the runner's own "skip already-applied" branch, not
-    // its "apply" branch, for 0001.
+    // governance.schema_migrations directly — not via the runner under
+    // test, so this test exercises the runner's own "skip already-applied"
+    // branch, not its "apply" branch, for 0001.
     await client.query(migration0001Sql);
     await client.query(
-      `CREATE TABLE IF NOT EXISTS schema_migrations (id TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL)`,
+      `CREATE TABLE governance.schema_migrations (id TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL)`,
     );
-    await client.query("INSERT INTO schema_migrations (id, applied_at) VALUES ($1, now())", [
+    await client.query("INSERT INTO governance.schema_migrations (id, applied_at) VALUES ($1, now())", [
       "0001_operator_identity_schema.sql",
     ]);
 

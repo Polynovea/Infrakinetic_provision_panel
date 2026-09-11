@@ -1,20 +1,39 @@
 -- 1A.2 — privileged operator identity persistence schema.
 --
--- STATUS: authored, NOT applied. There is no Governance database yet — a
--- separate Postgres database/role is 1A.3's deliverable (master plan
--- §18/§64 "1A.3 — Governance DB"). This file exists now because 1A.2's
--- application code (src/identity/operatorDirectory.ts,
--- src/identity/sessionStore.ts) is written against exactly this shape, so
--- 1A.3 can stand up the real database and swap the in-memory adapters for
--- Postgres-backed ones without changing the auth boundary. Proven locally
--- via an in-memory Postgres engine (pg-mem) in
--- test/migrations/0001_operator_identity_schema.test.ts — this is schema
--- verification, not a claim that it has been applied anywhere.
+-- CORRECTED 2026-09-11: rewritten to target the `governance` schema
+-- instead of the default (Infrakinetic-shared) `public` schema, per
+-- explicit architecture correction — Phase 1A Governance shares the SAME
+-- existing production Postgres database as Infrakinetic; isolation is a
+-- dedicated schema owned by a dedicated role (`governance_app`,
+-- provisioning/001_create_role_and_schema.sql), not a separate database.
+-- This file has never been applied to any real database (confirmed
+-- repeatedly across 1A.2/1A.3), so it is edited in place rather than
+-- layering a schema-move migration on top of a never-deployed artifact —
+-- see docs/1A.3_status.md "Architecture correction" for the full record
+-- and the git history for the pre-correction version.
 --
--- No tenant business data, no Infrakinetic table, no shared credential
--- appears here (README.md hard rules #2/#3/#8).
+-- Also folds in, from the start, a correction originally made in 0002
+-- while building the Postgres-backed session-store adapter:
+-- operator_sessions.operator_id/issued_at/expires_at are nullable, because
+-- the OperatorSessionStore port (src/identity/sessionStore.ts) never
+-- carries them — 1A.2 does not mint a separate management assertion with
+-- its own issuance event, so "session" is just the verified Cognito
+-- token's own jti, and revoke()/recordStepUp() (the only two writes the
+-- port exposes) may be the first write ever made for a given session id.
+--
+-- STATUS: authored, verified against pg-mem
+-- (test/migrations/0001_operator_identity_schema.test.ts) and, separately,
+-- against real Postgres schema/role semantics only once a live database is
+-- reachable (docs/1A.3_status.md). No tenant business data, no Infrakinetic
+-- table, no shared credential appears here (README.md hard rules #2/#3/#8).
+--
+-- Run as governance_app (or the bootstrap admin, before governance_app's
+-- default search_path is relied upon) — every object below is explicitly
+-- schema-qualified rather than depending on search_path resolution, for
+-- the same "explicit, not implicit" reason the rest of this codebase
+-- prefers explicit checks over inferred ones.
 
-CREATE TABLE operators (
+CREATE TABLE governance.operators (
   operator_id      UUID PRIMARY KEY,
   cognito_sub      TEXT NOT NULL UNIQUE,
   email            TEXT NOT NULL,
@@ -35,15 +54,15 @@ CREATE TABLE operators (
 -- the ceiling operator_scopes rows are validated against (see roles.ts
 -- ROLE_SCOPE_CEILING, enforced at request time by requireManagementApiAuth,
 -- and here at rest by operator_scopes_role_permitted below).
-CREATE TABLE operator_roles (
-  operator_id  UUID NOT NULL REFERENCES operators (operator_id) ON DELETE CASCADE,
+CREATE TABLE governance.operator_roles (
+  operator_id  UUID NOT NULL REFERENCES governance.operators (operator_id) ON DELETE CASCADE,
   role         TEXT NOT NULL CHECK (role IN (
     'platform_viewer', 'platform_operator', 'provisioning_operator',
     'identity_operator', 'security_operator', 'finops_operator',
     'platform_admin', 'break_glass'
   )),
   granted_at   TIMESTAMPTZ NOT NULL,
-  granted_by   UUID REFERENCES operators (operator_id),
+  granted_by   UUID REFERENCES governance.operators (operator_id),
   PRIMARY KEY (operator_id, role)
 );
 
@@ -55,8 +74,8 @@ CREATE TABLE operator_roles (
 -- around at the schema level, so it is not re-enforced with a CHECK here
 -- (that ceiling lives in application code and can change without a
 -- migration; the schema only constrains scope to the known vocabulary).
-CREATE TABLE operator_scopes (
-  operator_id  UUID NOT NULL REFERENCES operators (operator_id) ON DELETE CASCADE,
+CREATE TABLE governance.operator_scopes (
+  operator_id  UUID NOT NULL REFERENCES governance.operators (operator_id) ON DELETE CASCADE,
   scope        TEXT NOT NULL CHECK (scope IN (
     'tenants.read', 'tenants.commission', 'tenants.suspend',
     'engines.read', 'engines.entitlement.write', 'engines.platform_state.write', 'engines.release.write',
@@ -70,19 +89,24 @@ CREATE TABLE operator_scopes (
     'audit.read'
   )),
   granted_at   TIMESTAMPTZ NOT NULL,
-  granted_by   UUID REFERENCES operators (operator_id),
+  granted_by   UUID REFERENCES governance.operators (operator_id),
   PRIMARY KEY (operator_id, scope)
 );
 
 -- One row per verified operator token ("session" = the Cognito token's own
 -- jti — 1A.2 does not mint a separate management assertion; see
--- docs/1A.2_status.md). Presence of a row is not meaningful on its own;
+-- docs/1A.2_status.md). operator_id/issued_at/expires_at are nullable: a
+-- row created purely by revoke() or recordStepUp() (the only writes the
+-- OperatorSessionStore port exposes) represents "we only ever observed a
+-- revocation or step-up event for this session id, never an establishment
+-- event" — an accurate representation of 1A.2's actual session model, not
+-- a data-integrity gap. Presence of a row is not meaningful on its own;
 -- revoked_at is what requireManagementApiAuth checks.
-CREATE TABLE operator_sessions (
+CREATE TABLE governance.operator_sessions (
   session_id       UUID PRIMARY KEY,
-  operator_id      UUID NOT NULL REFERENCES operators (operator_id) ON DELETE CASCADE,
-  issued_at        TIMESTAMPTZ NOT NULL,
-  expires_at       TIMESTAMPTZ NOT NULL,
+  operator_id      UUID REFERENCES governance.operators (operator_id) ON DELETE CASCADE,
+  issued_at        TIMESTAMPTZ,
+  expires_at       TIMESTAMPTZ,
   revoked_at       TIMESTAMPTZ,
   revoked_reason   TEXT,
   step_up_at       TIMESTAMPTZ,
@@ -91,7 +115,7 @@ CREATE TABLE operator_sessions (
   user_agent       TEXT
 );
 
-CREATE INDEX operator_sessions_operator_id_idx ON operator_sessions (operator_id);
+CREATE INDEX operator_sessions_operator_id_idx ON governance.operator_sessions (operator_id);
 
 -- Authentication/authorization decision log for the management-auth
 -- boundary (append-only; no UPDATE/DELETE path in application code). This
@@ -99,14 +123,14 @@ CREATE INDEX operator_sessions_operator_id_idx ON operator_sessions (operator_id
 -- which 1A.5 owns — this table only ever records "who did/didn't get past
 -- requireManagementApiAuth/authorize.ts and why", not privileged actions
 -- themselves.
-CREATE TABLE operator_auth_audit_log (
+CREATE TABLE governance.operator_auth_audit_log (
   id                   BIGSERIAL PRIMARY KEY,
   occurred_at          TIMESTAMPTZ NOT NULL,
   event_type           TEXT NOT NULL CHECK (event_type IN (
     'auth.success', 'auth.failure', 'authz.denied',
     'session.revoked', 'session.step_up_recorded'
   )),
-  operator_id          UUID REFERENCES operators (operator_id),
+  operator_id          UUID REFERENCES governance.operators (operator_id),
   operator_session_id  UUID,
   reason_code          TEXT,
   route                TEXT,
@@ -116,5 +140,5 @@ CREATE TABLE operator_auth_audit_log (
   detail               JSONB
 );
 
-CREATE INDEX operator_auth_audit_log_operator_id_idx ON operator_auth_audit_log (operator_id);
-CREATE INDEX operator_auth_audit_log_occurred_at_idx ON operator_auth_audit_log (occurred_at);
+CREATE INDEX operator_auth_audit_log_operator_id_idx ON governance.operator_auth_audit_log (operator_id);
+CREATE INDEX operator_auth_audit_log_occurred_at_idx ON governance.operator_auth_audit_log (occurred_at);

@@ -15,6 +15,14 @@ import type { DbClient } from "../../src/db/dbClient.js";
 export function buildMigratedPgMemClient(): { db: ReturnType<typeof newDb>; client: DbClient } {
   const db = newDb();
 
+  // Real provisioning creates this schema as a separate, privileged
+  // bootstrap step (provisioning/001_create_role_and_schema.sql) — the
+  // migrations themselves never create it, since governance_app has no
+  // database-level CREATE privilege, only ownership of this
+  // already-existing schema. Replicated here so the migration files can be
+  // applied exactly as governance_app would apply them for real.
+  db.public.none("CREATE SCHEMA governance;");
+
   const migration0001Path = fileURLToPath(
     new URL("../../migrations/0001_operator_identity_schema.sql", import.meta.url),
   );
@@ -33,11 +41,15 @@ export function buildMigratedPgMemClient(): { db: ReturnType<typeof newDb>; clie
   return { db, client };
 }
 
-// Builds an *unmigrated* pg-mem instance (no schema applied yet) as a
-// DbClient — used to test the migration runner itself (schema_migrations
-// bookkeeping, idempotent re-run, dry-run) against real DDL execution.
+// Builds a pg-mem instance with the `governance` schema created (mirroring
+// provisioning having already run) but no migrations applied yet — used to
+// test the migration runner itself (schema_migrations bookkeeping,
+// idempotent re-run, dry-run) against real DDL execution. Named "empty" for
+// migration-application state, not for the schema/role bootstrap step,
+// which always precedes migrations in real deployment sequencing too.
 export function buildEmptyPgMemClient(): DbClient {
   const db = newDb();
+  db.public.none("CREATE SCHEMA governance;");
   const { Pool } = db.adapters.createPg();
   const pool = new Pool();
   return {

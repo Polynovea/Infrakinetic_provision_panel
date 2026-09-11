@@ -33,7 +33,7 @@ export class PostgresOperatorDirectory implements OperatorDirectory {
     const operatorResult = await this.db.query<OperatorRow>(
       `SELECT operator_id, cognito_sub, email, display_name, status, mfa_enrolled,
               created_at, disabled_at, disabled_reason
-       FROM operators
+       FROM governance.operators
        WHERE cognito_sub = $1`,
       [cognitoSub],
     );
@@ -41,8 +41,12 @@ export class PostgresOperatorDirectory implements OperatorDirectory {
     if (!row) return undefined;
 
     const [rolesResult, scopesResult] = await Promise.all([
-      this.db.query<{ role: string }>("SELECT role FROM operator_roles WHERE operator_id = $1", [row.operator_id]),
-      this.db.query<{ scope: string }>("SELECT scope FROM operator_scopes WHERE operator_id = $1", [row.operator_id]),
+      this.db.query<{ role: string }>("SELECT role FROM governance.operator_roles WHERE operator_id = $1", [
+        row.operator_id,
+      ]),
+      this.db.query<{ scope: string }>("SELECT scope FROM governance.operator_scopes WHERE operator_id = $1", [
+        row.operator_id,
+      ]),
     ]);
 
     // Schema CHECK constraints already restrict stored values to the known

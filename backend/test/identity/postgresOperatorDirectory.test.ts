@@ -19,19 +19,19 @@ describe("identity/adapters/postgresOperatorDirectory", () => {
 
   it("returns a full operator record with roles and scopes joined in", async () => {
     db.public.none(`
-      INSERT INTO operators (operator_id, cognito_sub, email, display_name, status, mfa_enrolled, created_at, updated_at)
+      INSERT INTO governance.operators (operator_id, cognito_sub, email, display_name, status, mfa_enrolled, created_at, updated_at)
       VALUES ('11111111-1111-4111-8111-111111111111', 'sub-active', 'a@example.invalid', 'A', 'active', true, now(), now())
     `);
     db.public.none(`
-      INSERT INTO operator_roles (operator_id, role, granted_at)
+      INSERT INTO governance.operator_roles (operator_id, role, granted_at)
       VALUES ('11111111-1111-4111-8111-111111111111', 'platform_viewer', now())
     `);
     db.public.none(`
-      INSERT INTO operator_scopes (operator_id, scope, granted_at)
+      INSERT INTO governance.operator_scopes (operator_id, scope, granted_at)
       VALUES ('11111111-1111-4111-8111-111111111111', 'tenants.read', now())
     `);
     db.public.none(`
-      INSERT INTO operator_scopes (operator_id, scope, granted_at)
+      INSERT INTO governance.operator_scopes (operator_id, scope, granted_at)
       VALUES ('11111111-1111-4111-8111-111111111111', 'audit.read', now())
     `);
 
@@ -47,7 +47,7 @@ describe("identity/adapters/postgresOperatorDirectory", () => {
 
   it("returns a disabled operator's record with disabledAt/disabledReason populated", async () => {
     db.public.none(`
-      INSERT INTO operators (operator_id, cognito_sub, email, display_name, status, mfa_enrolled, created_at, updated_at, disabled_at, disabled_reason)
+      INSERT INTO governance.operators (operator_id, cognito_sub, email, display_name, status, mfa_enrolled, created_at, updated_at, disabled_at, disabled_reason)
       VALUES ('22222222-2222-4222-8222-222222222222', 'sub-disabled', 'b@example.invalid', 'B', 'disabled', false, now(), now(), now(), 'left the team')
     `);
 

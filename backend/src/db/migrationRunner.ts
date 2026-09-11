@@ -37,33 +37,45 @@ export function listMigrationFiles(migrationsDir: string): string[] {
     .sort();
 }
 
-// Explicit existence check + plain CREATE TABLE, rather than `CREATE TABLE
-// IF NOT EXISTS`: pg-mem's query planner (used by every test in this
-// codebase in place of a real Postgres server) cannot fully parse
-// `IF NOT EXISTS` against a table that already exists — a pg-mem tooling
-// limitation, not a real Postgres restriction — so re-running this against
-// an already-migrated pg-mem database throws. This form is unaffected by
-// that limitation and is equally correct against real Postgres; the only
-// tradeoff is a benign check-then-create race on the very first-ever boot
-// against a brand new database if two migration runs started
-// simultaneously, which is not a realistic concern for an
-// explicitly-invoked, single-operator CLI (scripts/migrate.ts).
+// Create-then-tolerate-already-exists, rather than an existence check
+// followed by a plain CREATE TABLE, or `CREATE TABLE IF NOT EXISTS`. Two
+// independent tooling limitations ruled out the more obvious forms:
+//   - `CREATE TABLE IF NOT EXISTS` fails pg-mem's AST-coverage check when
+//     the table already exists (a pg-mem parser limitation, not a real
+//     Postgres restriction).
+//   - An existence check via `information_schema.tables WHERE table_schema
+//     = 'governance'` always returns zero rows against pg-mem — it reports
+//     every table's table_schema as 'public' regardless of which schema it
+//     was actually created in (confirmed by direct probe; pg_namespace/
+//     pg_class are similarly non-functional stubs in pg-mem). Real
+//     Postgres reports this correctly; pg-mem does not.
+// This form sidesteps both: attempt the CREATE, and treat "already exists"
+// as success. It is also strictly safer than a check-then-create pattern
+// against a REAL database — no TOCTOU race if two migration runs started
+// simultaneously against a brand-new database.
+//
+// Lives in the `governance` schema, like every other object this
+// application owns (CORRECTED 2026-09-11 — see docs/1A.3_status.md
+// "Architecture correction"). governance_app owns that schema (granted by
+// provisioning/001_create_role_and_schema.sql), so it can create this
+// table without any further grant; it has no privilege to create anything
+// in `public`.
 export async function ensureMigrationsTable(client: DbClient): Promise<void> {
-  const existing = await client.query<{ table_name: string }>(
-    "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'schema_migrations'",
-  );
-  if (existing.rows.length > 0) return;
-
-  await client.query(
-    `CREATE TABLE schema_migrations (
-      id TEXT PRIMARY KEY,
-      applied_at TIMESTAMPTZ NOT NULL
-    )`,
-  );
+  try {
+    await client.query(
+      `CREATE TABLE governance.schema_migrations (
+        id TEXT PRIMARY KEY,
+        applied_at TIMESTAMPTZ NOT NULL
+      )`,
+    );
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (!message.includes("already exists")) throw err;
+  }
 }
 
 export async function appliedMigrationIds(client: DbClient): Promise<Set<string>> {
-  const result = await client.query<{ id: string }>("SELECT id FROM schema_migrations");
+  const result = await client.query<{ id: string }>("SELECT id FROM governance.schema_migrations");
   return new Set(result.rows.map((row) => row.id));
 }
 
@@ -104,7 +116,7 @@ export async function runMigrations(
     for (const statement of splitStatements(sql)) {
       await client.query(statement);
     }
-    await client.query("INSERT INTO schema_migrations (id, applied_at) VALUES ($1, now())", [file]);
+    await client.query("INSERT INTO governance.schema_migrations (id, applied_at) VALUES ($1, now())", [file]);
     results.push({ id: file, applied: true });
   }
 

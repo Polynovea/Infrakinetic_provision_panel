@@ -34,6 +34,17 @@ export class PgDbClient implements DbClient {
       password: config.password,
       ssl: config.ssl ? { rejectUnauthorized: true } : undefined,
       max: config.poolMax,
+      // Defense in depth alongside `ALTER ROLE governance_app SET
+      // search_path = governance` in provisioning/001_create_role_and_schema.sql
+      // (the authoritative, server-enforced layer — this applies even if a
+      // future connection somehow authenticates as a different role).
+      // Deliberately excludes `public`: an unqualified reference to a table
+      // that only exists in `public` (any Infrakinetic table) must fail to
+      // resolve, not silently succeed against the wrong table. Every query
+      // in this codebase also schema-qualifies its own table references
+      // explicitly (see identity/adapters/postgres*.ts), so this is a
+      // second, independent layer, not the only one.
+      options: "-c search_path=governance",
     });
     return new PgDbClient(pool);
   }
