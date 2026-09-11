@@ -8,11 +8,16 @@
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",
     "lint": "eslint src --ext .ts",
+    "lint:test": "eslint test --ext .ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "check:domain-portability": "node scripts/check_domain_portability.mjs"
+    "typecheck:test": "tsc -p tsconfig.test.json --noEmit",
+    "test": "vitest run",
+    "check:domain-portability": "node scripts/check_domain_portability.mjs",
+    "check:no-infrakinetic-imports": "node scripts/check_no_infrakinetic_imports.mjs"
   },
   "dependencies": {
-    "express": "^4.19.2"
+    "express": "^4.19.2",
+    "jose": "^5.9.6"
   },
   "devDependencies": {
     "@types/express": "^4.17.21",
@@ -20,7 +25,14 @@
     "@typescript-eslint/eslint-plugin": "^7.16.0",
     "@typescript-eslint/parser": "^7.16.0",
     "eslint": "^8.57.0",
+    "pg-mem": "^2.8.1",
+    "supertest": "^7.0.0",
+    "@types/supertest": "^6.0.2",
     "tsx": "^4.16.0",
-    "typescript": "^5.5.0"
+    "typescript": "^5.5.0",
+    "vitest": "^2.1.4"
+  },
+  "overrides": {
+    "qs": "^6.16.0"
   }
 }

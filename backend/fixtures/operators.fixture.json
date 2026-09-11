@@ -1,0 +1,48 @@
+[
+  {
+    "operatorId": "00000000-0000-4000-8000-000000000001",
+    "cognitoSub": "fixture-sub-admin",
+    "email": "platform-admin@example.invalid",
+    "displayName": "Fixture Platform Admin",
+    "status": "active",
+    "roles": ["platform_admin"],
+    "scopes": [
+      "tenants.read", "tenants.commission", "tenants.suspend",
+      "engines.read", "engines.entitlement.write", "engines.platform_state.write", "engines.release.write",
+      "identity.read", "identity.recovery", "identity.disable", "identity.mfa_reset",
+      "credentials.metadata.read", "credentials.submit", "credentials.rotate", "credentials.revoke",
+      "ai.read", "ai.entitlement.write", "ai.quota.write", "ai.provider_policy.write", "ai.emergency_suspend",
+      "payments.adapters.read", "payments.adapters.certify", "payments.adapters.approve", "payments.adapters.revoke",
+      "integrations.read", "integrations.manage",
+      "runtime.read", "runtime.repair.request",
+      "finops.read", "finops.policy.write",
+      "audit.read"
+    ],
+    "mfaEnrolled": true,
+    "createdAt": "2026-09-11T00:00:00.000Z"
+  },
+  {
+    "operatorId": "00000000-0000-4000-8000-000000000002",
+    "cognitoSub": "fixture-sub-viewer",
+    "email": "platform-viewer@example.invalid",
+    "displayName": "Fixture Platform Viewer",
+    "status": "active",
+    "roles": ["platform_viewer"],
+    "scopes": ["tenants.read", "engines.read", "audit.read"],
+    "mfaEnrolled": true,
+    "createdAt": "2026-09-11T00:00:00.000Z"
+  },
+  {
+    "operatorId": "00000000-0000-4000-8000-000000000003",
+    "cognitoSub": "fixture-sub-disabled",
+    "email": "disabled-operator@example.invalid",
+    "displayName": "Fixture Disabled Operator",
+    "status": "disabled",
+    "roles": ["platform_operator"],
+    "scopes": ["tenants.read"],
+    "mfaEnrolled": true,
+    "createdAt": "2026-09-11T00:00:00.000Z",
+    "disabledAt": "2026-09-11T00:00:00.000Z",
+    "disabledReason": "fixture — demonstrates disabled-operator rejection"
+  }
+]

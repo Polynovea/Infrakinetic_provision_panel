@@ -12,6 +12,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: Check for hardcoded domain literals outside config
         run: node backend/scripts/check_domain_portability.mjs
+      - name: Check for Infrakinetic/CRM import-boundary violations
+        run: node backend/scripts/check_no_infrakinetic_imports.mjs
 
   backend:
     runs-on: ubuntu-latest
@@ -27,8 +29,11 @@ jobs:
           cache-dependency-path: backend/package-lock.json
       - run: npm ci
       - run: npm run lint
+      - run: npm run lint:test
       - run: npm run typecheck
+      - run: npm run typecheck:test
       - run: npm run build
+      - run: npm test
 
   frontend:
     runs-on: ubuntu-latest

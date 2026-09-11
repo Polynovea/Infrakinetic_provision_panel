@@ -41,3 +41,5 @@ Platform Governance owns platform/operator **desired state**, tenant commissioni
 ## Status
 
 **1A.1 — Repository and environment foundation.** Infrastructure-only. No database connection, no Cognito, no management API authentication, no calls to Infrakinetic's `api-server` of any kind. See `docs/1A.1_status.md`.
+
+**1A.2 — Privileged operator identity.** Application-side identity/session/role/scope model, `requireManagementApiAuth` + `authorize.ts` authorization middleware, Cognito JWT verification boundary (env-configured, no hardcoded AWS identifiers), and the operator-identity persistence schema are built and locally verified (37/37 tests). The dedicated Cognito pool itself is **not provisioned** — pending separate AWS authorization. See `docs/1A.2_status.md` for exact evidence, the scope decision recorded this subphase, and exactly what AWS resources are needed to finish live 1A.2.
