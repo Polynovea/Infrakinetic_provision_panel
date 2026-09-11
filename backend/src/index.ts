@@ -1,14 +1,12 @@
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-
 import express from "express";
 
+import { LazyDbClient } from "./db/lazyDbClient.js";
+import { PgDbClient } from "./db/pgDbClient.js";
 import { ConsoleAuditSink } from "./identity/adapters/consoleAuditSink.js";
-import { InMemoryOperatorDirectory } from "./identity/adapters/inMemoryOperatorDirectory.js";
-import { InMemorySessionStore } from "./identity/adapters/inMemorySessionStore.js";
+import { PostgresOperatorDirectory } from "./identity/adapters/postgresOperatorDirectory.js";
+import { PostgresSessionStore } from "./identity/adapters/postgresSessionStore.js";
 import { CognitoIdentityProvider } from "./identity/providers/cognitoIdentityProvider.js";
 import { LazyIdentityProvider } from "./identity/providers/lazyIdentityProvider.js";
-import type { OperatorRecord } from "./identity/types.js";
 import { createManagementRouter } from "./routes/management/index.js";
 
 // 1A.1 — infrastructure-only, still true: no database connection, no calls
@@ -21,23 +19,31 @@ const HOST = process.env.GOVERNANCE_API_HOST ?? "127.0.0.1";
 const PORT = Number(process.env.GOVERNANCE_API_PORT ?? 4100);
 
 app.get("/healthz", (_req, res) => {
-  res.status(200).json({ status: "ok", service: "polynovea.platform-governance", phase: "1A.2" });
+  res.status(200).json({ status: "ok", service: "polynovea.platform-governance", phase: "1A.3" });
 });
 
-// 1A.2 — privileged operator identity boundary. The operator directory is
-// seeded from config/operators.seed.json (no Governance DB yet — that is
-// 1A.3, see docs/1A.2_status.md) — entries are added only by
-// scripts/bootstrap_operator.mjs, never edited by hand. The Cognito
-// identity provider is constructed lazily so server boot never requires
-// GOVERNANCE_COGNITO_* to be set while real Cognito provisioning is
-// pending authorization.
-const operatorsSeedPath = fileURLToPath(new URL("../config/operators.seed.json", import.meta.url));
-const seedOperators = JSON.parse(readFileSync(operatorsSeedPath, "utf8")) as OperatorRecord[];
+// 1A.3 — the operator directory and session store are now Postgres-backed
+// (migrations/0001_operator_identity_schema.sql + 0002_governance_db_foundation.sql),
+// replacing 1A.2's in-memory/fixture-seeded interim adapters, exactly as
+// docs/1A.2_status.md described ("the adapter seam is designed so 1A.3
+// swaps in Postgres-backed implementations without touching the
+// middleware, routes, or any test above the adapter layer") — neither
+// requireManagementApiAuth, authorize.ts, nor createManagementRouter change
+// here. The DB client is constructed lazily (LazyDbClient wrapping
+// PgDbClient.fromEnv()), so server boot and /healthz never require
+// GOVERNANCE_DB_* to be set — only an actual /management/v1/* request that
+// reaches the directory or session store does, and it fails closed with a
+// typed DatabaseUnavailableError (503) naming the missing configuration,
+// the same fail-closed shape already proven for Cognito. The Cognito
+// identity provider remains lazily constructed for the identical reason
+// (GOVERNANCE_COGNITO_* provisioning is still pending — see
+// docs/1A.2_status.md).
+const dbClient = new LazyDbClient(() => PgDbClient.fromEnv());
 
 const managementDeps = {
   identityProvider: new LazyIdentityProvider(() => CognitoIdentityProvider.fromEnv()),
-  operatorDirectory: new InMemoryOperatorDirectory(seedOperators),
-  sessionStore: new InMemorySessionStore(),
+  operatorDirectory: new PostgresOperatorDirectory(dbClient),
+  sessionStore: new PostgresSessionStore(dbClient),
   auditSink: new ConsoleAuditSink(),
 };
 
