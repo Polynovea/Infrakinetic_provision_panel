@@ -1,0 +1,4 @@
+# Every change to this repository requires review.
+# Fill in the actual GitHub username/team before this repo is pushed and
+# branch protection is enabled — a CODEOWNERS file has no effect until then.
+* @subrojitroy10
