@@ -10,10 +10,10 @@
 --
 -- STATUS: authored, verified against pg-mem
 -- (test/migrations/0002_governance_db_foundation.test.ts). Applying it to
--- the real database requires the role/schema this subphase's provisioning
--- script (provisioning/001_create_role_and_schema.sql) creates — that
--- script has not been run against anything real (no AWS/RDS access in
--- this session). See docs/1A.3_status.md.
+-- the real database requires the role/database/schema this subphase's
+-- provisioning script (provisioning/001_create_role_database_and_schema.sql)
+-- creates — that script has not been run against anything real (no
+-- AWS/RDS access in this session). See docs/1A.3_status.md.
 --
 -- No tenant business data, no Infrakinetic table, no shared credential
 -- appears here (README.md hard rules #2/#3/#8).
@@ -53,7 +53,7 @@ CREATE INDEX management_idempotency_keys_operator_id_idx ON governance.managemen
 -- Append-only by convention, matching 0001's operator_auth_audit_log: no
 -- UPDATE/DELETE path in application code, and governance_app's grants
 -- (which arise entirely from schema ownership — see
--- provisioning/001_create_role_and_schema.sql — not from any per-table
+-- provisioning/001_create_role_database_and_schema.sql — not from any per-table
 -- grant list) are not narrowed further than that at 1A.3; enforcing true
 -- database-level append-only (e.g. revoking UPDATE/DELETE specifically on
 -- this table even from its own owning role) is deferred, matching the

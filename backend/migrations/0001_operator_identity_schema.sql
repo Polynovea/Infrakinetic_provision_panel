@@ -1,16 +1,17 @@
 -- 1A.2 — privileged operator identity persistence schema.
 --
 -- CORRECTED 2026-09-11: rewritten to target the `governance` schema
--- instead of the default (Infrakinetic-shared) `public` schema, per
--- explicit architecture correction — Phase 1A Governance shares the SAME
--- existing production Postgres database as Infrakinetic; isolation is a
--- dedicated schema owned by a dedicated role (`governance_app`,
--- provisioning/001_create_role_and_schema.sql), not a separate database.
--- This file has never been applied to any real database (confirmed
--- repeatedly across 1A.2/1A.3), so it is edited in place rather than
--- layering a schema-move migration on top of a never-deployed artifact —
--- see docs/1A.3_status.md "Architecture correction" for the full record
--- and the git history for the pre-correction version.
+-- instead of the default `public` schema — Phase 1A Governance runs on a
+-- SEPARATE database (`polynovea_governance`) on the same RDS instance as
+-- Infrakinetic; the `governance` schema inside that database is defense
+-- in depth on top of the database-level separation, not a substitute for
+-- it (an earlier revision of this file assumed sharing Infrakinetic's own
+-- database with only a schema for isolation — that was wrong and has been
+-- corrected; see docs/1A.3_status.md "Architecture correction" for the
+-- full record and the git history for the pre-correction versions). This
+-- file has never been applied to any real database (confirmed repeatedly
+-- across 1A.2/1A.3), so it is edited in place rather than layering a
+-- schema-move migration on top of a never-deployed artifact.
 --
 -- Also folds in, from the start, a correction originally made in 0002
 -- while building the Postgres-backed session-store adapter:

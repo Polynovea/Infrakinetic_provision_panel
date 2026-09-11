@@ -57,7 +57,7 @@ export function listMigrationFiles(migrationsDir: string): string[] {
 // Lives in the `governance` schema, like every other object this
 // application owns (CORRECTED 2026-09-11 — see docs/1A.3_status.md
 // "Architecture correction"). governance_app owns that schema (granted by
-// provisioning/001_create_role_and_schema.sql), so it can create this
+// provisioning/001_create_role_database_and_schema.sql), so it can create this
 // table without any further grant; it has no privilege to create anything
 // in `public`.
 export async function ensureMigrationsTable(client: DbClient): Promise<void> {

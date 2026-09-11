@@ -35,7 +35,7 @@ export class PgDbClient implements DbClient {
       ssl: config.ssl ? { rejectUnauthorized: true } : undefined,
       max: config.poolMax,
       // Defense in depth alongside `ALTER ROLE governance_app SET
-      // search_path = governance` in provisioning/001_create_role_and_schema.sql
+      // search_path = governance` in provisioning/001_create_role_database_and_schema.sql
       // (the authoritative, server-enforced layer — this applies even if a
       // future connection somehow authenticates as a different role).
       // Deliberately excludes `public`: an unqualified reference to a table

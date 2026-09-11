@@ -16,7 +16,7 @@ export function buildMigratedPgMemClient(): { db: ReturnType<typeof newDb>; clie
   const db = newDb();
 
   // Real provisioning creates this schema as a separate, privileged
-  // bootstrap step (provisioning/001_create_role_and_schema.sql) — the
+  // bootstrap step (provisioning/001_create_role_database_and_schema.sql) — the
   // migrations themselves never create it, since governance_app has no
   // database-level CREATE privilege, only ownership of this
   // already-existing schema. Replicated here so the migration files can be

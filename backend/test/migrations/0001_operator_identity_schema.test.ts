@@ -12,7 +12,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 // migration has been applied to any real database.
 //
 // The `governance` schema is created here explicitly, mirroring
-// provisioning/001_create_role_and_schema.sql — real migrations never
+// provisioning/001_create_role_database_and_schema.sql — real migrations never
 // create it themselves (see that file's header).
 
 const migrationPath = fileURLToPath(new URL("../../migrations/0001_operator_identity_schema.sql", import.meta.url));

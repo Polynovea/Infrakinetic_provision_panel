@@ -2,13 +2,14 @@ import { DatabaseUnavailableError } from "./errors.js";
 
 // 1A.3 — Governance database connection configuration. Every value comes
 // from the environment; nothing is a hardcoded host, database name,
-// username or password. CORRECTED 2026-09-11: Phase 1A Governance connects
-// to the SAME existing production database Infrakinetic uses (so
-// GOVERNANCE_DB_NAME/HOST/PORT are expected to match Infrakinetic's own —
-// that is not a violation of README.md hard rule #2, which is about the
-// *credential*, i.e. GOVERNANCE_DB_USER/PASSWORD, never being Infrakinetic's
-// application role; isolation is the dedicated `governance_app` role/schema,
-// not a distinct database). There is still no default value here for any
+// username or password (README.md hard rule #2: no shared database
+// credentials with Infrakinetic's business database). Phase 1A Governance
+// runs on the SAME RDS instance as Infrakinetic but a SEPARATE database
+// (`polynovea_governance`, never `polynoveacrm`) and a separate role
+// (`governance_app`) — see docs/1A.3_status.md "Architecture correction"
+// for the full record (this was wrong in an earlier revision, which
+// assumed sharing Infrakinetic's own database with only a schema for
+// isolation; that was corrected). There is no default value here for any
 // field, so nothing here could silently coincide with a real value by
 // accident. This module is only ever called lazily, at first real database
 // use (see lazyDbClient.ts) — never at import time — so `npm run
