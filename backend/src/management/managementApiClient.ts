@@ -16,7 +16,11 @@ export interface ManagementApiCallParams {
   baseUrl: string;
   path: string;
   assertion: string;
-  method?: "GET";
+  method?: "GET" | "PUT";
+  /** JSON-serializable request body. 1A.6's mutation-specific fields only —
+   * never identity/routing fields, which the assertion already carries
+   * (see engineStateOperation.ts's header for why). */
+  body?: unknown;
   correlationId?: string;
   fetchImpl?: typeof fetch;
 }
@@ -35,7 +39,14 @@ export async function callInfrakineticManagementApi(params: ManagementApiCallPar
   };
   if (params.correlationId) headers["x-correlation-id"] = params.correlationId;
 
-  const response = await doFetch(url, { method: params.method ?? "GET", headers });
+  const method = params.method ?? "GET";
+  let requestBody: string | undefined;
+  if (params.body !== undefined) {
+    headers["content-type"] = "application/json";
+    requestBody = JSON.stringify(params.body);
+  }
+
+  const response = await doFetch(url, { method, headers, body: requestBody });
   const body = await response.json().catch(() => undefined);
   return { status: response.status, body };
 }

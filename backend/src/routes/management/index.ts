@@ -7,12 +7,33 @@ import type { OperatorDirectory } from "../../identity/operatorDirectory.js";
 import type { OperatorSessionStore } from "../../identity/sessionStore.js";
 import { requireRole, requireScope, requireStepUp } from "../../middleware/authorize.js";
 import { requireManagementApiAuth } from "../../middleware/requireManagementApiAuth.js";
+import type { ManagementOperationLedger } from "../../management/operations/managementOperationLedger.js";
+import type { ManagementSigningKeySet } from "../../management/managementSigningKeys.js";
+import type { ManagementTransportConfig } from "../../management/managementConfig.js";
+import { DatabaseUnavailableError } from "../../db/errors.js";
+import {
+  requestEngineStateChange,
+  recoverEngineState,
+  UnknownEngineError,
+  MissingRecoveryIntentError,
+  UnexpectedManagementApiResponseError,
+} from "../../management/operations/engineStateOperation.js";
+import { ManagementOperationError, OperationNotFoundError } from "../../management/operations/managementOperationErrors.js";
 
 export interface ManagementRouterDeps {
   identityProvider: IdentityProvider;
   operatorDirectory: OperatorDirectory;
   sessionStore: OperatorSessionStore;
   auditSink: AuditSink;
+  // 1A.6 — the real engine-state mutation vertical. getManagementSigningKeys
+  // and loadTransportConfig are injected as functions (not resolved values)
+  // so server boot never requires GOVERNANCE_MANAGEMENT_* to be set — only
+  // an actual PUT to this route does, matching every other lazy dependency
+  // in this backend.
+  ledger: ManagementOperationLedger;
+  getManagementSigningKeys: () => Promise<ManagementSigningKeySet>;
+  loadTransportConfig: () => ManagementTransportConfig;
+  infrakineticBaseUrl: string;
 }
 
 // 1A.2 route integration points. This is deliberately not the read-contract
@@ -69,6 +90,160 @@ export function createManagementRouter(deps: ManagementRouterDeps): Router {
     requireRole("platform_admin", deps.auditSink),
     (req, res) => {
       res.status(200).json({ status: "ok", operatorId: req.operatorContext?.operatorId });
+    },
+  );
+
+  // 1A.6 — the real vertical. requireStepUp is deliberately NOT used here:
+  // authorize.ts's own header calls it a skeleton and explicitly warns "R3+
+  // actions must not be wired to only this check until the real challenge
+  // exists" — wiring an R4 action to a fake step-up would be worse than not
+  // gating on step-up at all (false assurance). engines.platform_state.write
+  // is granted only to platform_admin/break_glass by ROLE_SCOPE_CEILING
+  // (roles.ts), which is the real control this phase relies on; R3/R4
+  // maker-checker remains 1A.19's deliverable (1A.5's own approval_evidence
+  // column exists precisely so that can be added later without a schema
+  // change).
+  router.put(
+    "/engine-state/:engineKey",
+    requireScope("engines.platform_state.write", deps.auditSink),
+    async (req, res, next) => {
+      try {
+        const ctx = req.operatorContext;
+        if (!ctx) {
+          res.status(403).json({ error: "NOT_AUTHENTICATED" });
+          return;
+        }
+        const body = (req.body ?? {}) as Record<string, unknown>;
+        if (typeof body.idempotencyKey !== "string" || body.idempotencyKey.trim() === "") {
+          res.status(400).json({ error: "IDEMPOTENCY_KEY_REQUIRED" });
+          return;
+        }
+        if (typeof body.reason !== "string" || body.reason.trim() === "") {
+          res.status(400).json({ error: "REASON_REQUIRED" });
+          return;
+        }
+        const desiredState = body.desiredState;
+        if (desiredState !== "operational" && desiredState !== "degraded" && desiredState !== "disabled") {
+          res.status(400).json({ error: "INVALID_DESIRED_STATE" });
+          return;
+        }
+
+        const signingKeys = await deps.getManagementSigningKeys();
+        const transportConfig = deps.loadTransportConfig();
+
+        const result = await requestEngineStateChange(
+          { ledger: deps.ledger, signingKeys, transportConfig, infrakineticBaseUrl: deps.infrakineticBaseUrl },
+          {
+            idempotencyKey: body.idempotencyKey,
+            operatorId: ctx.operatorId,
+            operatorSessionId: ctx.operatorSessionId,
+            operatorRoles: ctx.roles,
+            operatorGrantedScopes: ctx.scopes,
+            engineKeyOrAlias: req.params.engineKey,
+            desiredState,
+            reason: body.reason,
+            metadata: typeof body.metadata === "object" && body.metadata !== null ? (body.metadata as Record<string, unknown>) : undefined,
+            recoveryIntent: typeof body.recoveryIntent === "string" ? body.recoveryIntent : undefined,
+            correlationId: ctx.correlationId,
+          },
+        );
+        res.status(200).json({ operation: result.operation, replay: result.replay });
+      } catch (err) {
+        if (err instanceof UnknownEngineError) {
+          res.status(404).json({ error: "UNKNOWN_ENGINE", message: err.message });
+          return;
+        }
+        if (err instanceof MissingRecoveryIntentError) {
+          res.status(400).json({ error: "RECOVERY_INTENT_REQUIRED", message: err.message });
+          return;
+        }
+        if (err instanceof UnexpectedManagementApiResponseError) {
+          res.status(502).json({ error: "MANAGEMENT_API_UPSTREAM_ERROR", message: err.message });
+          return;
+        }
+        if (err instanceof ManagementOperationError) {
+          res.status(err.httpStatus).json({ error: err.code, message: err.message });
+          return;
+        }
+        if (err instanceof DatabaseUnavailableError) {
+          res.status(err.httpStatus).json({ error: err.code, message: err.message });
+          return;
+        }
+        next(err);
+      }
+    },
+  );
+
+  router.get("/operations/:operationId", requireScope("engines.read", deps.auditSink), async (req, res, next) => {
+    try {
+      const operation = await deps.ledger.getOperation(req.params.operationId);
+      res.status(200).json({ operation });
+    } catch (err) {
+      if (err instanceof OperationNotFoundError) {
+        res.status(404).json({ error: err.code, message: err.message });
+        return;
+      }
+      if (err instanceof DatabaseUnavailableError) {
+        res.status(err.httpStatus).json({ error: err.code, message: err.message });
+        return;
+      }
+      next(err);
+    }
+  });
+
+  router.post(
+    "/operations/:operationId/recover",
+    requireScope("engines.platform_state.write", deps.auditSink),
+    async (req, res, next) => {
+      try {
+        const ctx = req.operatorContext;
+        if (!ctx) {
+          res.status(403).json({ error: "NOT_AUTHENTICATED" });
+          return;
+        }
+        const body = (req.body ?? {}) as Record<string, unknown>;
+        if (typeof body.idempotencyKey !== "string" || body.idempotencyKey.trim() === "") {
+          res.status(400).json({ error: "IDEMPOTENCY_KEY_REQUIRED" });
+          return;
+        }
+        if (typeof body.reason !== "string" || body.reason.trim() === "") {
+          res.status(400).json({ error: "REASON_REQUIRED" });
+          return;
+        }
+
+        const signingKeys = await deps.getManagementSigningKeys();
+        const transportConfig = deps.loadTransportConfig();
+
+        const result = await recoverEngineState(
+          { ledger: deps.ledger, signingKeys, transportConfig, infrakineticBaseUrl: deps.infrakineticBaseUrl },
+          deps.ledger,
+          {
+            originalOperationId: req.params.operationId,
+            idempotencyKey: body.idempotencyKey,
+            operatorId: ctx.operatorId,
+            operatorSessionId: ctx.operatorSessionId,
+            operatorRoles: ctx.roles,
+            operatorGrantedScopes: ctx.scopes,
+            reason: body.reason,
+            correlationId: ctx.correlationId,
+          },
+        );
+        res.status(200).json({ operation: result.operation, replay: result.replay });
+      } catch (err) {
+        if (err instanceof OperationNotFoundError) {
+          res.status(404).json({ error: err.code, message: err.message });
+          return;
+        }
+        if (err instanceof ManagementOperationError) {
+          res.status(err.httpStatus).json({ error: err.code, message: err.message });
+          return;
+        }
+        if (err instanceof DatabaseUnavailableError) {
+          res.status(err.httpStatus).json({ error: err.code, message: err.message });
+          return;
+        }
+        next(err);
+      }
     },
   );
 

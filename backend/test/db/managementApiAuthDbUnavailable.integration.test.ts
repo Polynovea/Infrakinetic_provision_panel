@@ -9,9 +9,22 @@ import { InMemorySessionStore } from "../../src/identity/adapters/inMemorySessio
 import type { CognitoIdentityProvider } from "../../src/identity/providers/cognitoIdentityProvider.js";
 import type { OperatorSessionStore } from "../../src/identity/sessionStore.js";
 import { createManagementRouter } from "../../src/routes/management/index.js";
+import { ManagementOperationLedger } from "../../src/management/operations/managementOperationLedger.js";
 import { activeAdminOperator } from "../helpers/operators.js";
 import { buildTestIdentityProvider } from "../helpers/testProvider.js";
+import { buildMigratedPgMemClient } from "../helpers/pgMemDb.js";
 import { generateTestKeyPair, signTestToken, type TestKeyPair } from "../helpers/testToken.js";
+
+// Neither test in this file exercises the 1A.6 engine-state routes — these
+// stand in only to satisfy ManagementRouterDeps.
+const unusedEngineStateDeps = {
+  ledger: new ManagementOperationLedger(buildMigratedPgMemClient().client),
+  getManagementSigningKeys: () => Promise.reject(new Error("not used in this test")),
+  loadTransportConfig: () => {
+    throw new Error("not used in this test");
+  },
+  infrakineticBaseUrl: "http://127.0.0.1:0",
+};
 
 // Proves the 1A.3 fail-closed contract end-to-end through a real Express
 // router: a valid, correctly-issued operator token still gets a clean,
@@ -46,6 +59,7 @@ describe("requireManagementApiAuth — Governance DB unavailable (fail-closed)",
         operatorDirectory: alwaysUnavailable,
         sessionStore: new InMemorySessionStore(),
         auditSink: new InMemoryAuditSink(),
+        ...unusedEngineStateDeps,
       }),
     );
 
@@ -78,6 +92,7 @@ describe("requireManagementApiAuth — Governance DB unavailable (fail-closed)",
         operatorDirectory: new InMemoryOperatorDirectory([op]),
         sessionStore,
         auditSink,
+        ...unusedEngineStateDeps,
       }),
     );
 

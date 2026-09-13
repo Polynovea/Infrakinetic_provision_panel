@@ -9,6 +9,8 @@ import { CognitoIdentityProvider } from "./identity/providers/cognitoIdentityPro
 import { LazyIdentityProvider } from "./identity/providers/lazyIdentityProvider.js";
 import { getManagementSigningKeysLazy } from "./management/lazyManagementKeys.js";
 import { buildManagementJwks } from "./management/managementJwks.js";
+import { loadManagementTransportConfig } from "./management/managementConfig.js";
+import { ManagementOperationLedger } from "./management/operations/managementOperationLedger.js";
 import { createManagementRouter } from "./routes/management/index.js";
 import { DatabaseUnavailableError } from "./db/errors.js";
 
@@ -43,11 +45,18 @@ app.get("/healthz", (_req, res) => {
 // docs/1A.2_status.md).
 const dbClient = new LazyDbClient(() => PgDbClient.fromEnv());
 
+// 1A.6 — reuses the exact same lazy dbClient/signing-keys singletons this
+// file already constructs for the identity adapters and the JWKS endpoint;
+// no second database connection, no second key-loading path.
 const managementDeps = {
   identityProvider: new LazyIdentityProvider(() => CognitoIdentityProvider.fromEnv()),
   operatorDirectory: new PostgresOperatorDirectory(dbClient),
   sessionStore: new PostgresSessionStore(dbClient),
   auditSink: new ConsoleAuditSink(),
+  ledger: new ManagementOperationLedger(dbClient),
+  getManagementSigningKeys: getManagementSigningKeysLazy,
+  loadTransportConfig: loadManagementTransportConfig,
+  infrakineticBaseUrl: process.env.INFRAKINETIC_MANAGEMENT_BASE_URL ?? "http://127.0.0.1:4000",
 };
 
 app.use("/management/v1", createManagementRouter(managementDeps));
