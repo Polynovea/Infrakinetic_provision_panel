@@ -12,6 +12,10 @@ const migration0001Sql = readFileSync(
   fileURLToPath(new URL("../../migrations/0001_operator_identity_schema.sql", import.meta.url)),
   "utf8",
 );
+const migration0002Sql = readFileSync(
+  fileURLToPath(new URL("../../migrations/0002_governance_db_foundation.sql", import.meta.url)),
+  "utf8",
+);
 
 describe("db/migrationRunner", () => {
   it("applies every migration file in order, against real DDL execution (pg-mem)", async () => {
@@ -22,6 +26,7 @@ describe("db/migrationRunner", () => {
     expect(results.map((r) => r.id)).toEqual([
       "0001_operator_identity_schema.sql",
       "0002_governance_db_foundation.sql",
+      "0003_management_operation_ledger.sql",
     ]);
     expect(results.every((r) => r.applied)).toBe(true);
 
@@ -49,6 +54,7 @@ describe("db/migrationRunner", () => {
         "operator_auth_audit_log",
         "management_idempotency_keys",
         "operator_audit_log",
+        "management_operations",
         "schema_migrations",
       ]),
     );
@@ -113,6 +119,48 @@ describe("db/migrationRunner", () => {
     expect(results).toEqual([
       { id: "0001_operator_identity_schema.sql", applied: false },
       { id: "0002_governance_db_foundation.sql", applied: true },
+      { id: "0003_management_operation_ledger.sql", applied: true },
     ]);
+  });
+
+  // 1A.5 migration-upgrade proof (instruction #14): a database already at
+  // exactly 1A.4's live schema state (0001+0002 applied, matching
+  // docs/1A.3_status.md's live evidence) upgrades cleanly to 1A.5 by
+  // applying only 0003 — proving 0003 is a genuine additive upgrade path,
+  // not something that assumes a from-scratch install.
+  it("upgrades a database already at the 1A.4 live schema state by applying only 0003", async () => {
+    const client = buildEmptyPgMemClient();
+
+    await client.query(migration0001Sql);
+    await client.query(migration0002Sql);
+    await client.query(
+      `CREATE TABLE governance.schema_migrations (id TEXT PRIMARY KEY, checksum TEXT NOT NULL, applied_at TIMESTAMPTZ NOT NULL)`,
+    );
+    for (const [id, sql] of [
+      ["0001_operator_identity_schema.sql", migration0001Sql],
+      ["0002_governance_db_foundation.sql", migration0002Sql],
+    ] as const) {
+      const checksum = createHash("sha256").update(sql, "utf8").digest("hex");
+      await client.query("INSERT INTO governance.schema_migrations (id, checksum, applied_at) VALUES ($1, $2, now())", [
+        id,
+        checksum,
+      ]);
+    }
+
+    const results = await runMigrations(client, migrationsDir);
+    expect(results).toEqual([
+      { id: "0001_operator_identity_schema.sql", applied: false },
+      { id: "0002_governance_db_foundation.sql", applied: false },
+      { id: "0003_management_operation_ledger.sql", applied: true },
+    ]);
+
+    // Idempotent from here on, same as every other migration.
+    const secondRun = await runMigrations(client, migrationsDir);
+    expect(secondRun.every((r) => r.applied === false)).toBe(true);
+
+    const tables = (
+      await client.query<{ table_name: string }>("SELECT table_name FROM information_schema.tables ORDER BY table_name")
+    ).rows.map((r) => r.table_name);
+    expect(tables).toContain("management_operations");
   });
 });
