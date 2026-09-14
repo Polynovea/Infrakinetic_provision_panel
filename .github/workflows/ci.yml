@@ -14,6 +14,8 @@ jobs:
         run: node backend/scripts/check_domain_portability.mjs
       - name: Check for Infrakinetic/CRM import-boundary violations
         run: node backend/scripts/check_no_infrakinetic_imports.mjs
+      - name: Check no Cognito secret material reaches frontend/
+        run: node backend/scripts/check_no_cognito_secret_in_frontend.mjs
 
   backend:
     runs-on: ubuntu-latest

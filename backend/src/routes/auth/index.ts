@@ -139,9 +139,13 @@ export function createBrowserAuthRouter(deps: BrowserAuthRouterDeps): Router {
         return;
       }
 
+      const basicAuth = Buffer.from(`${config.appClientId}:${config.appClientSecret}`, "utf8").toString("base64");
       const tokenResponse = await fetchImpl(`${config.cognitoDomain}/oauth2/token`, {
         method: "POST",
-        headers: { "content-type": "application/x-www-form-urlencoded" },
+        headers: {
+          "content-type": "application/x-www-form-urlencoded",
+          authorization: `Basic ${basicAuth}`,
+        },
         body: new URLSearchParams({
           grant_type: "authorization_code",
           client_id: config.appClientId,

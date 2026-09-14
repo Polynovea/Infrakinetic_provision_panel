@@ -17,7 +17,8 @@
     "db:migrate": "tsx scripts/migrate.ts",
     "check:domain-portability": "node scripts/check_domain_portability.mjs",
     "check:no-infrakinetic-imports": "node scripts/check_no_infrakinetic_imports.mjs",
-    "check:no-signing-key-in-frontend": "node scripts/check_no_signing_key_in_frontend.mjs"
+    "check:no-signing-key-in-frontend": "node scripts/check_no_signing_key_in_frontend.mjs",
+    "check:no-cognito-secret-in-frontend": "node scripts/check_no_cognito_secret_in_frontend.mjs"
   },
   "dependencies": {
     "express": "^4.19.2",

@@ -14,6 +14,7 @@ import { activeAdminOperator } from "../helpers/operators.js";
 const config: BrowserAuthConfig = {
   cognitoDomain: "https://operator-auth.example.test",
   appClientId: "governance-browser-client",
+  appClientSecret: "governance-browser-client-test-secret",
   redirectUri: "http://localhost:4100/auth/callback",
   frontendOrigin: "http://localhost:3000",
   secureCookies: false,
@@ -49,7 +50,7 @@ describe("backend-owned Cognito browser auth", () => {
         };
       },
     };
-    const fetchImpl = vi.fn(async () =>
+    const fetchImpl = vi.fn<(url: string, init?: RequestInit) => Promise<Response>>(async () =>
       new Response(JSON.stringify({ id_token: "signed-id-token", refresh_token: "must-not-be-persisted" }), {
         status: 200,
         headers: { "content-type": "application/json" },
@@ -89,6 +90,14 @@ describe("backend-owned Cognito browser auth", () => {
     expect(callback.status).toBe(302);
     expect(callback.headers.location).toBe("http://localhost:3000/tenants");
     expect(fetchImpl).toHaveBeenCalledTimes(1);
+    const [tokenUrl, tokenInit] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(tokenUrl).toBe("https://operator-auth.example.test/oauth2/token");
+    const authorizationHeader = (tokenInit.headers as Record<string, string>).authorization;
+    expect(authorizationHeader).toBe(
+      `Basic ${Buffer.from(`${config.appClientId}:${config.appClientSecret}`, "utf8").toString("base64")}`,
+    );
+    const bodyText = tokenInit.body as string;
+    expect(bodyText).not.toContain(config.appClientSecret);
     const sessionSecret = cookieValue(callback.headers["set-cookie"], "governance_session");
     expect(sessionSecret).toBeTruthy();
     const session = await store.findSessionByTokenHash(sha256Base64Url(sessionSecret ?? ""));

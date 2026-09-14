@@ -3,6 +3,8 @@ import { ConfigurationError } from "./errors.js";
 export interface BrowserAuthConfig {
   cognitoDomain: string;
   appClientId: string;
+  // Confidential-client secret, backend-only — never read by the frontend or logged.
+  appClientSecret: string;
   redirectUri: string;
   frontendOrigin: string;
   secureCookies: boolean;
@@ -29,6 +31,7 @@ function positiveNumber(name: string, fallback: number): number {
 export function loadBrowserAuthConfig(): BrowserAuthConfig {
   const cognitoDomain = required("GOVERNANCE_COGNITO_DOMAIN").replace(/\/$/, "");
   const appClientId = required("GOVERNANCE_COGNITO_APP_CLIENT_ID");
+  const appClientSecret = required("GOVERNANCE_COGNITO_APP_CLIENT_SECRET");
   const redirectUri = required("GOVERNANCE_COGNITO_REDIRECT_URI");
   const frontendOrigin = required("GOVERNANCE_FRONTEND_ORIGIN").replace(/\/$/, "");
 
@@ -55,6 +58,7 @@ export function loadBrowserAuthConfig(): BrowserAuthConfig {
   return {
     cognitoDomain,
     appClientId,
+    appClientSecret,
     redirectUri,
     frontendOrigin,
     secureCookies: redirectUrl.protocol === "https:",
@@ -67,6 +71,7 @@ export function browserAuthAppearsConfigured(): boolean {
   return Boolean(
     process.env.GOVERNANCE_COGNITO_DOMAIN?.trim() &&
       process.env.GOVERNANCE_COGNITO_APP_CLIENT_ID?.trim() &&
+      process.env.GOVERNANCE_COGNITO_APP_CLIENT_SECRET?.trim() &&
       process.env.GOVERNANCE_COGNITO_REDIRECT_URI?.trim() &&
       process.env.GOVERNANCE_FRONTEND_ORIGIN?.trim(),
   );
