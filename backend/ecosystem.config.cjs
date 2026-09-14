@@ -44,8 +44,10 @@ module.exports = {
       exec_mode: "fork",
       env: {
         NODE_ENV: "production",
-        GOVERNANCE_MANAGEMENT_ISSUER: "https://governance.infrakinetic.in",
-        GOVERNANCE_MANAGEMENT_AUDIENCE: "infrakinetic-management-api",
+        // GOVERNANCE_MANAGEMENT_ISSUER / _AUDIENCE are deployment-specific
+        // hostnames/identifiers (master plan §2c.1: never hardcoded in
+        // committed code) — the real EC2-local copy of this file sets them
+        // directly; this template intentionally leaves them out.
         GOVERNANCE_MANAGEMENT_SIGNING_KID: KID,
         GOVERNANCE_MANAGEMENT_SIGNING_PRIVATE_KEY_PEM: PRIVATE_KEY_PEM,
         ...dbSecrets,
