@@ -19,6 +19,7 @@ import {
   UnexpectedManagementApiResponseError,
 } from "../../management/operations/engineStateOperation.js";
 import { ManagementOperationError, OperationNotFoundError } from "../../management/operations/managementOperationErrors.js";
+import { listTenantRegistry, getTenantRegistryEntry, UnknownTenantError } from "../../management/operations/tenantRegistryQuery.js";
 
 export interface ManagementRouterDeps {
   identityProvider: IdentityProvider;
@@ -36,10 +37,10 @@ export interface ManagementRouterDeps {
   infrakineticBaseUrl: string;
 }
 
-// 1A.2 route integration points. This is deliberately not the read-contract
-// surface (/catalog, /tenants, ... — that is 1A.4's management API transport
-// and read-only contract deliverable). These routes only prove the operator
-// authentication/authorization/session seams end-to-end.
+// 1A.2 route integration points (whoami/session/audit) prove the operator
+// authentication/authorization/session seams end-to-end. /tenants and
+// /tenants/:identifier (1A.7) and /engine-state/:engineKey (1A.6) are the
+// real operator-facing verticals built on top of that seam.
 export function createManagementRouter(deps: ManagementRouterDeps): Router {
   const router = Router();
   const auth = requireManagementApiAuth(deps);
@@ -92,6 +93,80 @@ export function createManagementRouter(deps: ManagementRouterDeps): Router {
       res.status(200).json({ status: "ok", operatorId: req.operatorContext?.operatorId });
     },
   );
+
+  // 1A.7 — tenant registry, read-only (R0, no ledger — see
+  // tenantRegistryQuery.ts's header for why). tenants.read already existed,
+  // unused, in the 1A.2 scope catalog; no new scope was introduced.
+  router.get("/tenants", requireScope("tenants.read", deps.auditSink), async (req, res, next) => {
+    try {
+      const ctx = req.operatorContext;
+      if (!ctx) {
+        res.status(403).json({ error: "NOT_AUTHENTICATED" });
+        return;
+      }
+      const signingKeys = await deps.getManagementSigningKeys();
+      const transportConfig = deps.loadTransportConfig();
+      const result = await listTenantRegistry(
+        { signingKeys, transportConfig, infrakineticBaseUrl: deps.infrakineticBaseUrl },
+        {
+          operatorId: ctx.operatorId,
+          operatorSessionId: ctx.operatorSessionId,
+          operatorRoles: ctx.roles,
+          operatorGrantedScopes: ctx.scopes,
+          correlationId: ctx.correlationId,
+        },
+      );
+      res.status(200).json(result);
+    } catch (err) {
+      if (err instanceof UnexpectedManagementApiResponseError) {
+        res.status(502).json({ error: "MANAGEMENT_API_UPSTREAM_ERROR", message: err.message });
+        return;
+      }
+      if (err instanceof DatabaseUnavailableError) {
+        res.status(err.httpStatus).json({ error: err.code, message: err.message });
+        return;
+      }
+      next(err);
+    }
+  });
+
+  router.get("/tenants/:identifier", requireScope("tenants.read", deps.auditSink), async (req, res, next) => {
+    try {
+      const ctx = req.operatorContext;
+      if (!ctx) {
+        res.status(403).json({ error: "NOT_AUTHENTICATED" });
+        return;
+      }
+      const signingKeys = await deps.getManagementSigningKeys();
+      const transportConfig = deps.loadTransportConfig();
+      const result = await getTenantRegistryEntry(
+        { signingKeys, transportConfig, infrakineticBaseUrl: deps.infrakineticBaseUrl },
+        {
+          identifier: req.params.identifier,
+          operatorId: ctx.operatorId,
+          operatorSessionId: ctx.operatorSessionId,
+          operatorRoles: ctx.roles,
+          operatorGrantedScopes: ctx.scopes,
+          correlationId: ctx.correlationId,
+        },
+      );
+      res.status(200).json(result);
+    } catch (err) {
+      if (err instanceof UnknownTenantError) {
+        res.status(404).json({ error: "UNKNOWN_TENANT", message: err.message });
+        return;
+      }
+      if (err instanceof UnexpectedManagementApiResponseError) {
+        res.status(502).json({ error: "MANAGEMENT_API_UPSTREAM_ERROR", message: err.message });
+        return;
+      }
+      if (err instanceof DatabaseUnavailableError) {
+        res.status(err.httpStatus).json({ error: err.code, message: err.message });
+        return;
+      }
+      next(err);
+    }
+  });
 
   // 1A.6 — the real vertical. requireStepUp is deliberately NOT used here:
   // authorize.ts's own header calls it a skeleton and explicitly warns "R3+

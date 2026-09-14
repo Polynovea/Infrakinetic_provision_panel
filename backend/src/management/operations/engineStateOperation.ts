@@ -66,8 +66,10 @@ export interface EngineStateOperationDeps {
 }
 
 // Every route this module calls lives under Infrakinetic's /management/v1
-// mount (routes/management/v1/index.js) — never the bare path.
-const MANAGEMENT_V1_PREFIX = "/management/v1";
+// mount (routes/management/v1/index.js) — never the bare path. Exported so
+// other read-only query modules (e.g. tenantRegistryQuery.ts) share the same
+// constant instead of redeclaring it.
+export const MANAGEMENT_V1_PREFIX = "/management/v1";
 
 export type PlatformEngineState = "operational" | "degraded" | "disabled";
 
