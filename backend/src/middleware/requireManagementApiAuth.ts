@@ -3,6 +3,9 @@ import { randomUUID } from "node:crypto";
 import type { NextFunction, Request, RequestHandler, Response } from "express";
 
 import type { AuditSink } from "../identity/auditSink.js";
+import { sha256Base64Url } from "../identity/browserAuthCrypto.js";
+import type { BrowserAuthStore } from "../identity/browserAuthStore.js";
+import { parseCookies, SESSION_COOKIE_CANDIDATES } from "../identity/browserCookies.js";
 import {
   ManagementAuthError,
   MissingTokenError,
@@ -16,6 +19,7 @@ import type { IdentityProvider } from "../identity/identityProvider.js";
 import type { OperatorDirectory } from "../identity/operatorDirectory.js";
 import { ROLE_SCOPE_CEILING } from "../identity/roles.js";
 import type { OperatorSessionStore } from "../identity/sessionStore.js";
+import type { OperatorRecord } from "../identity/types.js";
 import type { OperatorContext } from "../identity/types.js";
 
 export interface ManagementAuthDeps {
@@ -23,6 +27,7 @@ export interface ManagementAuthDeps {
   operatorDirectory: OperatorDirectory;
   sessionStore: OperatorSessionStore;
   auditSink: AuditSink;
+  browserAuthStore?: BrowserAuthStore;
 }
 
 function extractBearerToken(req: Request): string | undefined {
@@ -30,6 +35,15 @@ function extractBearerToken(req: Request): string | undefined {
   if (!header) return undefined;
   const match = /^Bearer\s+(.+)$/i.exec(header.trim());
   return match?.[1];
+}
+
+function extractBrowserSessionToken(req: Request): string | undefined {
+  const cookies = parseCookies(req.header("cookie"));
+  for (const name of SESSION_COOKIE_CANDIDATES) {
+    const value = cookies[name];
+    if (value) return value;
+  }
+  return undefined;
 }
 
 function resolveCorrelationId(req: Request): string {
@@ -74,14 +88,38 @@ export function requireManagementApiAuth(deps: ManagementAuthDeps): RequestHandl
 
     try {
       const rawToken = extractBearerToken(req);
-      if (!rawToken) {
-        await fail(new MissingTokenError());
-        return;
+      let operator: OperatorRecord | undefined;
+      let operatorSessionId: string;
+
+      if (rawToken) {
+        const claims = await deps.identityProvider.verifyToken(rawToken);
+        operator = await deps.operatorDirectory.findByCognitoSub(claims.subject);
+        operatorSessionId = claims.tokenId;
+        req.operatorAuthMethod = "bearer";
+      } else {
+        const browserToken = extractBrowserSessionToken(req);
+        if (!browserToken || !deps.browserAuthStore) {
+          await fail(new MissingTokenError());
+          return;
+        }
+
+        const browserSession = await deps.browserAuthStore.findSessionByTokenHash(sha256Base64Url(browserToken));
+        if (!browserSession) {
+          await fail(new SessionRevokedError());
+          return;
+        }
+
+        operator = await deps.operatorDirectory.findByCognitoSub(browserSession.cognitoSub);
+        if (operator && operator.operatorId !== browserSession.operatorId) {
+          await fail(new InsufficientPrivilegeError("browser session operator binding does not match the operator directory"));
+          return;
+        }
+
+        operatorSessionId = browserSession.sessionId;
+        req.operatorAuthMethod = "browser-session";
+        req.browserSessionCsrfToken = browserSession.csrfToken;
       }
 
-      const claims = await deps.identityProvider.verifyToken(rawToken);
-
-      const operator = await deps.operatorDirectory.findByCognitoSub(claims.subject);
       if (!operator) {
         await fail(new OperatorNotProvisionedError());
         return;
@@ -97,7 +135,6 @@ export function requireManagementApiAuth(deps: ManagementAuthDeps): RequestHandl
         return;
       }
 
-      const operatorSessionId = claims.tokenId;
       if (await deps.sessionStore.isRevoked(operatorSessionId)) {
         await fail(new SessionRevokedError(), operator.operatorId, operatorSessionId);
         return;

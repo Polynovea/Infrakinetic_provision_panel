@@ -2,18 +2,15 @@
 
 import { useEffect, useState } from "react";
 
-import { GOVERNANCE_API_BASE_URL, useOperatorSession } from "../../lib/session";
+import { useOperatorSession } from "../../lib/session";
 
 export default function OverviewPage() {
-  const { token, operator } = useOperatorSession();
+  const { operator, request } = useOperatorSession();
   const [tenantCount, setTenantCount] = useState<number | null>(null);
 
   useEffect(() => {
-    if (!token) return;
     let cancelled = false;
-    fetch(`${GOVERNANCE_API_BASE_URL}/management/v1/tenants`, {
-      headers: { authorization: `Bearer ${token}` },
-    })
+    request("/management/v1/tenants")
       .then((res) => (res.ok ? res.json() : null))
       .then((body) => {
         if (!cancelled && body) setTenantCount(body.tenants.length);
@@ -22,7 +19,7 @@ export default function OverviewPage() {
     return () => {
       cancelled = true;
     };
-  }, [token]);
+  }, [request]);
 
   return (
     <>

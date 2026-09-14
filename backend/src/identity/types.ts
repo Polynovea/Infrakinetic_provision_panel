@@ -57,6 +57,8 @@ declare global {
   namespace Express {
     interface Request {
       operatorContext?: OperatorContext;
+      operatorAuthMethod?: "bearer" | "browser-session";
+      browserSessionCsrfToken?: string;
     }
   }
 }

@@ -2,10 +2,10 @@
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 
-import { getCognitoAuthConfig, isDevAuthBypassEnabled } from "./authConfig";
-import { beginSignIn, buildSignOutUrl, decodeJwtExpiry, ID_TOKEN_STORAGE_KEY } from "./cognitoAuth";
+import { isDevAuthBypassEnabled } from "./authConfig";
 
-export const GOVERNANCE_API_BASE_URL = process.env.NEXT_PUBLIC_GOVERNANCE_API_BASE_URL ?? "http://127.0.0.1:4100";
+export const GOVERNANCE_API_BASE_URL = process.env.NEXT_PUBLIC_GOVERNANCE_API_BASE_URL ?? "http://localhost:4100";
+const DEV_TOKEN_STORAGE_KEY = "governance.dev.idToken";
 
 export interface OperatorIdentity {
   operatorId: string;
@@ -14,103 +14,160 @@ export interface OperatorIdentity {
   scopes: readonly string[];
 }
 
-export type SessionStatus =
-  | "checking"
-  | "unavailable" // sign-in not configured and no dev bypass — fail closed
-  | "signed-out"
-  | "authenticated";
+export type SessionStatus = "checking" | "unavailable" | "signed-out" | "authenticated";
+
+interface WhoAmIResponse {
+  operator?: OperatorIdentity;
+  csrfToken?: string;
+}
 
 interface SessionContextValue {
   status: SessionStatus;
-  token: string | null;
   operator: OperatorIdentity | null;
   devBypassAvailable: boolean;
-  signIn: () => Promise<void>;
-  signOut: () => void;
-  /** Dev-only bypass entry point — see components/DevSignIn.tsx, never rendered in production. */
-  setDevToken: (token: string) => Promise<void>;
+  signIn: () => void;
+  signOut: () => Promise<void>;
+  setDevToken: (token: string) => Promise<boolean>;
+  request: (path: string, init?: RequestInit) => Promise<Response>;
+  refresh: () => Promise<void>;
 }
 
 const SessionContext = createContext<SessionContextValue | null>(null);
 
-async function fetchOperator(token: string): Promise<OperatorIdentity | null> {
+function isUnsafeMethod(method: string | undefined): boolean {
+  const normalized = (method ?? "GET").toUpperCase();
+  return !["GET", "HEAD", "OPTIONS"].includes(normalized);
+}
+
+async function readWhoAmI(devToken?: string): Promise<{ response: Response; body: WhoAmIResponse | null }> {
+  const headers = new Headers();
+  if (devToken) headers.set("authorization", `Bearer ${devToken}`);
   try {
-    const res = await fetch(`${GOVERNANCE_API_BASE_URL}/management/v1/whoami`, {
-      headers: { authorization: `Bearer ${token}` },
+    const response = await fetch(`${GOVERNANCE_API_BASE_URL}/management/v1/whoami`, {
+      headers,
+      credentials: "include",
     });
-    if (!res.ok) return null;
-    const body = await res.json();
-    return body.operator ?? null;
+    const body = response.ok ? ((await response.json()) as WhoAmIResponse) : null;
+    return { response, body };
   } catch {
-    return null;
+    return { response: new Response(null, { status: 503 }), body: null };
+  }
+}
+
+async function authConfigured(): Promise<boolean> {
+  try {
+    const response = await fetch(`${GOVERNANCE_API_BASE_URL}/auth/status`, { credentials: "include" });
+    if (!response.ok) return false;
+    const body = (await response.json()) as { configured?: boolean };
+    return body.configured === true;
+  } catch {
+    return false;
   }
 }
 
 export function OperatorSessionProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<SessionStatus>("checking");
-  const [token, setToken] = useState<string | null>(null);
   const [operator, setOperator] = useState<OperatorIdentity | null>(null);
-
+  const [csrfToken, setCsrfToken] = useState<string | null>(null);
+  const [devToken, setDevTokenState] = useState<string | null>(null);
   const devBypassAvailable = isDevAuthBypassEnabled();
-  const cognitoConfig = getCognitoAuthConfig();
 
-  const adopt = useCallback(async (candidateToken: string): Promise<boolean> => {
-    const expiry = decodeJwtExpiry(candidateToken);
-    if (expiry !== null && expiry <= Date.now()) return false;
-    const identity = await fetchOperator(candidateToken);
-    if (!identity) return false;
-    setToken(candidateToken);
-    setOperator(identity);
+  const adoptWhoAmI = useCallback((body: WhoAmIResponse | null): boolean => {
+    if (!body?.operator) return false;
+    setOperator(body.operator);
+    setCsrfToken(body.csrfToken ?? null);
     setStatus("authenticated");
     return true;
   }, []);
 
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      const stored = sessionStorage.getItem(ID_TOKEN_STORAGE_KEY);
+  const refresh = useCallback(async () => {
+    const sessionResult = await readWhoAmI();
+    if (sessionResult.response.ok && adoptWhoAmI(sessionResult.body)) {
+      setDevTokenState(null);
+      return;
+    }
+
+    if (devBypassAvailable) {
+      const stored = sessionStorage.getItem(DEV_TOKEN_STORAGE_KEY);
       if (stored) {
-        const ok = await adopt(stored);
-        if (cancelled) return;
-        if (ok) return;
-        sessionStorage.removeItem(ID_TOKEN_STORAGE_KEY);
+        const devResult = await readWhoAmI(stored);
+        if (devResult.response.ok && adoptWhoAmI(devResult.body)) {
+          setDevTokenState(stored);
+          return;
+        }
+        sessionStorage.removeItem(DEV_TOKEN_STORAGE_KEY);
       }
-      if (cancelled) return;
-      setStatus(cognitoConfig || devBypassAvailable ? "signed-out" : "unavailable");
-    })();
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }
+
+    setOperator(null);
+    setCsrfToken(null);
+    setDevTokenState(null);
+    const configured = await authConfigured();
+    setStatus(configured || devBypassAvailable ? "signed-out" : "unavailable");
+  }, [adoptWhoAmI, devBypassAvailable]);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  const signIn = useCallback(() => {
+    const returnTo = `${window.location.pathname}${window.location.search}`;
+    window.location.assign(`${GOVERNANCE_API_BASE_URL}/auth/login?returnTo=${encodeURIComponent(returnTo)}`);
   }, []);
 
-  const signIn = useCallback(async () => {
-    if (!cognitoConfig) return;
-    await beginSignIn(cognitoConfig);
-  }, [cognitoConfig]);
+  const request = useCallback(
+    async (path: string, init: RequestInit = {}) => {
+      const headers = new Headers(init.headers);
+      if (devToken) {
+        headers.set("authorization", `Bearer ${devToken}`);
+      } else if (isUnsafeMethod(init.method)) {
+        if (!csrfToken) throw new Error("Authenticated browser session is missing its anti-CSRF token.");
+        headers.set("x-governance-csrf", csrfToken);
+      }
+      return fetch(`${GOVERNANCE_API_BASE_URL}${path}`, {
+        ...init,
+        headers,
+        credentials: "include",
+      });
+    },
+    [csrfToken, devToken],
+  );
 
-  const signOut = useCallback(() => {
-    sessionStorage.removeItem(ID_TOKEN_STORAGE_KEY);
-    setToken(null);
-    setOperator(null);
-    setStatus(cognitoConfig || devBypassAvailable ? "signed-out" : "unavailable");
-    if (cognitoConfig) {
-      window.location.assign(buildSignOutUrl(cognitoConfig, window.location.origin));
+  const signOut = useCallback(async () => {
+    if (devToken) {
+      sessionStorage.removeItem(DEV_TOKEN_STORAGE_KEY);
+      setDevTokenState(null);
+      setOperator(null);
+      setCsrfToken(null);
+      setStatus("signed-out");
+      return;
     }
-  }, [cognitoConfig, devBypassAvailable]);
+
+    try {
+      await request("/management/v1/session/logout", { method: "POST" });
+    } finally {
+      setOperator(null);
+      setCsrfToken(null);
+      setStatus("signed-out");
+      window.location.assign(`${GOVERNANCE_API_BASE_URL}/auth/cognito-logout`);
+    }
+  }, [devToken, request]);
 
   const setDevToken = useCallback(
-    async (candidateToken: string) => {
-      if (!devBypassAvailable) return;
-      const ok = await adopt(candidateToken);
-      if (ok) sessionStorage.setItem(ID_TOKEN_STORAGE_KEY, candidateToken);
+    async (candidateToken: string): Promise<boolean> => {
+      if (!devBypassAvailable) return false;
+      const result = await readWhoAmI(candidateToken);
+      if (!result.response.ok || !adoptWhoAmI(result.body)) return false;
+      sessionStorage.setItem(DEV_TOKEN_STORAGE_KEY, candidateToken);
+      setDevTokenState(candidateToken);
+      return true;
     },
-    [adopt, devBypassAvailable],
+    [adoptWhoAmI, devBypassAvailable],
   );
 
   const value = useMemo<SessionContextValue>(
-    () => ({ status, token, operator, devBypassAvailable, signIn, signOut, setDevToken }),
-    [status, token, operator, devBypassAvailable, signIn, signOut, setDevToken],
+    () => ({ status, operator, devBypassAvailable, signIn, signOut, setDevToken, request, refresh }),
+    [status, operator, devBypassAvailable, signIn, signOut, setDevToken, request, refresh],
   );
 
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;

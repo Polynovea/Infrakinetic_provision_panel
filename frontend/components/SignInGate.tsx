@@ -2,13 +2,11 @@
 
 import type { ReactNode } from "react";
 
-import { getCognitoAuthConfig } from "../lib/authConfig";
 import { useOperatorSession } from "../lib/session";
 import { DevSignIn } from "./DevSignIn";
 
 export function SignInGate({ children }: { children: ReactNode }) {
-  const { status, devBypassAvailable, signIn, setDevToken } = useOperatorSession();
-  const cognitoConfigured = getCognitoAuthConfig() !== null;
+  const { status, devBypassAvailable, signIn, setDevToken, refresh } = useOperatorSession();
 
   if (status === "authenticated") return <>{children}</>;
 
@@ -26,24 +24,24 @@ export function SignInGate({ children }: { children: ReactNode }) {
     return (
       <main className="auth-screen">
         <div className="auth-card">
-          <h1>Sign-in unavailable</h1>
-          <p>Sign-in is not available right now. Contact your platform administrator.</p>
+          <h1>PolyNovea Platform Governance</h1>
+          <p>Authentication is temporarily unavailable.</p>
+          <button className="btn" onClick={() => void refresh()}>
+            Try again
+          </button>
         </div>
       </main>
     );
   }
 
-  // status === "signed-out"
   return (
     <main className="auth-screen">
       <div className="auth-card">
         <h1>PolyNovea Platform Governance</h1>
         <p>Sign in to continue.</p>
-        {cognitoConfigured && (
-          <button className="btn btn-primary" onClick={() => void signIn()}>
-            Sign in
-          </button>
-        )}
+        <button className="btn btn-primary" onClick={signIn}>
+          Sign in
+        </button>
         {devBypassAvailable && <DevSignIn onSubmit={(token) => void setDevToken(token)} />}
       </div>
     </main>

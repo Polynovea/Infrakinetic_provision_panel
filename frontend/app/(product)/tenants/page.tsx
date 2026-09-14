@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 
-import { GOVERNANCE_API_BASE_URL, useOperatorSession } from "../../../lib/session";
+import { useOperatorSession } from "../../../lib/session";
 import { StatusBadge } from "../../../components/StatusBadge";
 import { EmptyState, ErrorState, LoadingState } from "../../../components/States";
 
@@ -28,19 +28,16 @@ function formatDate(iso: string): string {
 }
 
 export default function TenantsPage() {
-  const { token } = useOperatorSession();
+  const { request } = useOperatorSession();
   const [tenants, setTenants] = useState<TenantRegistryEntry[] | null>(null);
   const [observedAt, setObservedAt] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<TenantRegistryEntry | null>(null);
 
   useEffect(() => {
-    if (!token) return;
     let cancelled = false;
     setError(null);
-    fetch(`${GOVERNANCE_API_BASE_URL}/management/v1/tenants`, {
-      headers: { authorization: `Bearer ${token}` },
-    })
+    request("/management/v1/tenants")
       .then(async (res) => {
         const body = await res.json();
         if (cancelled) return;
@@ -55,7 +52,7 @@ export default function TenantsPage() {
     return () => {
       cancelled = true;
     };
-  }, [token]);
+  }, [request]);
 
   return (
     <>

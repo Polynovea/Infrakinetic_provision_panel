@@ -30,7 +30,7 @@ export function AppShell({ children }: { children: ReactNode }) {
       <div className="app-main">
         <header className="app-topbar">
           {operator && <span className="app-operator">{operator.email}</span>}
-          <button className="btn" onClick={signOut}>
+          <button className="btn" onClick={() => void signOut()}>
             Sign out
           </button>
         </header>

@@ -27,6 +27,7 @@ describe("db/migrationRunner", () => {
       "0001_operator_identity_schema.sql",
       "0002_governance_db_foundation.sql",
       "0003_management_operation_ledger.sql",
+      "0004_browser_operator_sessions.sql",
     ]);
     expect(results.every((r) => r.applied)).toBe(true);
 
@@ -120,6 +121,7 @@ describe("db/migrationRunner", () => {
       { id: "0001_operator_identity_schema.sql", applied: false },
       { id: "0002_governance_db_foundation.sql", applied: true },
       { id: "0003_management_operation_ledger.sql", applied: true },
+      { id: "0004_browser_operator_sessions.sql", applied: true },
     ]);
   });
 
@@ -128,7 +130,7 @@ describe("db/migrationRunner", () => {
   // docs/1A.3_status.md's live evidence) upgrades cleanly to 1A.5 by
   // applying only 0003 — proving 0003 is a genuine additive upgrade path,
   // not something that assumes a from-scratch install.
-  it("upgrades a database already at the 1A.4 live schema state by applying only 0003", async () => {
+  it("upgrades a database already at the 1A.4 live schema state by applying additive 0003 and 0004", async () => {
     const client = buildEmptyPgMemClient();
 
     await client.query(migration0001Sql);
@@ -152,6 +154,7 @@ describe("db/migrationRunner", () => {
       { id: "0001_operator_identity_schema.sql", applied: false },
       { id: "0002_governance_db_foundation.sql", applied: false },
       { id: "0003_management_operation_ledger.sql", applied: true },
+      { id: "0004_browser_operator_sessions.sql", applied: true },
     ]);
 
     // Idempotent from here on, same as every other migration.
@@ -162,5 +165,7 @@ describe("db/migrationRunner", () => {
       await client.query<{ table_name: string }>("SELECT table_name FROM information_schema.tables ORDER BY table_name")
     ).rows.map((r) => r.table_name);
     expect(tables).toContain("management_operations");
+    expect(tables).toContain("browser_sessions");
+    expect(tables).toContain("oauth_login_transactions");
   });
 });

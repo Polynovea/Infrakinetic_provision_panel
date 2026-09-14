@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 
-import { GOVERNANCE_API_BASE_URL, useOperatorSession } from "../../../lib/session";
+import { useOperatorSession } from "../../../lib/session";
 import { StatusBadge } from "../../../components/StatusBadge";
 
 type DesiredState = "operational" | "degraded" | "disabled";
@@ -21,7 +21,7 @@ interface OperationView {
 }
 
 export default function PlatformPage() {
-  const { token } = useOperatorSession();
+  const { request } = useOperatorSession();
   const [engineKey, setEngineKey] = useState("");
   const [desiredState, setDesiredState] = useState<DesiredState>("degraded");
   const [reason, setReason] = useState("");
@@ -44,9 +44,9 @@ export default function PlatformPage() {
     setError(null);
     try {
       const idempotencyKey = `ui-${engineKey}-${desiredState}-${Date.now()}`;
-      const res = await fetch(`${GOVERNANCE_API_BASE_URL}/management/v1/engine-state/${encodeURIComponent(engineKey)}`, {
+      const res = await request(`/management/v1/engine-state/${encodeURIComponent(engineKey)}`, {
         method: "PUT",
-        headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+        headers: { "content-type": "application/json" },
         body: JSON.stringify({
           idempotencyKey,
           desiredState,
@@ -73,9 +73,9 @@ export default function PlatformPage() {
     setError(null);
     try {
       const idempotencyKey = `ui-recover-${operation.operationId}-${Date.now()}`;
-      const res = await fetch(`${GOVERNANCE_API_BASE_URL}/management/v1/operations/${operation.operationId}/recover`, {
+      const res = await request(`/management/v1/operations/${operation.operationId}/recover`, {
         method: "POST",
-        headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+        headers: { "content-type": "application/json" },
         body: JSON.stringify({ idempotencyKey, reason: "Operator-initiated recovery." }),
       });
       const body = await res.json();

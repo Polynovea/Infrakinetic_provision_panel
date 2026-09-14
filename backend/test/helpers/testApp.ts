@@ -1,6 +1,7 @@
 import express, { type Express } from "express";
 
 import { InMemoryAuditSink } from "../../src/identity/adapters/inMemoryAuditSink.js";
+import { InMemoryBrowserAuthStore } from "../../src/identity/adapters/inMemoryBrowserAuthStore.js";
 import { InMemoryOperatorDirectory } from "../../src/identity/adapters/inMemoryOperatorDirectory.js";
 import { InMemorySessionStore } from "../../src/identity/adapters/inMemorySessionStore.js";
 import type { IdentityProvider } from "../../src/identity/identityProvider.js";
@@ -13,6 +14,7 @@ export interface TestAppHandle {
   app: Express;
   auditSink: InMemoryAuditSink;
   sessionStore: InMemorySessionStore;
+  browserAuthStore: InMemoryBrowserAuthStore;
 }
 
 // 1A.6 deps default to a fresh pg-mem-backed ledger and fixture transport
@@ -29,6 +31,7 @@ export function buildTestApp(
   app.use(express.json());
   const auditSink = new InMemoryAuditSink();
   const sessionStore = new InMemorySessionStore();
+  const browserAuthStore = new InMemoryBrowserAuthStore();
   const operatorDirectory = new InMemoryOperatorDirectory(operators);
   const ledger = overrides.ledger ?? new ManagementOperationLedger(buildMigratedPgMemClient().client);
 
@@ -39,6 +42,7 @@ export function buildTestApp(
       operatorDirectory,
       sessionStore,
       auditSink,
+      browserAuthStore,
       ledger,
       getManagementSigningKeys: overrides.getManagementSigningKeys ?? (() => Promise.reject(new Error("management signing keys not configured in this test"))),
       loadTransportConfig: overrides.loadTransportConfig ?? (() => { throw new Error("management transport config not configured in this test"); }),
@@ -46,5 +50,5 @@ export function buildTestApp(
     }),
   );
 
-  return { app, auditSink, sessionStore };
+  return { app, auditSink, sessionStore, browserAuthStore };
 }

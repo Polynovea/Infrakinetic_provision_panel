@@ -3,6 +3,7 @@ import express from "express";
 import { LazyDbClient } from "./db/lazyDbClient.js";
 import { PgDbClient } from "./db/pgDbClient.js";
 import { ConsoleAuditSink } from "./identity/adapters/consoleAuditSink.js";
+import { PostgresBrowserAuthStore } from "./identity/adapters/postgresBrowserAuthStore.js";
 import { PostgresOperatorDirectory } from "./identity/adapters/postgresOperatorDirectory.js";
 import { PostgresSessionStore } from "./identity/adapters/postgresSessionStore.js";
 import { CognitoIdentityProvider } from "./identity/providers/cognitoIdentityProvider.js";
@@ -11,6 +12,7 @@ import { getManagementSigningKeysLazy } from "./management/lazyManagementKeys.js
 import { buildManagementJwks } from "./management/managementJwks.js";
 import { loadManagementTransportConfig } from "./management/managementConfig.js";
 import { ManagementOperationLedger } from "./management/operations/managementOperationLedger.js";
+import { createBrowserAuthRouter } from "./routes/auth/index.js";
 import { createManagementRouter } from "./routes/management/index.js";
 import { DatabaseUnavailableError } from "./db/errors.js";
 
@@ -22,6 +24,33 @@ const app = express();
 
 const HOST = process.env.GOVERNANCE_API_HOST ?? "127.0.0.1";
 const PORT = Number(process.env.GOVERNANCE_API_PORT ?? 4100);
+const FRONTEND_ORIGIN =
+  process.env.GOVERNANCE_FRONTEND_ORIGIN?.trim() ||
+  (process.env.NODE_ENV !== "production" ? "http://localhost:3000" : undefined);
+
+app.set("trust proxy", 1);
+
+app.use((req, res, next) => {
+  const origin = req.header("origin");
+  if (origin) {
+    if (!FRONTEND_ORIGIN || origin !== FRONTEND_ORIGIN) {
+      res.status(403).json({ error: "ORIGIN_NOT_ALLOWED" });
+      return;
+    }
+    res.header("Access-Control-Allow-Origin", origin);
+    res.header("Vary", "Origin");
+    res.header("Access-Control-Allow-Credentials", "true");
+    res.header("Access-Control-Allow-Headers", "content-type, x-governance-csrf, x-correlation-id, authorization");
+    res.header("Access-Control-Allow-Methods", "GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS");
+  }
+  if (req.method === "OPTIONS") {
+    res.status(204).end();
+    return;
+  }
+  next();
+});
+
+app.use(express.json({ limit: "64kb" }));
 
 app.get("/healthz", (_req, res) => {
   res.status(200).json({ status: "ok", service: "polynovea.platform-governance", phase: "1A.3" });
@@ -44,21 +73,28 @@ app.get("/healthz", (_req, res) => {
 // (GOVERNANCE_COGNITO_* provisioning is still pending — see
 // docs/1A.2_status.md).
 const dbClient = new LazyDbClient(() => PgDbClient.fromEnv());
+const identityProvider = new LazyIdentityProvider(() => CognitoIdentityProvider.fromEnv());
+const operatorDirectory = new PostgresOperatorDirectory(dbClient);
+const sessionStore = new PostgresSessionStore(dbClient);
+const browserAuthStore = new PostgresBrowserAuthStore(dbClient);
+const auditSink = new ConsoleAuditSink();
 
 // 1A.6 — reuses the exact same lazy dbClient/signing-keys singletons this
 // file already constructs for the identity adapters and the JWKS endpoint;
 // no second database connection, no second key-loading path.
 const managementDeps = {
-  identityProvider: new LazyIdentityProvider(() => CognitoIdentityProvider.fromEnv()),
-  operatorDirectory: new PostgresOperatorDirectory(dbClient),
-  sessionStore: new PostgresSessionStore(dbClient),
-  auditSink: new ConsoleAuditSink(),
+  identityProvider,
+  operatorDirectory,
+  sessionStore,
+  browserAuthStore,
+  auditSink,
   ledger: new ManagementOperationLedger(dbClient),
   getManagementSigningKeys: getManagementSigningKeysLazy,
   loadTransportConfig: loadManagementTransportConfig,
   infrakineticBaseUrl: process.env.INFRAKINETIC_MANAGEMENT_BASE_URL ?? "http://127.0.0.1:4000",
 };
 
+app.use("/auth", createBrowserAuthRouter({ identityProvider, operatorDirectory, browserAuthStore, auditSink }));
 app.use("/management/v1", createManagementRouter(managementDeps));
 
 // 1A.4 — public verification material for the assertions Governance mints

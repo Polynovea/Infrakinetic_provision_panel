@@ -1,11 +1,13 @@
 import { Router, type ErrorRequestHandler } from "express";
 
 import type { AuditSink } from "../../identity/auditSink.js";
+import type { BrowserAuthStore } from "../../identity/browserAuthStore.js";
 import { ManagementAuthError, StepUpNotConfiguredError } from "../../identity/errors.js";
 import type { IdentityProvider } from "../../identity/identityProvider.js";
 import type { OperatorDirectory } from "../../identity/operatorDirectory.js";
 import type { OperatorSessionStore } from "../../identity/sessionStore.js";
 import { requireRole, requireScope, requireStepUp } from "../../middleware/authorize.js";
+import { requireBrowserCsrf } from "../../middleware/requireBrowserCsrf.js";
 import { requireManagementApiAuth } from "../../middleware/requireManagementApiAuth.js";
 import type { ManagementOperationLedger } from "../../management/operations/managementOperationLedger.js";
 import type { ManagementSigningKeySet } from "../../management/managementSigningKeys.js";
@@ -26,6 +28,7 @@ export interface ManagementRouterDeps {
   operatorDirectory: OperatorDirectory;
   sessionStore: OperatorSessionStore;
   auditSink: AuditSink;
+  browserAuthStore?: BrowserAuthStore;
   // 1A.6 — the real engine-state mutation vertical. getManagementSigningKeys
   // and loadTransportConfig are injected as functions (not resolved values)
   // so server boot never requires GOVERNANCE_MANAGEMENT_* to be set — only
@@ -46,9 +49,13 @@ export function createManagementRouter(deps: ManagementRouterDeps): Router {
   const auth = requireManagementApiAuth(deps);
 
   router.use(auth);
+  router.use(requireBrowserCsrf());
 
   router.get("/whoami", (req, res) => {
-    res.status(200).json({ operator: req.operatorContext });
+    res.status(200).json({
+      operator: req.operatorContext,
+      csrfToken: req.operatorAuthMethod === "browser-session" ? req.browserSessionCsrfToken : undefined,
+    });
   });
 
   router.post("/session/logout", async (req, res, next) => {
@@ -57,6 +64,9 @@ export function createManagementRouter(deps: ManagementRouterDeps): Router {
       if (!ctx) {
         res.status(403).json({ error: "NOT_AUTHENTICATED" });
         return;
+      }
+      if (req.operatorAuthMethod === "browser-session" && deps.browserAuthStore) {
+        await deps.browserAuthStore.revokeSession(ctx.operatorSessionId, "operator-initiated logout");
       }
       await deps.sessionStore.revoke(ctx.operatorSessionId, "operator-initiated logout");
       await deps.auditSink.record({
@@ -69,6 +79,10 @@ export function createManagementRouter(deps: ManagementRouterDeps): Router {
         method: req.method,
         correlationId: ctx.correlationId,
       });
+      res.clearCookie("__Host-governance_session", { httpOnly: true, secure: true, sameSite: "lax", path: "/" });
+      res.clearCookie("__Host-governance_csrf", { httpOnly: false, secure: true, sameSite: "lax", path: "/" });
+      res.clearCookie("governance_session", { httpOnly: true, secure: false, sameSite: "lax", path: "/" });
+      res.clearCookie("governance_csrf", { httpOnly: false, secure: false, sameSite: "lax", path: "/" });
       res.status(200).json({ status: "revoked" });
     } catch (err) {
       next(err);
