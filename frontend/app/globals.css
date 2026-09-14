@@ -1,39 +1,146 @@
+/* Infrakinetic Color System v1 — Imperial Night / Imperial Ivory.
+   Source: docs/Infrakinetic Document/Colour Palette/
+   Infrakinetic_Color_System_v1_Imperial_Night_Ivory.md (CRM repo).
+   Brand colors are permanent; theme/semantic/interaction tokens change
+   value between Imperial Ivory (light, default) and Imperial Night (dark,
+   via prefers-color-scheme) but keep the same role — never hard-code a
+   hex value in a component, reference these tokens. */
+
 :root {
-  --color-bg: #f6f7f9;
-  --color-surface: #ffffff;
-  --color-border: #e2e5ea;
-  --color-text: #1a1d23;
-  --color-text-muted: #5b616e;
-  --color-accent: #2b5fd9;
-  --color-accent-contrast: #ffffff;
-  --color-danger: #b3261e;
-  --color-danger-bg: #fdecea;
-  --color-success: #146c2e;
-  --color-success-bg: #e8f5ea;
-  --color-warning: #8a5a00;
-  --color-warning-bg: #fdf3dc;
-  --color-neutral-bg: #eceef1;
-  --shadow-card: 0 1px 2px rgba(16, 24, 40, 0.06);
+  /* Brand core — permanent, theme-independent (§4, §58) */
+  --brand-obsidian: #0b0910;
+  --brand-ivory: #f5f1e8;
+  --brand-aubergine: #24162e;
+  --brand-plum: #3b2348;
+  --brand-violet: #8c6f99;
+  --brand-champagne: #d8b56a;
+  --brand-brass: #b89452;
+  --brand-bronze: #c58f78;
+
+  /* Imperial Ivory — light theme (§8, §36) */
+  --bg-canvas: #f6f2ea;
+  --bg-surface-1: #fffcf7;
+  --bg-surface-2: #f0eae0;
+  --bg-surface-3: #e8e0d6;
+  --bg-elevated: #ffffff;
+  --bg-field: #fbf8f2;
+
+  --border-subtle: #ded6cb;
+  --border-default: #cdc3b8;
+  --border-strong: #bdb2a6;
+  --border-brand: #856a8c;
+
+  --text-primary: #17121a;
+  --text-secondary: #4c4551;
+  --text-muted: #716876;
+  --text-disabled: #a39aa7;
+  --text-inverse: #f5f1e8;
+
+  /* Brand actions — deep Plum carries primary actions in light mode;
+     Champagne/Brass become a scarce prestige accent (§8.5, §36, §49) */
+  --action-primary: #4a2b58;
+  --action-primary-hover: #3c2348;
+  --action-primary-pressed: #301b39;
+  --action-primary-text: #f5f1e8;
+  --action-secondary: #a27e3c;
+  --focus-ring: #7a4d8c;
+
+  --link: #5b366a;
+  --link-hover: #3d2448;
+
+  --selected-bg: #ede3f0;
+  --selected-border: #6c4a7a;
+  --selected-text: #3b2348;
+
+  --disabled-bg: #e6e0d8;
+  --disabled-text: #9d949f;
+  --disabled-border: #d2cbc3;
+
+  /* Semantic states (§12) */
+  --success-fg: #216b4a;
+  --success-bg: #e8f4ed;
+  --success-border: #8fc9aa;
+  --warning-fg: #8a5b12;
+  --warning-bg: #fff4d8;
+  --warning-border: #d6a84d;
+  --danger-fg: #a23843;
+  --danger-bg: #fcebec;
+  --danger-border: #d88b92;
+  --info-fg: #315f8f;
+  --info-bg: #eaf2fa;
+  --info-border: #88add1;
+  --review-fg: #68497b;
+  --review-bg: #f3ecf6;
+  --review-border: #b89bc5;
+  --neutral-fg: #5e6670;
+  --neutral-bg: #eff1f3;
+  --neutral-border: #c0c5cb;
+
+  --shadow-card: 0 1px 2px rgba(23, 18, 26, 0.08);
   --radius-md: 8px;
   --radius-sm: 6px;
 }
 
+/* Imperial Night — dark theme (§7, §35), the flagship brand expression */
 @media (prefers-color-scheme: dark) {
   :root {
-    --color-bg: #14161a;
-    --color-surface: #1c1f26;
-    --color-border: #2c303a;
-    --color-text: #eceef1;
-    --color-text-muted: #9aa1ad;
-    --color-accent: #6f9bff;
-    --color-accent-contrast: #0c1220;
-    --color-danger: #ff8a80;
-    --color-danger-bg: #3a1f1d;
-    --color-success: #7fd99a;
-    --color-success-bg: #163524;
-    --color-warning: #f2c46b;
-    --color-warning-bg: #3a2e10;
-    --color-neutral-bg: #262a33;
+    --bg-canvas: #0b0910;
+    --bg-surface-1: #121017;
+    --bg-surface-2: #18141d;
+    --bg-surface-3: #211b27;
+    --bg-elevated: #2a2231;
+    --bg-field: #100e14;
+
+    --border-subtle: #2d2732;
+    --border-default: #3a323f;
+    --border-strong: #4b414f;
+    --border-brand: #6f596f;
+
+    --text-primary: #f5f1e8;
+    --text-secondary: #c7bfcb;
+    --text-muted: #938a98;
+    --text-disabled: #655e69;
+    --text-inverse: #0b0910;
+
+    /* Champagne Gold carries primary actions in dark mode (§7.5, §35, §49) */
+    --action-primary: #d8b56a;
+    --action-primary-hover: #e3c884;
+    --action-primary-pressed: #c49c4e;
+    --action-primary-text: #0b0910;
+    --action-secondary: #8c6f99;
+    --focus-ring: #e0c17d;
+
+    --link: #e0c17d;
+    --link-hover: #f0d89d;
+
+    --selected-bg: #2e2435;
+    --selected-border: #8c6f99;
+    --selected-text: #f5f1e8;
+
+    --disabled-bg: #1d1920;
+    --disabled-text: #655e69;
+    --disabled-border: #302a34;
+
+    --success-fg: #79d3a7;
+    --success-bg: #10281e;
+    --success-border: #2f7556;
+    --warning-fg: #f0c36a;
+    --warning-bg: #2b210e;
+    --warning-border: #8b6825;
+    --danger-fg: #f28c94;
+    --danger-bg: #321518;
+    --danger-border: #8d3940;
+    --info-fg: #8bb9e7;
+    --info-bg: #132536;
+    --info-border: #3d6e9c;
+    --review-fg: #c3a4d2;
+    --review-bg: #261a2e;
+    --review-border: #684b76;
+    --neutral-fg: #bec5cc;
+    --neutral-bg: #20252a;
+    --neutral-border: #515a63;
+
+    --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.4);
   }
 }
 
@@ -45,8 +152,8 @@ html,
 body {
   margin: 0;
   padding: 0;
-  background: var(--color-bg);
-  color: var(--color-text);
+  background: var(--bg-canvas);
+  color: var(--text-primary);
   font-family:
     system-ui,
     -apple-system,
@@ -56,7 +163,16 @@ body {
 }
 
 a {
-  color: var(--color-accent);
+  color: var(--link);
+}
+
+a:hover {
+  color: var(--link-hover);
+}
+
+:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
 }
 
 .app-shell {
@@ -67,8 +183,8 @@ a {
 .app-sidebar {
   width: 220px;
   flex-shrink: 0;
-  background: var(--color-surface);
-  border-right: 1px solid var(--color-border);
+  background: var(--bg-surface-1);
+  border-right: 1px solid var(--border-subtle);
   padding: 1.25rem 0;
   display: flex;
   flex-direction: column;
@@ -78,8 +194,9 @@ a {
   font-weight: 600;
   font-size: 0.95rem;
   padding: 0 1.25rem 1rem;
-  border-bottom: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--border-subtle);
   margin-bottom: 0.75rem;
+  color: var(--text-primary);
 }
 
 .app-nav {
@@ -90,21 +207,21 @@ a {
 
 .app-nav-link {
   padding: 0.55rem 1.25rem;
-  color: var(--color-text-muted);
+  color: var(--text-muted);
   text-decoration: none;
   font-size: 0.9rem;
   border-left: 3px solid transparent;
 }
 
 .app-nav-link:hover {
-  background: var(--color-neutral-bg);
-  color: var(--color-text);
+  background: var(--bg-surface-2);
+  color: var(--text-primary);
 }
 
 .app-nav-link.active {
-  color: var(--color-accent);
-  border-left-color: var(--color-accent);
-  background: var(--color-neutral-bg);
+  color: var(--selected-text);
+  border-left-color: var(--selected-border);
+  background: var(--selected-bg);
   font-weight: 600;
 }
 
@@ -121,13 +238,13 @@ a {
   justify-content: flex-end;
   gap: 1rem;
   padding: 0.75rem 1.5rem;
-  border-bottom: 1px solid var(--color-border);
-  background: var(--color-surface);
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-surface-1);
 }
 
 .app-operator {
   font-size: 0.85rem;
-  color: var(--color-text-muted);
+  color: var(--text-muted);
 }
 
 .app-content {
@@ -143,7 +260,7 @@ a {
   .app-sidebar {
     width: 100%;
     border-right: none;
-    border-bottom: 1px solid var(--color-border);
+    border-bottom: 1px solid var(--border-subtle);
   }
   .app-nav {
     flex-direction: row;
@@ -162,17 +279,18 @@ a {
 .page-header h1 {
   margin: 0 0 0.35rem;
   font-size: 1.5rem;
+  color: var(--text-primary);
 }
 
 .page-header p {
   margin: 0;
-  color: var(--color-text-muted);
+  color: var(--text-muted);
   font-size: 0.9rem;
 }
 
 .card {
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
+  background: var(--bg-surface-1);
+  border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-card);
   padding: 1.25rem;
@@ -198,23 +316,24 @@ a {
 .field label {
   font-size: 0.85rem;
   font-weight: 500;
+  color: var(--text-primary);
 }
 
 .field input,
 .field select,
 .field textarea {
   padding: 0.5rem 0.6rem;
-  border: 1px solid var(--color-border);
+  border: 1px solid var(--border-default);
   border-radius: var(--radius-sm);
-  background: var(--color-bg);
-  color: var(--color-text);
+  background: var(--bg-field);
+  color: var(--text-primary);
   font-size: 0.9rem;
   font-family: inherit;
 }
 
 .field-hint {
   font-size: 0.78rem;
-  color: var(--color-text-muted);
+  color: var(--text-muted);
 }
 
 .btn {
@@ -224,12 +343,16 @@ a {
   gap: 0.4rem;
   padding: 0.5rem 1rem;
   border-radius: var(--radius-sm);
-  border: 1px solid var(--color-border);
-  background: var(--color-surface);
-  color: var(--color-text);
+  border: 1px solid var(--border-default);
+  background: var(--bg-surface-1);
+  color: var(--text-primary);
   font-size: 0.88rem;
   font-weight: 500;
   cursor: pointer;
+}
+
+.btn:hover {
+  background: var(--bg-surface-2);
 }
 
 .btn:disabled {
@@ -237,16 +360,28 @@ a {
   cursor: not-allowed;
 }
 
+/* Primary CTA — Champagne Gold in dark mode, deep Plum in light mode
+   (§49). Scarce by design: one primary action per view. */
 .btn-primary {
-  background: var(--color-accent);
-  border-color: var(--color-accent);
-  color: var(--color-accent-contrast);
+  background: var(--action-primary);
+  border-color: var(--action-primary);
+  color: var(--action-primary-text);
+}
+
+.btn-primary:hover {
+  background: var(--action-primary-hover);
+  border-color: var(--action-primary-hover);
+}
+
+.btn-primary:active {
+  background: var(--action-primary-pressed);
+  border-color: var(--action-primary-pressed);
 }
 
 .btn-danger {
-  background: var(--color-danger-bg);
-  border-color: var(--color-danger);
-  color: var(--color-danger);
+  background: var(--danger-bg);
+  border-color: var(--danger-border);
+  color: var(--danger-fg);
 }
 
 .data-table {
@@ -258,8 +393,8 @@ a {
 .data-table th {
   text-align: left;
   padding: 0.6rem 0.7rem;
-  border-bottom: 1px solid var(--color-border);
-  color: var(--color-text-muted);
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--text-muted);
   font-weight: 600;
   font-size: 0.78rem;
   text-transform: uppercase;
@@ -268,11 +403,12 @@ a {
 
 .data-table td {
   padding: 0.6rem 0.7rem;
-  border-bottom: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--text-primary);
 }
 
 .data-table tbody tr:hover {
-  background: var(--color-neutral-bg);
+  background: var(--bg-surface-2);
   cursor: pointer;
 }
 
@@ -284,41 +420,50 @@ a {
   font-size: 0.75rem;
   font-weight: 600;
   text-transform: capitalize;
+  border: 1px solid transparent;
 }
 
+/* Semantic status only — never a brand color standing in for meaning
+   (§10, §13). Operational/active = success; degraded/trial = warning
+   (caution, non-blocking); disabled/suspended/cancelled = danger (a
+   platform-wide kill switch genuinely is a serious, blocking action). */
 .badge-success {
-  background: var(--color-success-bg);
-  color: var(--color-success);
+  background: var(--success-bg);
+  color: var(--success-fg);
+  border-color: var(--success-border);
 }
 
 .badge-warning {
-  background: var(--color-warning-bg);
-  color: var(--color-warning);
+  background: var(--warning-bg);
+  color: var(--warning-fg);
+  border-color: var(--warning-border);
 }
 
 .badge-danger {
-  background: var(--color-danger-bg);
-  color: var(--color-danger);
+  background: var(--danger-bg);
+  color: var(--danger-fg);
+  border-color: var(--danger-border);
 }
 
 .badge-neutral {
-  background: var(--color-neutral-bg);
-  color: var(--color-text-muted);
+  background: var(--neutral-bg);
+  color: var(--neutral-fg);
+  border-color: var(--neutral-border);
 }
 
 .state-panel {
   text-align: center;
   padding: 2.5rem 1rem;
-  color: var(--color-text-muted);
+  color: var(--text-muted);
 }
 
 .state-panel.error {
-  color: var(--color-danger);
+  color: var(--danger-fg);
 }
 
 .overlay-note {
   font-size: 0.78rem;
-  color: var(--color-text-muted);
+  color: var(--text-muted);
   margin-top: 0.5rem;
 }
 
@@ -327,13 +472,13 @@ a {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: var(--color-bg);
+  background: var(--bg-canvas);
   padding: 1.5rem;
 }
 
 .auth-card {
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
+  background: var(--bg-surface-1);
+  border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-card);
   padding: 2rem;
@@ -345,25 +490,26 @@ a {
 .auth-card h1 {
   font-size: 1.15rem;
   margin: 0 0 0.5rem;
+  color: var(--text-primary);
 }
 
 .auth-card p {
-  color: var(--color-text-muted);
+  color: var(--text-muted);
   font-size: 0.9rem;
   margin: 0 0 1.25rem;
 }
 
 .auth-error {
-  color: var(--color-danger) !important;
+  color: var(--danger-fg) !important;
 }
 
 .dev-banner {
   margin-top: 1.5rem;
   padding: 0.75rem;
-  border: 1px dashed var(--color-warning);
+  border: 1px dashed var(--warning-border);
   border-radius: var(--radius-sm);
-  background: var(--color-warning-bg);
-  color: var(--color-warning);
+  background: var(--warning-bg);
+  color: var(--warning-fg);
   font-size: 0.78rem;
   text-align: left;
 }

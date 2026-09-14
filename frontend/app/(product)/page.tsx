@@ -30,14 +30,14 @@ export default function OverviewPage() {
 
       <div className="card-grid">
         <a className="card" href="/tenants" style={{ textDecoration: "none", color: "inherit" }}>
-          <div style={{ fontSize: "0.85rem", color: "var(--color-text-muted)" }}>Tenants</div>
+          <div style={{ fontSize: "0.85rem", color: "var(--text-muted)" }}>Tenants</div>
           <div style={{ fontSize: "1.8rem", fontWeight: 600, marginTop: "0.35rem" }}>
             {tenantCount ?? "—"}
           </div>
           <div className="overlay-note">View tenant registry</div>
         </a>
         <a className="card" href="/engine-state" style={{ textDecoration: "none", color: "inherit" }}>
-          <div style={{ fontSize: "0.85rem", color: "var(--color-text-muted)" }}>Platform</div>
+          <div style={{ fontSize: "0.85rem", color: "var(--text-muted)" }}>Platform</div>
           <div style={{ fontSize: "1.1rem", fontWeight: 600, marginTop: "0.35rem" }}>Engine controls</div>
           <div className="overlay-note">View and change engine state</div>
         </a>

@@ -139,7 +139,7 @@ export default function PlatformPage() {
 
       {error && (
         <div className="card" style={{ marginTop: "1rem" }}>
-          <p style={{ color: "var(--color-danger)", margin: 0 }} role="alert">
+          <p style={{ color: "var(--danger-fg)", margin: 0 }} role="alert">
             {error}
           </p>
         </div>
@@ -160,7 +160,7 @@ export default function PlatformPage() {
           </div>
           {Boolean(operation.rollbackReference) && <p className="overlay-note">Recovered.</p>}
           {operation.partialFailureState !== undefined && operation.partialFailureState !== null && (
-            <pre style={{ background: "var(--color-danger-bg)", padding: "0.6rem", overflowX: "auto", borderRadius: "6px", fontSize: "0.8rem" }}>
+            <pre style={{ background: "var(--danger-bg)", padding: "0.6rem", overflowX: "auto", borderRadius: "6px", fontSize: "0.8rem" }}>
               {JSON.stringify(operation.partialFailureState, null, 2)}
             </pre>
           )}

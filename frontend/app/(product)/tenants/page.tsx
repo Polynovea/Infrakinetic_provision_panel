@@ -115,29 +115,29 @@ export default function TenantsPage() {
           </div>
           <dl style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.6rem", marginTop: "1rem", fontSize: "0.88rem" }}>
             <div>
-              <dt style={{ color: "var(--color-text-muted)" }}>Plan</dt>
+              <dt style={{ color: "var(--text-muted)" }}>Plan</dt>
               <dd style={{ margin: 0 }}>{selected.plan}</dd>
             </div>
             <div>
-              <dt style={{ color: "var(--color-text-muted)" }}>Industry</dt>
+              <dt style={{ color: "var(--text-muted)" }}>Industry</dt>
               <dd style={{ margin: 0 }}>{selected.industry ?? "—"}</dd>
             </div>
             <div>
-              <dt style={{ color: "var(--color-text-muted)" }}>Country / timezone</dt>
+              <dt style={{ color: "var(--text-muted)" }}>Country / timezone</dt>
               <dd style={{ margin: 0 }}>
                 {selected.country} · {selected.timezone}
               </dd>
             </div>
             <div>
-              <dt style={{ color: "var(--color-text-muted)" }}>Seat limit</dt>
+              <dt style={{ color: "var(--text-muted)" }}>Seat limit</dt>
               <dd style={{ margin: 0 }}>{selected.seat_limit ?? "—"}</dd>
             </div>
             <div>
-              <dt style={{ color: "var(--color-text-muted)" }}>Storage limit</dt>
+              <dt style={{ color: "var(--text-muted)" }}>Storage limit</dt>
               <dd style={{ margin: 0 }}>{selected.storage_limit_mb ? `${selected.storage_limit_mb} MB` : "—"}</dd>
             </div>
             <div>
-              <dt style={{ color: "var(--color-text-muted)" }}>Trial ends</dt>
+              <dt style={{ color: "var(--text-muted)" }}>Trial ends</dt>
               <dd style={{ margin: 0 }}>{selected.trial_ends_at ? formatDate(selected.trial_ends_at) : "—"}</dd>
             </div>
           </dl>
