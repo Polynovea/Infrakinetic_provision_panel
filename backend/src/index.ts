@@ -53,7 +53,7 @@ app.use((req, res, next) => {
 app.use(express.json({ limit: "64kb" }));
 
 app.get("/healthz", (_req, res) => {
-  res.status(200).json({ status: "ok", service: "polynovea.platform-governance", phase: "1A.3" });
+  res.status(200).json({ status: "ok", service: "polynovea.platform-governance" });
 });
 
 // 1A.3 — the operator directory and session store are now Postgres-backed
