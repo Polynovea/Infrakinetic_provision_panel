@@ -18,8 +18,8 @@ function setFullConfig(): void {
   process.env.GOVERNANCE_COGNITO_DOMAIN = "https://polynovea-governance.auth.ap-south-1.amazoncognito.com";
   process.env.GOVERNANCE_COGNITO_APP_CLIENT_ID = "test-client-id";
   process.env.GOVERNANCE_COGNITO_APP_CLIENT_SECRET = "test-client-secret";
-  process.env.GOVERNANCE_COGNITO_REDIRECT_URI = "https://governance-api.infrakinetic.in/auth/callback";
-  process.env.GOVERNANCE_FRONTEND_ORIGIN = "https://governance.infrakinetic.in";
+  process.env.GOVERNANCE_COGNITO_REDIRECT_URI = "https://governance-api.example.test/auth/callback";
+  process.env.GOVERNANCE_FRONTEND_ORIGIN = "https://governance.example.test";
 }
 
 describe("identity/browserAuthConfig", () => {
