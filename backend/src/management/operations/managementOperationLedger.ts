@@ -83,6 +83,29 @@ export interface CreateOrReplayResult {
   replay: boolean;
 }
 
+// 1A.1–1A.7 closure pass — the operator dashboard needs a "recent
+// privileged operations" feed; until now the only read primitive was
+// getOperation(operationId), a lookup by id. This is a plain, bounded,
+// read-only list over the same table — no new ledger semantics, no
+// mutation, no idempotency key (matches tenantRegistryQuery.ts's own R0
+// reasoning: a read needs none of that). Deliberately built with a
+// conditionally-assembled WHERE clause and plain equality (no casts, no
+// COALESCE/NULL-OR tricks) rather than a single clever parameterized
+// query — this repo's own migration file
+// (0003_management_operation_ledger.sql) notes pg-mem "implements very few
+// native SQL functions," and the test double must run the exact same SQL
+// as production.
+export interface ListOperationsParams {
+  limit?: number;
+  status?: OperationStatus;
+  requestedAction?: string;
+  targetTenantId?: string;
+  targetEngine?: string;
+}
+
+export const OPERATIONS_LIST_DEFAULT_LIMIT = 20;
+export const OPERATIONS_LIST_MAX_LIMIT = 100;
+
 export interface TransitionOperationParams {
   toStatus: OperationStatus;
   beforeStateSafeSnapshot?: SafeSnapshot;
@@ -376,6 +399,40 @@ export class ManagementOperationLedger {
     );
     const row = result.rows[0];
     return row ? mapOperationRow(row) : undefined;
+  }
+
+  // Newest-first, bounded. Powers the Overview dashboard's "recent
+  // privileged operations" feed — see this file's own header comment above
+  // ListOperationsParams for why this is deliberately narrow.
+  async listOperations(params: ListOperationsParams = {}): Promise<ManagementOperationRecord[]> {
+    const limit = Math.min(Math.max(Math.trunc(params.limit ?? OPERATIONS_LIST_DEFAULT_LIMIT), 1), OPERATIONS_LIST_MAX_LIMIT);
+
+    const conditions: string[] = [];
+    const values: unknown[] = [];
+    if (params.status !== undefined) {
+      values.push(params.status);
+      conditions.push(`status = $${values.length}`);
+    }
+    if (params.requestedAction !== undefined) {
+      values.push(params.requestedAction);
+      conditions.push(`requested_action = $${values.length}`);
+    }
+    if (params.targetTenantId !== undefined) {
+      values.push(params.targetTenantId);
+      conditions.push(`target_tenant_id = $${values.length}`);
+    }
+    if (params.targetEngine !== undefined) {
+      values.push(params.targetEngine);
+      conditions.push(`target_engine = $${values.length}`);
+    }
+    const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+    values.push(limit);
+
+    const result = await this.db.query<OperationRow>(
+      `SELECT * FROM governance.management_operations ${whereClause} ORDER BY requested_at DESC LIMIT $${values.length}`,
+      values,
+    );
+    return result.rows.map(mapOperationRow);
   }
 
   // Advances the operation's lifecycle by exactly one validated transition

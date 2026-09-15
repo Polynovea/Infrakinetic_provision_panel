@@ -22,6 +22,8 @@ import {
 } from "../../management/operations/engineStateOperation.js";
 import { ManagementOperationError, OperationNotFoundError } from "../../management/operations/managementOperationErrors.js";
 import { listTenantRegistry, getTenantRegistryEntry, getTenantRegistryUsers, UnknownTenantError } from "../../management/operations/tenantRegistryQuery.js";
+import { listEngineCatalog } from "../../management/operations/engineCatalogQuery.js";
+import { isOperationStatus, type OperationStatus } from "../../management/operations/lifecycle.js";
 
 export interface ManagementRouterDeps {
   identityProvider: IdentityProvider;
@@ -216,6 +218,104 @@ export function createManagementRouter(deps: ManagementRouterDeps): Router {
         res.status(502).json({ error: "MANAGEMENT_API_UPSTREAM_ERROR", message: err.message });
         return;
       }
+      if (err instanceof DatabaseUnavailableError) {
+        res.status(err.httpStatus).json({ error: err.code, message: err.message });
+        return;
+      }
+      next(err);
+    }
+  });
+
+  // 1A.1–1A.7 closure pass — the engine catalog + per-engine platform state,
+  // read-only (R0, same reasoning as the /tenants routes above). This is
+  // what lets the Platform page show a real engine list instead of asking
+  // the operator to type a raw engine key by hand.
+  router.get("/engines", requireScope("engines.read", deps.auditSink), async (req, res, next) => {
+    try {
+      const ctx = req.operatorContext;
+      if (!ctx) {
+        res.status(403).json({ error: "NOT_AUTHENTICATED" });
+        return;
+      }
+      const signingKeys = await deps.getManagementSigningKeys();
+      const transportConfig = deps.loadTransportConfig();
+      const result = await listEngineCatalog(
+        { signingKeys, transportConfig, infrakineticBaseUrl: deps.infrakineticBaseUrl },
+        {
+          operatorId: ctx.operatorId,
+          operatorSessionId: ctx.operatorSessionId,
+          operatorRoles: ctx.roles,
+          operatorGrantedScopes: ctx.scopes,
+          correlationId: ctx.correlationId,
+        },
+      );
+      res.status(200).json(result);
+    } catch (err) {
+      if (err instanceof UnexpectedManagementApiResponseError) {
+        res.status(502).json({ error: "MANAGEMENT_API_UPSTREAM_ERROR", message: err.message });
+        return;
+      }
+      next(err);
+    }
+  });
+
+  // 1A.1–1A.7 closure pass — bounded, newest-first read of the 1A.5 ledger.
+  // Powers the Overview dashboard's "recent privileged operations" feed.
+  // Purely a Governance-DB read (no Infrakinetic call, no assertion minted)
+  // — same scope as the existing single-operation GET below, for
+  // consistency; no new scope invented.
+  router.get("/operations", requireScope("engines.read", deps.auditSink), async (req, res, next) => {
+    try {
+      const rawLimit = req.query.limit;
+      let limit: number | undefined;
+      if (typeof rawLimit === "string" && rawLimit.trim() !== "") {
+        const parsed = Number(rawLimit);
+        if (!Number.isInteger(parsed) || parsed < 1) {
+          res.status(400).json({ error: "INVALID_LIMIT" });
+          return;
+        }
+        limit = parsed;
+      }
+
+      const rawStatus = req.query.status;
+      let status: OperationStatus | undefined;
+      if (typeof rawStatus === "string" && rawStatus.trim() !== "") {
+        if (!isOperationStatus(rawStatus)) {
+          res.status(400).json({ error: "INVALID_STATUS" });
+          return;
+        }
+        status = rawStatus;
+      }
+
+      const action = typeof req.query.action === "string" && req.query.action.trim() !== "" ? req.query.action : undefined;
+      const tenantId = typeof req.query.tenantId === "string" && req.query.tenantId.trim() !== "" ? req.query.tenantId : undefined;
+      const engineKey = typeof req.query.engineKey === "string" && req.query.engineKey.trim() !== "" ? req.query.engineKey : undefined;
+
+      const operations = await deps.ledger.listOperations({
+        limit,
+        status,
+        requestedAction: action,
+        targetTenantId: tenantId,
+        targetEngine: engineKey,
+      });
+
+      res.status(200).json({
+        operations: operations.map((op) => ({
+          operationId: op.operationId,
+          requestedAction: op.requestedAction,
+          targetTenantId: op.targetTenantId,
+          targetEngine: op.targetEngine,
+          riskClass: op.riskClass,
+          status: op.status,
+          reason: op.reason,
+          correlationId: op.correlationId,
+          requestedAt: op.requestedAt,
+          acceptedAt: op.acceptedAt,
+          completedAt: op.completedAt,
+          failedAt: op.failedAt,
+        })),
+      });
+    } catch (err) {
       if (err instanceof DatabaseUnavailableError) {
         res.status(err.httpStatus).json({ error: err.code, message: err.message });
         return;

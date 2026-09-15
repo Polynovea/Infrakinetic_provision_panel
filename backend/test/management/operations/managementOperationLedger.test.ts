@@ -306,4 +306,74 @@ describe("management/operations/managementOperationLedger", () => {
       expect(events.rows.map((r) => r.result)).toEqual(["submitted", "accepted", "running", "completed"]);
     });
   });
+
+  describe("listOperations — bounded, newest-first read (1A.1–1A.7 closure pass)", () => {
+    it("returns every operation when unfiltered, default-limited", async () => {
+      await ledger.createOrReplayOperation(baseParams({ idempotencyKey: "list-1", targetEngine: "module_migration" }));
+      await ledger.createOrReplayOperation(baseParams({ idempotencyKey: "list-2", targetEngine: "module_billing" }));
+      await ledger.createOrReplayOperation(baseParams({ idempotencyKey: "list-3", targetEngine: "module_ai" }));
+
+      const rows = await ledger.listOperations();
+      expect(rows).toHaveLength(3);
+      expect(rows.map((r) => r.idempotencyKey).sort()).toEqual(["list-1", "list-2", "list-3"]);
+    });
+
+    it("honors an explicit limit", async () => {
+      await ledger.createOrReplayOperation(baseParams({ idempotencyKey: "limit-1" }));
+      await ledger.createOrReplayOperation(baseParams({ idempotencyKey: "limit-2" }));
+      await ledger.createOrReplayOperation(baseParams({ idempotencyKey: "limit-3" }));
+
+      const rows = await ledger.listOperations({ limit: 1 });
+      expect(rows).toHaveLength(1);
+    });
+
+    it("clamps a non-positive limit up to at least 1 rather than erroring", async () => {
+      await ledger.createOrReplayOperation(baseParams({ idempotencyKey: "clamp-1" }));
+      const rows = await ledger.listOperations({ limit: 0 });
+      expect(rows).toHaveLength(1);
+    });
+
+    it("filters by status", async () => {
+      const { operation: toComplete } = await ledger.createOrReplayOperation(baseParams({ idempotencyKey: "status-1" }));
+      await ledger.transitionOperation(toComplete.operationId, { toStatus: "accepted" });
+      await ledger.transitionOperation(toComplete.operationId, { toStatus: "running" });
+      await ledger.transitionOperation(toComplete.operationId, { toStatus: "completed", result: { ok: true } });
+      await ledger.createOrReplayOperation(baseParams({ idempotencyKey: "status-2" })); // stays 'submitted'
+
+      const completed = await ledger.listOperations({ status: "completed" });
+      expect(completed.map((r) => r.idempotencyKey)).toEqual(["status-1"]);
+
+      const submitted = await ledger.listOperations({ status: "submitted" });
+      expect(submitted.map((r) => r.idempotencyKey)).toEqual(["status-2"]);
+    });
+
+    it("filters by requestedAction and by targetEngine", async () => {
+      await ledger.createOrReplayOperation(
+        baseParams({ idempotencyKey: "action-1", requestedAction: "platform.engine-state.set", targetEngine: "module_migration" }),
+      );
+      await ledger.createOrReplayOperation(
+        baseParams({ idempotencyKey: "action-2", requestedAction: "platform.engine-state.set", targetEngine: "module_billing" }),
+      );
+
+      const byEngine = await ledger.listOperations({ targetEngine: "module_billing" });
+      expect(byEngine.map((r) => r.idempotencyKey)).toEqual(["action-2"]);
+
+      const byAction = await ledger.listOperations({ requestedAction: "platform.engine-state.set" });
+      expect(byAction).toHaveLength(2);
+    });
+
+    it("filters by targetTenantId", async () => {
+      const tenantId = "22222222-2222-2222-2222-222222222222";
+      await ledger.createOrReplayOperation(baseParams({ idempotencyKey: "tenant-1", targetTenantId: tenantId }));
+      await ledger.createOrReplayOperation(baseParams({ idempotencyKey: "tenant-2", targetTenantId: null }));
+
+      const rows = await ledger.listOperations({ targetTenantId: tenantId });
+      expect(rows.map((r) => r.idempotencyKey)).toEqual(["tenant-1"]);
+    });
+
+    it("returns an empty array when nothing matches", async () => {
+      const rows = await ledger.listOperations({ requestedAction: "nothing.matches.this" });
+      expect(rows).toEqual([]);
+    });
+  });
 });
