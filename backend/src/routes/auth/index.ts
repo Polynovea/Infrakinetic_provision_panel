@@ -126,11 +126,11 @@ export function createBrowserAuthRouter(deps: BrowserAuthRouterDeps): Router {
       const state = typeof req.query.state === "string" ? req.query.state : undefined;
 
       if (!transactionSecret || !code || !state || typeof req.query.error === "string") {
-        // Was previously silent — the most common real cause is the
-        // oauth transaction cookie/row simply expiring (default 10 minutes)
-        // before Cognito redirects back, e.g. during first-time TOTP setup
-        // (install an authenticator app, scan, type a code). Log it so a
-        // future case isn't invisible in the audit trail the way this one was.
+        // Was previously silent. Log every input that could explain this,
+        // not just a single guessed reasonCode — cookie names actually
+        // presented (never values), which of code/state arrived, and any
+        // provider-supplied error/error_description, so a real case is
+        // fully diagnosable from one log line instead of guesswork.
         await deps.auditSink.record({
           eventType: "auth.failure",
           occurredAt: new Date().toISOString(),
@@ -139,7 +139,15 @@ export function createBrowserAuthRouter(deps: BrowserAuthRouterDeps): Router {
             : typeof req.query.error === "string"
               ? "OAUTH_PROVIDER_ERROR"
               : "OAUTH_CALLBACK_PARAMS_MISSING",
-          detail: typeof req.query.error === "string" ? { providerError: req.query.error } : undefined,
+          detail: {
+            cookieNamesPresent: Object.keys(cookies),
+            expectedOauthCookieName: names.oauth,
+            hasCode: Boolean(code),
+            hasState: Boolean(state),
+            providerError: typeof req.query.error === "string" ? req.query.error : undefined,
+            providerErrorDescription: typeof req.query.error_description === "string" ? req.query.error_description : undefined,
+            userAgent: req.header("user-agent"),
+          },
         });
         clearOAuthCookie(res, config);
         redirectAuthFailure(res, config, "failed");
