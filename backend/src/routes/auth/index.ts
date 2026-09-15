@@ -126,6 +126,21 @@ export function createBrowserAuthRouter(deps: BrowserAuthRouterDeps): Router {
       const state = typeof req.query.state === "string" ? req.query.state : undefined;
 
       if (!transactionSecret || !code || !state || typeof req.query.error === "string") {
+        // Was previously silent — the most common real cause is the
+        // oauth transaction cookie/row simply expiring (default 10 minutes)
+        // before Cognito redirects back, e.g. during first-time TOTP setup
+        // (install an authenticator app, scan, type a code). Log it so a
+        // future case isn't invisible in the audit trail the way this one was.
+        await deps.auditSink.record({
+          eventType: "auth.failure",
+          occurredAt: new Date().toISOString(),
+          reasonCode: !transactionSecret
+            ? "OAUTH_TRANSACTION_COOKIE_MISSING_OR_EXPIRED"
+            : typeof req.query.error === "string"
+              ? "OAUTH_PROVIDER_ERROR"
+              : "OAUTH_CALLBACK_PARAMS_MISSING",
+          detail: typeof req.query.error === "string" ? { providerError: req.query.error } : undefined,
+        });
         clearOAuthCookie(res, config);
         redirectAuthFailure(res, config, "failed");
         return;

@@ -246,4 +246,33 @@ describe("backend-owned Cognito browser auth", () => {
     expect(callback.headers.location).toContain("auth=failed");
     expect(fetchImpl).not.toHaveBeenCalled();
   });
+
+  it("logs an audit event when the oauth transaction cookie is missing or expired (previously silent)", async () => {
+    const operator = activeAdminOperator();
+    const store = new InMemoryBrowserAuthStore();
+    const auditSink = new InMemoryAuditSink();
+    const fetchImpl = vi.fn();
+    const app = express();
+    app.use(
+      "/auth",
+      createBrowserAuthRouter({
+        identityProvider: { async verifyToken(): Promise<VerifiedTokenClaims> { throw new Error("must not verify"); } },
+        operatorDirectory: new InMemoryOperatorDirectory([operator]),
+        browserAuthStore: store,
+        auditSink,
+        loadConfig: () => config,
+        fetchImpl: fetchImpl as typeof fetch,
+      }),
+    );
+
+    // No governance_oauth cookie sent at all — simulates it expiring
+    // (10-minute default) during a slow first-time TOTP enrollment.
+    const callback = await request(app).get("/auth/callback?code=authorization-code&state=some-state");
+
+    expect(callback.status).toBe(302);
+    expect(callback.headers.location).toContain("auth=failed");
+    expect(fetchImpl).not.toHaveBeenCalled();
+    const failureEvent = auditSink.events.find((e) => e.eventType === "auth.failure");
+    expect(failureEvent?.reasonCode).toBe("OAUTH_TRANSACTION_COOKIE_MISSING_OR_EXPIRED");
+  });
 });
