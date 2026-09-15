@@ -354,14 +354,17 @@ function TenantDetailDrawer({
       </p>
       {usersError && <ErrorState label={usersError} />}
       {!usersError && users === null && (
-        <table className="data-table">
-          <tbody>
-            <SkeletonTableRows columns={6} rows={2} />
-          </tbody>
-        </table>
+        <div style={{ overflowX: "auto" }}>
+          <table className="data-table">
+            <tbody>
+              <SkeletonTableRows columns={6} rows={2} />
+            </tbody>
+          </table>
+        </div>
       )}
       {!usersError && users !== null && users.length === 0 && <EmptyState label="No users found for this tenant." icon="group" />}
       {!usersError && users !== null && users.length > 0 && (
+        <div style={{ overflowX: "auto" }}>
         <table className="data-table">
           <thead>
             <tr>
@@ -388,6 +391,7 @@ function TenantDetailDrawer({
             ))}
           </tbody>
         </table>
+        </div>
       )}
 
       <div className="card" style={{ marginTop: "1.5rem" }}>
