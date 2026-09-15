@@ -38,6 +38,14 @@ export class MissingReasonError extends ManagementOperationError {
   }
 }
 
+export class InvalidManagementTargetError extends ManagementOperationError {
+  readonly code = "OPERATION_TARGET_INVALID";
+  readonly httpStatus = 400;
+  constructor(reason: string) {
+    super(`Invalid management target: ${reason}`);
+  }
+}
+
 // Same idempotency key, but the canonical hash of
 // {requestedAction, targetTenantId, targetEngine, payload} disagrees with
 // the hash recorded on first use — master plan §59: "same key + different
@@ -63,7 +71,7 @@ export class ActionMismatchError extends ManagementOperationError {
 export class TargetMismatchError extends ManagementOperationError {
   readonly code = "OPERATION_TARGET_MISMATCH";
   readonly httpStatus = 409;
-  constructor(field: "target_tenant_id" | "target_engine", expected: string, actual: string) {
+  constructor(field: "target_tenant_id" | "target_engine" | "target_resource_type" | "target_resource_id", expected: string, actual: string) {
     super(`Idempotency key is bound to ${field} '${expected}', not '${actual}'.`);
   }
 }

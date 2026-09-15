@@ -20,6 +20,8 @@ export const SCOPES = [
   "tenants.read",
   "tenants.commission",
   "tenants.suspend",
+  "tenants.resume",
+  "tenants.decommission",
 
   "engines.read",
   "engines.entitlement.write",
@@ -111,6 +113,8 @@ export const ROLE_SCOPE_CEILING: Readonly<Record<Role, readonly Scope[]>> = {
     "tenants.read",
     "tenants.commission",
     "tenants.suspend",
+    "tenants.resume",
+    "tenants.decommission",
     "engines.read",
     "engines.entitlement.write",
     "identity.read",

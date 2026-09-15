@@ -27,10 +27,6 @@ export function canonicalize(value: unknown): JsonValue {
     for (const [key, v] of entries) result[key] = canonicalize(v);
     return result;
   }
-  // Functions, symbols, bigints: not valid request-payload shapes. Coerce to
-  // a stable string rather than throwing, so hashing never crashes the
-  // request path — the odd input still produces a deterministic hash, it is
-  // just not a meaningful one for that field.
   return String(value);
 }
 
@@ -42,16 +38,17 @@ export function sha256Hex(input: string): string {
   return createHash("sha256").update(input, "utf8").digest("hex");
 }
 
-// The full identity a management operation's idempotency guard binds to:
-// action + tenant + engine + payload. Hashing all four together (not just
-// the payload) is what makes "same key, materially different request"
-// detectable — two requests that reuse an idempotency key but disagree on
-// any of these fields produce different hashes and are therefore rejected
-// as a conflict, never silently aliased to one operation.
+// 1A.8.1 adds generic management-resource addressing while preserving the
+// exact canonical object used by already-persisted 1A.6 engine operations.
+// Optional generic fields are intentionally not derived from targetEngine in
+// this function: canonicalize() drops undefined object keys, so an old engine
+// call shape hashes byte-for-byte exactly as it did before 1A.8.1.
 export interface IdempotencyScope {
   requestedAction: string;
   targetTenantId?: string | null;
-  targetEngine: string;
+  targetEngine?: string;
+  targetResourceType?: string;
+  targetResourceId?: string;
   payload: unknown;
 }
 
@@ -60,6 +57,8 @@ export function computeSafePayloadHash(scope: IdempotencyScope): string {
     requestedAction: scope.requestedAction,
     targetTenantId: scope.targetTenantId ?? null,
     targetEngine: scope.targetEngine,
+    targetResourceType: scope.targetResourceType,
+    targetResourceId: scope.targetResourceId,
     payload: scope.payload,
   });
   return sha256Hex(canonical);

@@ -7,7 +7,7 @@ import type pg from "pg";
 import type { DbClient } from "../../src/db/dbClient.js";
 import { PgDbClient } from "../../src/db/pgDbClient.js";
 
-// Builds a fresh pg-mem instance with 0001 + 0002 + 0003 + 0004 applied, then wraps
+// Builds a fresh pg-mem instance with 0001 through 0005 applied, then wraps
 // its pg-compatible Pool in the same PgDbClient used in production. This
 // exercises the real query and pinned-connection transaction behavior rather
 // than a hand-rolled DbClient mock.
@@ -27,10 +27,14 @@ export function buildMigratedPgMemClient(): { db: ReturnType<typeof newDb>; clie
   const migration0004Path = fileURLToPath(
     new URL("../../migrations/0004_browser_operator_sessions.sql", import.meta.url),
   );
+  const migration0005Path = fileURLToPath(
+    new URL("../../migrations/0005_tenant_lifecycle_foundation.sql", import.meta.url),
+  );
   db.public.none(readFileSync(migration0001Path, "utf8"));
   db.public.none(readFileSync(migration0002Path, "utf8"));
   db.public.none(readFileSync(migration0003Path, "utf8"));
   db.public.none(readFileSync(migration0004Path, "utf8"));
+  db.public.none(readFileSync(migration0005Path, "utf8"));
 
   const { Pool } = db.adapters.createPg();
   const pool = new Pool();

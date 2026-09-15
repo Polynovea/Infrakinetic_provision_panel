@@ -8,17 +8,10 @@ import {
   type ManagementTransportConfig,
 } from "./managementConfig.js";
 
-// 1A.4 — mints the short-lived, signed assertion Governance's backend sends
-// to Infrakinetic's `/management/v1/*`. This is the ONLY place that
-// distinguishes and carries, as separate facts, the concepts the master
-// plan (§16) requires never be collapsed into a single "is this trusted?"
-// boolean: the authenticated Governance *service* (proven by the RS256
-// signature itself, verified via JWKS — not a claim), the authenticated
-// human *operator* (operator_id/operator_session_id, already established
-// by requireManagementApiAuth before this is ever called), the actor
-// identity (Governance itself — fixed, never caller-supplied), the
-// optional target tenant, the target engine, the requested action, and the
-// scope actually authorized for this one call.
+// 1A.4/1A.8.1 — mints the short-lived, signed assertion Governance's backend
+// sends to Infrakinetic's `/management/v1/*`. Engine operations retain their
+// original target_engine claim; 1A.8.1 adds a generic target-resource pair so
+// non-engine management commands are not forced to invent a fake engine.
 
 export interface MintManagementAssertionParams {
   /** Already-authenticated operator identity — never accept this from an unauthenticated caller. */
@@ -30,7 +23,11 @@ export interface MintManagementAssertionParams {
   /** The narrow scope(s) this specific call actually needs — must be a subset of operatorGrantedScopes. */
   requestedScopes: readonly string[];
   targetTenantId?: string;
-  targetEngine: string;
+  /** Backward-compatible engine address. Existing 1A.6 callers keep using this unchanged. */
+  targetEngine?: string;
+  /** Generic management-resource address for non-engine operations. */
+  targetResourceType?: string;
+  targetResourceId?: string;
   requestedAction: string;
   correlationId?: string;
   ttlSeconds?: number;
@@ -41,6 +38,51 @@ export class ScopeNotGrantedError extends Error {
     super(`Cannot mint a management assertion requesting scope '${scope}': operator was not granted it.`);
     this.name = "ScopeNotGrantedError";
   }
+}
+
+export class InvalidManagementTargetError extends Error {
+  constructor(reason: string) {
+    super(`Cannot mint management assertion: ${reason}`);
+    this.name = "InvalidManagementTargetError";
+  }
+}
+
+function nonEmpty(value: string | undefined): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function resolveTarget(params: MintManagementAssertionParams): {
+  targetEngine?: string;
+  targetResourceType: string;
+  targetResourceId: string;
+} {
+  const hasEngine = nonEmpty(params.targetEngine);
+  const hasResourceType = nonEmpty(params.targetResourceType);
+  const hasResourceId = nonEmpty(params.targetResourceId);
+
+  if (hasResourceType !== hasResourceId) {
+    throw new InvalidManagementTargetError("targetResourceType and targetResourceId must be supplied together.");
+  }
+
+  if (hasEngine) {
+    if (hasResourceType && (params.targetResourceType !== "engine" || params.targetResourceId !== params.targetEngine)) {
+      throw new InvalidManagementTargetError("targetEngine conflicts with the generic target-resource address.");
+    }
+    return {
+      targetEngine: params.targetEngine!,
+      targetResourceType: "engine",
+      targetResourceId: params.targetEngine!,
+    };
+  }
+
+  if (!hasResourceType || !hasResourceId) {
+    throw new InvalidManagementTargetError("an engine target or a complete generic target-resource address is required.");
+  }
+
+  return {
+    targetResourceType: params.targetResourceType!,
+    targetResourceId: params.targetResourceId!,
+  };
 }
 
 export async function mintManagementAssertion(
@@ -56,6 +98,7 @@ export async function mintManagementAssertion(
     throw new Error("Cannot mint a management assertion with zero scopes.");
   }
 
+  const target = resolveTarget(params);
   const ttlSeconds = clampAssertionTtlSeconds(params.ttlSeconds);
   const nowSeconds = Math.floor(Date.now() / 1000);
 
@@ -64,15 +107,16 @@ export async function mintManagementAssertion(
     operator_session_id: params.operatorSessionId,
     roles: params.operatorRoles,
     scopes: params.requestedScopes,
-    // Fixed identity of the calling service — never derived from `params`,
-    // so nothing a caller passes in can ever change who Governance says it
-    // is. See managementConfig.ts's own comment for why this is a source
-    // constant, not an environment value or request field.
     actor_tenant_id: GOVERNANCE_ACTOR_IDENTITY,
-    target_engine: params.targetEngine,
+    target_resource_type: target.targetResourceType,
+    target_resource_id: target.targetResourceId,
     requested_action: params.requestedAction,
     correlation_id: params.correlationId ?? randomUUID(),
   };
+  if (target.targetEngine !== undefined) {
+    // Preserve the existing engine-specific claim exactly for 1A.6 callers.
+    claims.target_engine = target.targetEngine;
+  }
   if (params.targetTenantId !== undefined) {
     claims.target_tenant_id = params.targetTenantId;
   }

@@ -28,6 +28,7 @@ describe("db/migrationRunner", () => {
       "0002_governance_db_foundation.sql",
       "0003_management_operation_ledger.sql",
       "0004_browser_operator_sessions.sql",
+      "0005_tenant_lifecycle_foundation.sql",
     ]);
     expect(results.every((r) => r.applied)).toBe(true);
 
@@ -56,6 +57,7 @@ describe("db/migrationRunner", () => {
         "management_idempotency_keys",
         "operator_audit_log",
         "management_operations",
+        "commissioned_tenants",
         "schema_migrations",
       ]),
     );
@@ -122,6 +124,7 @@ describe("db/migrationRunner", () => {
       { id: "0002_governance_db_foundation.sql", applied: true },
       { id: "0003_management_operation_ledger.sql", applied: true },
       { id: "0004_browser_operator_sessions.sql", applied: true },
+      { id: "0005_tenant_lifecycle_foundation.sql", applied: true },
     ]);
   });
 
@@ -155,6 +158,7 @@ describe("db/migrationRunner", () => {
       { id: "0002_governance_db_foundation.sql", applied: false },
       { id: "0003_management_operation_ledger.sql", applied: true },
       { id: "0004_browser_operator_sessions.sql", applied: true },
+      { id: "0005_tenant_lifecycle_foundation.sql", applied: true },
     ]);
 
     // Idempotent from here on, same as every other migration.

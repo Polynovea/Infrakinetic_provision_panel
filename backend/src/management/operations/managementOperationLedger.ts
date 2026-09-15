@@ -9,6 +9,7 @@ import {
   MissingIdempotencyKeyError,
   InvalidRiskClassError,
   MissingReasonError,
+  InvalidManagementTargetError,
   IdempotencyConflictError,
   OperationNotFoundError,
   InvalidLifecycleTransitionError,
@@ -39,7 +40,9 @@ export interface ManagementOperationRecord {
   operatorSessionId?: string;
   requestedAction: string;
   targetTenantId?: string;
-  targetEngine: string;
+  targetEngine?: string;
+  targetResourceType?: string;
+  targetResourceId?: string;
   reason?: string;
   riskClass: RiskClass;
   approvalEvidence?: unknown;
@@ -67,7 +70,9 @@ export interface CreateManagementOperationParams {
   operatorSessionId?: string;
   requestedAction: string;
   targetTenantId?: string | null;
-  targetEngine: string;
+  targetEngine?: string;
+  targetResourceType?: string;
+  targetResourceId?: string;
   reason?: string;
   riskClass: RiskClass;
   approvalEvidence?: unknown;
@@ -101,6 +106,8 @@ export interface ListOperationsParams {
   requestedAction?: string;
   targetTenantId?: string;
   targetEngine?: string;
+  targetResourceType?: string;
+  targetResourceId?: string;
 }
 
 export const OPERATIONS_LIST_DEFAULT_LIMIT = 20;
@@ -122,7 +129,9 @@ interface OperationRow {
   operator_session_id: string | null;
   requested_action: string;
   target_tenant_id: string | null;
-  target_engine: string;
+  target_engine: string | null;
+  target_resource_type: string | null;
+  target_resource_id: string | null;
   reason: string | null;
   risk_class: string;
   approval_evidence: unknown;
@@ -168,7 +177,9 @@ function mapOperationRow(row: OperationRow): ManagementOperationRecord {
     operatorSessionId: row.operator_session_id ?? undefined,
     requestedAction: row.requested_action,
     targetTenantId: row.target_tenant_id ?? undefined,
-    targetEngine: row.target_engine,
+    targetEngine: row.target_engine ?? undefined,
+    targetResourceType: row.target_resource_type ?? undefined,
+    targetResourceId: row.target_resource_id ?? undefined,
     reason: row.reason ?? undefined,
     riskClass: row.risk_class as RiskClass,
     approvalEvidence: parseJsonbField(row.approval_evidence),
@@ -251,6 +262,54 @@ function isUniqueViolation(err: unknown): boolean {
   return /duplicate key value violates unique constraint/i.test(message);
 }
 
+function nonEmptyTargetPart(value: string | undefined): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function resolveManagementTarget(params: CreateManagementOperationParams): {
+  targetEngine?: string;
+  targetResourceType: string;
+  targetResourceId: string;
+} {
+  const hasEngine = nonEmptyTargetPart(params.targetEngine);
+  const hasType = nonEmptyTargetPart(params.targetResourceType);
+  const hasId = nonEmptyTargetPart(params.targetResourceId);
+
+  if (hasType !== hasId) {
+    throw new InvalidManagementTargetError("targetResourceType and targetResourceId must be supplied together.");
+  }
+  if (hasEngine) {
+    if (hasType && (params.targetResourceType !== "engine" || params.targetResourceId !== params.targetEngine)) {
+      throw new InvalidManagementTargetError("targetEngine conflicts with the generic target-resource address.");
+    }
+    return {
+      targetEngine: params.targetEngine!,
+      targetResourceType: "engine",
+      targetResourceId: params.targetEngine!,
+    };
+  }
+  if (!hasType || !hasId) {
+    throw new InvalidManagementTargetError("an engine target or a complete generic target-resource address is required.");
+  }
+  return { targetResourceType: params.targetResourceType!, targetResourceId: params.targetResourceId! };
+}
+
+function deriveAuditTarget(op: {
+  targetTenantId?: string | null;
+  targetEngine?: string;
+  targetResourceType?: string;
+  targetResourceId?: string;
+}): { targetType?: string; targetId?: string } {
+  // Preserve exact 1A.6 audit semantics: engine operations that also carry a
+  // tenant target were historically audited against the tenant first.
+  if (op.targetTenantId) return { targetType: "tenant", targetId: op.targetTenantId };
+  if (op.targetEngine) return { targetType: "engine", targetId: op.targetEngine };
+  if (op.targetResourceType && op.targetResourceId) {
+    return { targetType: op.targetResourceType, targetId: op.targetResourceId };
+  }
+  return {};
+}
+
 export class ManagementOperationLedger {
   constructor(private readonly db: DbClient) {}
 
@@ -288,10 +347,17 @@ export class ManagementOperationLedger {
       throw new MissingReasonError(params.riskClass);
     }
 
+    const target = resolveManagementTarget(params);
+
+    // IMPORTANT: hash the caller-supplied generic fields, not the derived
+    // engine projection. Existing 1A.6 callers pass only targetEngine, so
+    // their canonical object/hash remains byte-identical to pre-1A.8.1.
     const safePayloadHash = computeSafePayloadHash({
       requestedAction: params.requestedAction,
       targetTenantId: params.targetTenantId ?? null,
       targetEngine: params.targetEngine,
+      targetResourceType: params.targetResourceType,
+      targetResourceId: params.targetResourceId,
       payload: params.payload,
     });
 
@@ -318,9 +384,11 @@ export class ManagementOperationLedger {
         const inserted = await tx.query<OperationRow>(
           `INSERT INTO governance.management_operations
              (operation_id, idempotency_key, operator_id, operator_session_id, requested_action,
-              target_tenant_id, target_engine, reason, risk_class, approval_evidence, safe_payload_hash,
-              contract_version, correlation_id, causation_id, requested_at, status, created_at, updated_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, $12, $13, $14, now(), 'submitted', now(), now())
+              target_tenant_id, target_engine, target_resource_type, target_resource_id, reason, risk_class,
+              approval_evidence, safe_payload_hash, contract_version, correlation_id, causation_id,
+              requested_at, status, created_at, updated_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13, $14, $15, $16,
+                   now(), 'submitted', now(), now())
            RETURNING *`,
           [
             operationId,
@@ -329,7 +397,9 @@ export class ManagementOperationLedger {
             params.operatorSessionId ?? null,
             params.requestedAction,
             params.targetTenantId ?? null,
-            params.targetEngine,
+            target.targetEngine ?? null,
+            target.targetResourceType,
+            target.targetResourceId,
             params.reason ?? null,
             params.riskClass,
             toJsonbParam(safeApprovalEvidence),
@@ -343,8 +413,7 @@ export class ManagementOperationLedger {
           operatorId: params.operatorId,
           operatorSessionId: params.operatorSessionId,
           action: params.requestedAction,
-          targetType: params.targetTenantId ? "tenant" : "engine",
-          targetId: params.targetTenantId ?? params.targetEngine,
+          ...deriveAuditTarget({ ...params, ...target }),
           riskClass: params.riskClass,
           reason: params.reason,
           idempotencyKey: params.idempotencyKey,
@@ -425,6 +494,14 @@ export class ManagementOperationLedger {
       values.push(params.targetEngine);
       conditions.push(`target_engine = $${values.length}`);
     }
+    if (params.targetResourceType !== undefined) {
+      values.push(params.targetResourceType);
+      conditions.push(`target_resource_type = $${values.length}`);
+    }
+    if (params.targetResourceId !== undefined) {
+      values.push(params.targetResourceId);
+      conditions.push(`target_resource_id = $${values.length}`);
+    }
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
     values.push(limit);
 
@@ -489,8 +566,7 @@ export class ManagementOperationLedger {
         operatorId: current.operatorId,
         operatorSessionId: current.operatorSessionId,
         action: current.requestedAction,
-        targetType: current.targetTenantId ? "tenant" : "engine",
-        targetId: current.targetTenantId ?? current.targetEngine,
+        ...deriveAuditTarget(current),
         riskClass: current.riskClass,
         reason: current.reason,
         idempotencyKey: current.idempotencyKey,
@@ -531,8 +607,7 @@ export class ManagementOperationLedger {
       operatorId: current.operatorId,
       operatorSessionId: current.operatorSessionId,
       action: current.requestedAction,
-      targetType: current.targetTenantId ? "tenant" : "engine",
-      targetId: current.targetTenantId ?? current.targetEngine,
+      ...deriveAuditTarget(current),
       riskClass: current.riskClass,
       reason: current.reason,
       idempotencyKey: current.idempotencyKey,

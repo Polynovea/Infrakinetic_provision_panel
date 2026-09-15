@@ -311,6 +311,9 @@ export async function recoverEngineState(
   params: RecoverEngineStateParams,
 ): Promise<EngineStateOperationResult> {
   const original = await ledgerLookup.getOperation(params.originalOperationId);
+  if (!original.targetEngine) {
+    throw new Error(`Cannot recover operation '${params.originalOperationId}': it is not an engine-targeted operation.`);
+  }
   const beforeSnapshot = original.beforeStateSafeSnapshot as { data?: { state?: string; reason?: string | null } } | undefined;
   const priorState = beforeSnapshot?.data?.state;
   if (priorState !== "operational" && priorState !== "degraded" && priorState !== "disabled") {
