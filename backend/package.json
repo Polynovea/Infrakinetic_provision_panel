@@ -14,6 +14,7 @@
     "typecheck:test": "tsc -p tsconfig.test.json --noEmit",
     "test": "vitest run",
     "bootstrap:operator": "tsx scripts/bootstrapOperator.ts",
+    "bootstrap:operator:db": "tsx scripts/bootstrapOperatorDb.ts",
     "db:migrate": "tsx scripts/migrate.ts",
     "check:domain-portability": "node scripts/check_domain_portability.mjs",
     "check:no-infrakinetic-imports": "node scripts/check_no_infrakinetic_imports.mjs",

@@ -74,8 +74,24 @@ interface FreshnessEnvelope {
   freshness: string;
 }
 
+// Real column set for a tenant's user inventory, mirroring
+// TenantRegistryEntry's role: catches an accidental widening on the
+// Infrakinetic side here too. No MFA field — Cognito-side only, not
+// mirrored into Infrakinetic's own app_users table, so it is not
+// "safely available" from this existing read primitive.
+export interface TenantRegistryUser {
+  id: string;
+  full_name: string;
+  email: string;
+  role_key: string;
+  status: string;
+  created_at: string;
+  last_active_at: string | null;
+}
+
 export type TenantRegistryListResult = FreshnessEnvelope & { tenants: TenantRegistryEntry[] };
 export type TenantRegistryDetailResult = FreshnessEnvelope & { tenant: TenantRegistryEntry };
+export type TenantRegistryUsersResult = FreshnessEnvelope & { tenantId: string; users: TenantRegistryUser[] };
 
 // No engine is involved in a tenant-registry read; target_engine is a
 // required claim on every management assertion (managementAssertionIssuer.ts),
@@ -137,4 +153,19 @@ export async function getTenantRegistryEntry(
     throw new UnexpectedManagementApiResponseError(result.status, path);
   }
   return result.body as TenantRegistryDetailResult;
+}
+
+export async function getTenantRegistryUsers(
+  deps: TenantRegistryQueryDeps,
+  params: TenantRegistryQueryParams & { identifier: string },
+): Promise<TenantRegistryUsersResult> {
+  const path = `${MANAGEMENT_V1_PREFIX}/tenants/${encodeURIComponent(params.identifier)}/users`;
+  const result = await mintAndCall(deps, params, "tenants.registry.users.read", path);
+  if (result.status === 404) {
+    throw new UnknownTenantError(params.identifier);
+  }
+  if (result.status !== 200) {
+    throw new UnexpectedManagementApiResponseError(result.status, path);
+  }
+  return result.body as TenantRegistryUsersResult;
 }

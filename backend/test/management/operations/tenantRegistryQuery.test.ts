@@ -5,6 +5,7 @@ import { exportJWK } from "jose";
 import {
   listTenantRegistry,
   getTenantRegistryEntry,
+  getTenantRegistryUsers,
   UnknownTenantError,
 } from "../../../src/management/operations/tenantRegistryQuery.js";
 import { UnexpectedManagementApiResponseError } from "../../../src/management/operations/engineStateOperation.js";
@@ -49,6 +50,16 @@ const SANITIZED_ENTRY = {
   updated_at: "2026-01-01T00:00:00.000Z",
 };
 
+const SANITIZED_USER = {
+  id: "sub-abc-123",
+  full_name: "Subrojit Roy",
+  email: "subrojitroy@polynovea.in",
+  role_key: "master_admin",
+  status: "active",
+  created_at: "2026-09-15T00:00:00.000Z",
+  last_active_at: "2026-09-15T01:00:00.000Z",
+};
+
 interface FakeCall {
   method: string;
   path: string;
@@ -82,6 +93,23 @@ function buildFakeInfrakinetic() {
         status: 200,
         json: async () => ({
           tenant: SANITIZED_ENTRY,
+          observedAt: "2026-09-14T00:00:00.000Z",
+          source: "infrakinetic-live",
+          freshness: "live",
+        }),
+      } as Response;
+    }
+    const usersMatch = url.pathname.match(/^\/management\/v1\/tenants\/([^/]+)\/users$/);
+    if (usersMatch) {
+      const identifier = decodeURIComponent(usersMatch[1]);
+      if (identifier !== SANITIZED_ENTRY.id && identifier !== SANITIZED_ENTRY.slug) {
+        return { status: 404, json: async () => ({ error: "UNKNOWN_TENANT" }) } as Response;
+      }
+      return {
+        status: 200,
+        json: async () => ({
+          tenantId: SANITIZED_ENTRY.id,
+          users: [SANITIZED_USER],
           observedAt: "2026-09-14T00:00:00.000Z",
           source: "infrakinetic-live",
           freshness: "live",
@@ -166,5 +194,43 @@ describe("getTenantRegistryEntry — lookup by id or slug, 404 mapping", () => {
         { ...OPERATOR_PARAMS, identifier: "not-a-real-tenant" },
       ),
     ).rejects.toBeInstanceOf(UnknownTenantError);
+  });
+});
+
+describe("getTenantRegistryUsers — real tenant-user inventory, 404 mapping", () => {
+  it("returns the sanitized user inventory with the freshness envelope", async () => {
+    const signingKeys = await buildFixtureSigningKeys();
+    const { fetchImpl, calls } = buildFakeInfrakinetic();
+    const result = await getTenantRegistryUsers(
+      { signingKeys, transportConfig: TRANSPORT_CONFIG, infrakineticBaseUrl: "http://fake.invalid", fetchImpl },
+      { ...OPERATOR_PARAMS, identifier: SANITIZED_ENTRY.slug },
+    );
+    expect(calls).toEqual([{ method: "GET", path: `/management/v1/tenants/${SANITIZED_ENTRY.slug}/users` }]);
+    expect(result.tenantId).toBe(SANITIZED_ENTRY.id);
+    expect(result.users).toEqual([SANITIZED_USER]);
+    expect(result.source).toBe("infrakinetic-live");
+  });
+
+  it("unknown identifier -> UnknownTenantError", async () => {
+    const signingKeys = await buildFixtureSigningKeys();
+    const { fetchImpl } = buildFakeInfrakinetic();
+    await expect(
+      getTenantRegistryUsers(
+        { signingKeys, transportConfig: TRANSPORT_CONFIG, infrakineticBaseUrl: "http://fake.invalid", fetchImpl },
+        { ...OPERATOR_PARAMS, identifier: "not-a-real-tenant" },
+      ),
+    ).rejects.toBeInstanceOf(UnknownTenantError);
+  });
+
+  it("operator missing tenants.read -> throws before any HTTP call", async () => {
+    const signingKeys = await buildFixtureSigningKeys();
+    const { fetchImpl, calls } = buildFakeInfrakinetic();
+    await expect(
+      getTenantRegistryUsers(
+        { signingKeys, transportConfig: TRANSPORT_CONFIG, infrakineticBaseUrl: "http://fake.invalid", fetchImpl },
+        { ...OPERATOR_PARAMS, operatorGrantedScopes: ["engines.read"], identifier: SANITIZED_ENTRY.id },
+      ),
+    ).rejects.toThrow(/tenants.read/);
+    expect(calls).toEqual([]);
   });
 });

@@ -1,4 +1,13 @@
 #!/usr/bin/env -S npx tsx
+// SUPERSEDED FOR PRODUCTION USE (2026-09-15): writes only to the interim
+// config/operators.seed.json file, which the running process has not read
+// since 1A.3 wired PostgresOperatorDirectory unconditionally in
+// src/index.ts. Running this against a live deployment silently does
+// nothing observable — the real operator directory is
+// governance.operators/operator_roles/operator_scopes. Use
+// scripts/bootstrapOperatorDb.ts (npm run bootstrap:operator:db) instead.
+// Kept only as a reference for the seed-store adapter's own tests.
+//
 // 1A.2 — deliberately narrow operator bootstrap CLI.
 //
 // This exists ONLY because there is no governed tenant/operator

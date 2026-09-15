@@ -6,6 +6,16 @@ import { useOperatorSession } from "../../../lib/session";
 import { StatusBadge } from "../../../components/StatusBadge";
 import { EmptyState, ErrorState, LoadingState } from "../../../components/States";
 
+interface TenantRegistryUser {
+  id: string;
+  full_name: string;
+  email: string;
+  role_key: string;
+  status: string;
+  created_at: string;
+  last_active_at: string | null;
+}
+
 interface TenantRegistryEntry {
   id: string;
   name: string;
@@ -33,6 +43,9 @@ export default function TenantsPage() {
   const [observedAt, setObservedAt] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<TenantRegistryEntry | null>(null);
+  const [users, setUsers] = useState<TenantRegistryUser[] | null>(null);
+  const [usersObservedAt, setUsersObservedAt] = useState<string | null>(null);
+  const [usersError, setUsersError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -53,6 +66,33 @@ export default function TenantsPage() {
       cancelled = true;
     };
   }, [request]);
+
+  useEffect(() => {
+    if (!selected) {
+      setUsers(null);
+      setUsersObservedAt(null);
+      setUsersError(null);
+      return;
+    }
+    let cancelled = false;
+    setUsers(null);
+    setUsersError(null);
+    request(`/management/v1/tenants/${encodeURIComponent(selected.id)}/users`)
+      .then(async (res) => {
+        const body = await res.json();
+        if (cancelled) return;
+        if (!res.ok) {
+          setUsersError("Could not load this tenant's users.");
+          return;
+        }
+        setUsers(body.users);
+        setUsersObservedAt(body.observedAt);
+      })
+      .catch(() => !cancelled && setUsersError("Could not load this tenant's users."));
+    return () => {
+      cancelled = true;
+    };
+  }, [request, selected]);
 
   return (
     <>
@@ -141,6 +181,42 @@ export default function TenantsPage() {
               <dd style={{ margin: 0 }}>{selected.trial_ends_at ? formatDate(selected.trial_ends_at) : "—"}</dd>
             </div>
           </dl>
+
+          <h3 style={{ margin: "1.25rem 0 0.5rem", fontSize: "0.95rem" }}>Users</h3>
+          <p style={{ margin: "0 0 0.6rem", fontSize: "0.8rem", color: "var(--text-muted)" }}>
+            {usersObservedAt ? `Last observed ${formatDate(usersObservedAt)}` : " "}
+          </p>
+          {usersError && <ErrorState label={usersError} />}
+          {!usersError && users === null && <LoadingState label="Loading users…" />}
+          {!usersError && users !== null && users.length === 0 && <EmptyState label="No users found for this tenant." />}
+          {!usersError && users !== null && users.length > 0 && (
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Email</th>
+                  <th>Role</th>
+                  <th>Status</th>
+                  <th>Created</th>
+                  <th>Last active</th>
+                </tr>
+              </thead>
+              <tbody>
+                {users.map((u) => (
+                  <tr key={u.id}>
+                    <td>{u.full_name || "—"}</td>
+                    <td>{u.email}</td>
+                    <td>{u.role_key}</td>
+                    <td>
+                      <StatusBadge value={u.status} />
+                    </td>
+                    <td>{formatDate(u.created_at)}</td>
+                    <td>{u.last_active_at ? formatDate(u.last_active_at) : "Never"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
         </div>
       )}
     </>

@@ -21,7 +21,7 @@ import {
   UnexpectedManagementApiResponseError,
 } from "../../management/operations/engineStateOperation.js";
 import { ManagementOperationError, OperationNotFoundError } from "../../management/operations/managementOperationErrors.js";
-import { listTenantRegistry, getTenantRegistryEntry, UnknownTenantError } from "../../management/operations/tenantRegistryQuery.js";
+import { listTenantRegistry, getTenantRegistryEntry, getTenantRegistryUsers, UnknownTenantError } from "../../management/operations/tenantRegistryQuery.js";
 
 export interface ManagementRouterDeps {
   identityProvider: IdentityProvider;
@@ -154,6 +154,48 @@ export function createManagementRouter(deps: ManagementRouterDeps): Router {
       const signingKeys = await deps.getManagementSigningKeys();
       const transportConfig = deps.loadTransportConfig();
       const result = await getTenantRegistryEntry(
+        { signingKeys, transportConfig, infrakineticBaseUrl: deps.infrakineticBaseUrl },
+        {
+          identifier: req.params.identifier,
+          operatorId: ctx.operatorId,
+          operatorSessionId: ctx.operatorSessionId,
+          operatorRoles: ctx.roles,
+          operatorGrantedScopes: ctx.scopes,
+          correlationId: ctx.correlationId,
+        },
+      );
+      res.status(200).json(result);
+    } catch (err) {
+      if (err instanceof UnknownTenantError) {
+        res.status(404).json({ error: "UNKNOWN_TENANT", message: err.message });
+        return;
+      }
+      if (err instanceof UnexpectedManagementApiResponseError) {
+        res.status(502).json({ error: "MANAGEMENT_API_UPSTREAM_ERROR", message: err.message });
+        return;
+      }
+      if (err instanceof DatabaseUnavailableError) {
+        res.status(err.httpStatus).json({ error: err.code, message: err.message });
+        return;
+      }
+      next(err);
+    }
+  });
+
+  // Tenant-user inventory, read-only (same R0/no-ledger reasoning as the
+  // registry routes above). Governance never reads app_users directly —
+  // this goes through Infrakinetic's own Management API contract only,
+  // same as every other tenant-registry read.
+  router.get("/tenants/:identifier/users", requireScope("tenants.read", deps.auditSink), async (req, res, next) => {
+    try {
+      const ctx = req.operatorContext;
+      if (!ctx) {
+        res.status(403).json({ error: "NOT_AUTHENTICATED" });
+        return;
+      }
+      const signingKeys = await deps.getManagementSigningKeys();
+      const transportConfig = deps.loadTransportConfig();
+      const result = await getTenantRegistryUsers(
         { signingKeys, transportConfig, infrakineticBaseUrl: deps.infrakineticBaseUrl },
         {
           identifier: req.params.identifier,

@@ -53,6 +53,9 @@ describe("GET /management/v1/tenants and /tenants/:identifier — Governance's o
 
     const detail = await request(server).get("/management/v1/tenants/beta-co").set("authorization", `Bearer ${token}`);
     expect(detail.status).toBe(403);
+
+    const users = await request(server).get("/management/v1/tenants/beta-co/users").set("authorization", `Bearer ${token}`);
+    expect(users.status).toBe(403);
   });
 
   it("a viewer-role operator (tenants.read is in their ceiling) is not rejected on scope", async () => {
