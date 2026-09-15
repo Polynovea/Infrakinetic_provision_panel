@@ -707,6 +707,10 @@ button.card:hover {
   display: flex;
   flex-direction: column;
   animation: drawer-slide-in 0.2s ease-out;
+  /* Defense in depth: a wide child (e.g. a data table) must scroll within
+     the drawer, never bleed past its right edge and drag the whole page
+     into horizontal scroll. */
+  overflow-x: hidden;
 }
 
 @keyframes drawer-slide-in {
