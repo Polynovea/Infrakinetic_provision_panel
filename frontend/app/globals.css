@@ -90,6 +90,15 @@
   --sidebar-specular: rgba(255, 255, 255, 0.55);
   --sidebar-blur: blur(20px);
 
+  /* Card "glass" treatment — the same frosted/specular language as the
+     sidebar, applied to every .card surface (metric cards, engine tiles,
+     filter panels, form cards). Needs an ambient background behind it
+     (see body's own gradient below) or the blur has nothing to diffuse. */
+  --card-bg: linear-gradient(165deg, rgba(255, 255, 255, 0.78) 0%, rgba(248, 243, 234, 0.62) 100%);
+  --card-border: rgba(23, 18, 26, 0.1);
+  --card-specular: rgba(255, 255, 255, 0.65);
+  --card-blur: blur(16px);
+
   /* Type system — same font family choices as the Infrakinetic product
      family (Clash Display for display/headline type, Inter for body/UI,
      Material Symbols Outlined for icons), loaded as public font links in
@@ -170,6 +179,10 @@
     --sidebar-bg: linear-gradient(180deg, rgba(10, 8, 14, 0.92) 0%, rgba(6, 5, 8, 0.96) 100%);
     --sidebar-border: rgba(255, 255, 255, 0.08);
     --sidebar-specular: rgba(255, 255, 255, 0.12);
+
+    --card-bg: linear-gradient(165deg, rgba(36, 30, 45, 0.7) 0%, rgba(18, 16, 23, 0.75) 100%);
+    --card-border: rgba(255, 255, 255, 0.09);
+    --card-specular: rgba(255, 255, 255, 0.12);
   }
 }
 
@@ -181,9 +194,20 @@ html,
 body {
   margin: 0;
   padding: 0;
-  background: var(--bg-canvas);
   color: var(--text-primary);
   font-family: var(--font-body);
+}
+
+/* Ambient background wash — without this, .card's backdrop-filter blur has
+   nothing behind it to diffuse and the glass effect is invisible against a
+   flat canvas color. Two low-key glows, same technique as .auth-screen's
+   own radial gradient, using the existing --selected-bg tint per theme. */
+body {
+  background:
+    radial-gradient(ellipse 55% 40% at 12% -5%, var(--selected-bg) 0%, transparent 60%),
+    radial-gradient(ellipse 45% 35% at 100% 100%, var(--selected-bg) 0%, transparent 55%),
+    var(--bg-canvas);
+  background-attachment: fixed;
 }
 
 /* Typography scale — mirrors Infrakinetic's own display-lg/headline-md/
@@ -501,11 +525,28 @@ a:hover {
 }
 
 .card {
-  background: var(--bg-surface-1);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-md);
+  position: relative;
+  background: var(--card-bg);
+  backdrop-filter: var(--card-blur);
+  -webkit-backdrop-filter: var(--card-blur);
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius-lg);
   box-shadow: var(--shadow-card);
   padding: 1.25rem;
+  overflow: hidden;
+}
+
+/* Specular top-edge highlight, same technique as the sidebar — what
+   actually reads as "glass" rather than just "semi-transparent." */
+.card::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, var(--card-specular) 0%, transparent 75%);
+  pointer-events: none;
 }
 
 .card + .card {
@@ -524,6 +565,7 @@ button.card {
   font: inherit;
   color: inherit;
   width: 100%;
+  text-align: inherit;
   transition: border-color 0.12s ease;
 }
 
