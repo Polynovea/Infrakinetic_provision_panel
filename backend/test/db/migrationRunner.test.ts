@@ -29,6 +29,7 @@ describe("db/migrationRunner", () => {
       "0003_management_operation_ledger.sql",
       "0004_browser_operator_sessions.sql",
       "0005_tenant_lifecycle_foundation.sql",
+      "0006_commissioned_tenants_control_fields.sql",
     ]);
     expect(results.every((r) => r.applied)).toBe(true);
 
@@ -125,6 +126,7 @@ describe("db/migrationRunner", () => {
       { id: "0003_management_operation_ledger.sql", applied: true },
       { id: "0004_browser_operator_sessions.sql", applied: true },
       { id: "0005_tenant_lifecycle_foundation.sql", applied: true },
+      { id: "0006_commissioned_tenants_control_fields.sql", applied: true },
     ]);
   });
 
@@ -159,6 +161,7 @@ describe("db/migrationRunner", () => {
       { id: "0003_management_operation_ledger.sql", applied: true },
       { id: "0004_browser_operator_sessions.sql", applied: true },
       { id: "0005_tenant_lifecycle_foundation.sql", applied: true },
+      { id: "0006_commissioned_tenants_control_fields.sql", applied: true },
     ]);
 
     // Idempotent from here on, same as every other migration.

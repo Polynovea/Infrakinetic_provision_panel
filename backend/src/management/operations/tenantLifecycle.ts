@@ -34,7 +34,12 @@ const ALLOWED_TRANSITIONS: Readonly<Record<TenantLifecycleState, readonly Tenant
   approved: ["provisioning", "failed"],
   provisioning: ["active", "failed"],
   active: ["suspended", "decommission_requested", "failed"],
-  suspended: ["active", "failed"],
+  // 1A.8.0 scoping (Phase1A.8_Ground_Truth_and_Scoping_2026-09-16.md §9
+  // "Decommission: active/suspended -> decommission_requested") requires a
+  // suspended tenant to be directly decommissionable — an operator must not
+  // be forced to resume a suspended tenant back to active first just to
+  // decommission it.
+  suspended: ["active", "decommission_requested", "failed"],
   decommission_requested: ["decommissioning", "failed"],
   decommissioning: ["decommissioned", "failed"],
   decommissioned: [],

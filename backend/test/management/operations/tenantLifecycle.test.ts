@@ -35,6 +35,13 @@ describe("management/operations/tenantLifecycle", () => {
     expect(isValidTenantLifecycleTransition("decommissioning", "decommissioned")).toBe(true);
   });
 
+  // 1A.8.0 scoping §9 ("Decommission: active/suspended -> decommission_requested")
+  // — a suspended tenant must be directly decommissionable, without first
+  // requiring a resume back to active.
+  it("allows decommissioning directly from suspended, not only from active", () => {
+    expect(isValidTenantLifecycleTransition("suspended", "decommission_requested")).toBe(true);
+  });
+
   it("fails closed on invalid skips/reversals and makes decommissioned terminal", () => {
     expect(isValidTenantLifecycleTransition("draft", "active")).toBe(false);
     expect(isValidTenantLifecycleTransition("active", "draft")).toBe(false);
