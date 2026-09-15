@@ -125,20 +125,11 @@ export function createBrowserAuthRouter(deps: BrowserAuthRouterDeps): Router {
       const code = typeof req.query.code === "string" ? req.query.code : undefined;
       const state = typeof req.query.state === "string" ? req.query.state : undefined;
 
-      if (!transactionSecret || !code || !state || typeof req.query.error === "string") {
-        // Was previously silent. Log every input that could explain this,
-        // not just a single guessed reasonCode — cookie names actually
-        // presented (never values), which of code/state arrived, and any
-        // provider-supplied error/error_description, so a real case is
-        // fully diagnosable from one log line instead of guesswork.
+      if (!code || !state || typeof req.query.error === "string") {
         await deps.auditSink.record({
           eventType: "auth.failure",
           occurredAt: new Date().toISOString(),
-          reasonCode: !transactionSecret
-            ? "OAUTH_TRANSACTION_COOKIE_MISSING_OR_EXPIRED"
-            : typeof req.query.error === "string"
-              ? "OAUTH_PROVIDER_ERROR"
-              : "OAUTH_CALLBACK_PARAMS_MISSING",
+          reasonCode: typeof req.query.error === "string" ? "OAUTH_PROVIDER_ERROR" : "OAUTH_CALLBACK_PARAMS_MISSING",
           detail: {
             cookieNamesPresent: Object.keys(cookies),
             expectedOauthCookieName: names.oauth,
@@ -154,10 +145,31 @@ export function createBrowserAuthRouter(deps: BrowserAuthRouterDeps): Router {
         return;
       }
 
-      const transaction = await deps.browserAuthStore.consumeLoginTransaction(sha256Base64Url(transactionSecret));
+      // Primary lookup is by state hash, not the governance_oauth cookie.
+      // `state` is generated with the same entropy as the cookie secret and
+      // is round-tripped by Cognito on the URL itself; the cookie has been
+      // observed, in practice, to sometimes not survive the redirect to
+      // Cognito and back (a real production case: Chrome's bounce-tracking
+      // cookie mitigations can clear first-party state set immediately
+      // before navigating to a third party and back — exactly this flow's
+      // shape — even though Cognito completed the login/MFA correctly).
+      // The cookie is kept as an additional browser-binding check, applied
+      // only when present: a *present but mismatched* cookie is treated as
+      // more suspicious than an absent one and fails closed below, but a
+      // missing cookie alone no longer blocks an otherwise-valid, single-use,
+      // state-matched login. code_verifier/nonce/operator/MFA checks are
+      // completely unaffected either way.
+      const transaction = await deps.browserAuthStore.consumeLoginTransactionByStateHash(sha256Base64Url(state));
       clearOAuthCookie(res, config);
-      if (!transaction || !safeEqualText(transaction.stateHash, sha256Base64Url(state))) {
+      if (!transaction) {
         await deps.auditSink.record({ eventType: "auth.failure", occurredAt: new Date().toISOString(), reasonCode: "OAUTH_STATE_INVALID" });
+        redirectAuthFailure(res, config, "failed");
+        return;
+      }
+
+      const cookieBindingVerified = Boolean(transactionSecret) && safeEqualText(sha256Base64Url(transactionSecret ?? ""), transaction.transactionHash);
+      if (transactionSecret && !cookieBindingVerified) {
+        await deps.auditSink.record({ eventType: "auth.failure", occurredAt: new Date().toISOString(), reasonCode: "OAUTH_COOKIE_BINDING_MISMATCH" });
         redirectAuthFailure(res, config, "failed");
         return;
       }
@@ -265,7 +277,10 @@ export function createBrowserAuthRouter(deps: BrowserAuthRouterDeps): Router {
         operatorSessionId: sessionId,
         route: req.originalUrl,
         method: req.method,
-        detail: selfActivatedPendingMfa ? { selfActivatedPendingMfa: true } : undefined,
+        detail:
+          selfActivatedPendingMfa || !cookieBindingVerified
+            ? { ...(selfActivatedPendingMfa ? { selfActivatedPendingMfa: true } : {}), cookieBindingVerified }
+            : undefined,
       });
 
       res.redirect(302, `${config.frontendOrigin}${transaction.returnPath}`);

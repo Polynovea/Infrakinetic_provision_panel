@@ -34,6 +34,14 @@ export interface BrowserSessionRecord extends NewBrowserSession {
 export interface BrowserAuthStore {
   createLoginTransaction(record: OAuthLoginTransactionRecord): Promise<void>;
   consumeLoginTransaction(transactionHash: string): Promise<OAuthLoginTransactionRecord | undefined>;
+  // Fallback lookup keyed by the OAuth `state` param instead of the
+  // governance_oauth cookie. `state` is round-tripped through Cognito on
+  // the URL itself and observed to survive even when some browsers discard
+  // the cookie across the redirect to Cognito and back (see
+  // routes/auth/index.ts's callback handler for why this is safe to use as
+  // the primary lookup, with the cookie kept as an additional binding check
+  // only when present).
+  consumeLoginTransactionByStateHash(stateHash: string): Promise<OAuthLoginTransactionRecord | undefined>;
   createSession(record: NewBrowserSession): Promise<void>;
   findSessionByTokenHash(sessionTokenHash: string): Promise<BrowserSessionRecord | undefined>;
   revokeSession(sessionId: string, reason: string): Promise<void>;

@@ -21,6 +21,16 @@ export class InMemoryBrowserAuthStore implements BrowserAuthStore {
     return { ...record };
   }
 
+  async consumeLoginTransactionByStateHash(stateHash: string): Promise<OAuthLoginTransactionRecord | undefined> {
+    for (const [hash, record] of this.transactions) {
+      if (record.stateHash !== stateHash) continue;
+      this.transactions.delete(hash);
+      if (new Date(record.expiresAt).getTime() <= Date.now()) return undefined;
+      return { ...record };
+    }
+    return undefined;
+  }
+
   async createSession(record: NewBrowserSession): Promise<void> {
     this.sessionsByHash.set(record.sessionTokenHash, { ...record });
   }

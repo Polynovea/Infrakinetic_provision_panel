@@ -165,7 +165,7 @@ describe("backend-owned Cognito browser auth", () => {
     expect(activated?.disabledReason).toBeUndefined();
 
     const successEvent = auditSink.events.find((e) => e.eventType === "auth.success");
-    expect(successEvent?.detail).toEqual({ selfActivatedPendingMfa: true });
+    expect(successEvent?.detail).toMatchObject({ selfActivatedPendingMfa: true });
   });
 
   it("does NOT self-activate an operator disabled for cause (mfaEnrolled was already true)", async () => {
@@ -247,7 +247,54 @@ describe("backend-owned Cognito browser auth", () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
-  it("logs an audit event when the oauth transaction cookie is missing or expired (previously silent)", async () => {
+  it("succeeds via state-hash fallback when the governance_oauth cookie never arrives (real production case: some browsers discard it across the Cognito redirect)", async () => {
+    const operator = activeAdminOperator();
+    const store = new InMemoryBrowserAuthStore();
+    const auditSink = new InMemoryAuditSink();
+    let expectedNonce = "";
+    const identityProvider: IdentityProvider = {
+      async verifyToken(): Promise<VerifiedTokenClaims> {
+        return {
+          subject: operator.cognitoSub,
+          tokenId: "ffffffff-ffff-4fff-8fff-ffffffffffff",
+          issuedAt: new Date(Date.now() - 1_000),
+          expiresAt: new Date(Date.now() + 3_600_000),
+          rawClaims: { nonce: expectedNonce },
+        };
+      },
+    };
+    const fetchImpl = vi.fn<(url: string, init?: RequestInit) => Promise<Response>>(async () =>
+      new Response(JSON.stringify({ id_token: "signed-id-token" }), { status: 200, headers: { "content-type": "application/json" } }),
+    );
+    const app = express();
+    app.use(
+      "/auth",
+      createBrowserAuthRouter({
+        identityProvider,
+        operatorDirectory: new InMemoryOperatorDirectory([operator]),
+        browserAuthStore: store,
+        auditSink,
+        loadConfig: () => config,
+        fetchImpl: fetchImpl as typeof fetch,
+      }),
+    );
+
+    const login = await request(app).get("/auth/login");
+    const authorizeUrl = new URL(login.headers.location);
+    expectedNonce = authorizeUrl.searchParams.get("nonce") ?? "";
+    const realState = authorizeUrl.searchParams.get("state") ?? "";
+
+    // Deliberately no Cookie header at all on the callback request.
+    const callback = await request(app).get(`/auth/callback?code=authorization-code&state=${encodeURIComponent(realState)}`);
+
+    expect(callback.status).toBe(302);
+    expect(callback.headers.location).not.toContain("auth=");
+    expect(cookieValue(callback.headers["set-cookie"], "governance_session")).toBeTruthy();
+    const successEvent = auditSink.events.find((e) => e.eventType === "auth.success");
+    expect(successEvent?.detail).toMatchObject({ cookieBindingVerified: false });
+  });
+
+  it("fails closed when a governance_oauth cookie IS present but belongs to a different transaction", async () => {
     const operator = activeAdminOperator();
     const store = new InMemoryBrowserAuthStore();
     const auditSink = new InMemoryAuditSink();
@@ -265,14 +312,47 @@ describe("backend-owned Cognito browser auth", () => {
       }),
     );
 
-    // No governance_oauth cookie sent at all — simulates it expiring
-    // (10-minute default) during a slow first-time TOTP enrollment.
-    const callback = await request(app).get("/auth/callback?code=authorization-code&state=some-state");
+    // Two independent logins, so the store holds two real transactions.
+    const loginA = await request(app).get("/auth/login");
+    const stateA = new URL(loginA.headers.location).searchParams.get("state") ?? "";
+    const loginB = await request(app).get("/auth/login");
+    const cookieB = cookieValue(loginB.headers["set-cookie"], "governance_oauth");
+
+    // Present state A's callback, but with cookie B attached.
+    const callback = await request(app)
+      .get(`/auth/callback?code=authorization-code&state=${encodeURIComponent(stateA)}`)
+      .set("Cookie", `governance_oauth=${cookieB}`);
+
+    expect(callback.headers.location).toContain("auth=failed");
+    expect(fetchImpl).not.toHaveBeenCalled();
+    const failureEvent = auditSink.events.find((e) => e.eventType === "auth.failure");
+    expect(failureEvent?.reasonCode).toBe("OAUTH_COOKIE_BINDING_MISMATCH");
+  });
+
+  it("rejects a state that matches no known transaction at all", async () => {
+    const operator = activeAdminOperator();
+    const store = new InMemoryBrowserAuthStore();
+    const auditSink = new InMemoryAuditSink();
+    const fetchImpl = vi.fn();
+    const app = express();
+    app.use(
+      "/auth",
+      createBrowserAuthRouter({
+        identityProvider: { async verifyToken(): Promise<VerifiedTokenClaims> { throw new Error("must not verify"); } },
+        operatorDirectory: new InMemoryOperatorDirectory([operator]),
+        browserAuthStore: store,
+        auditSink,
+        loadConfig: () => config,
+        fetchImpl: fetchImpl as typeof fetch,
+      }),
+    );
+
+    const callback = await request(app).get("/auth/callback?code=authorization-code&state=never-issued-state");
 
     expect(callback.status).toBe(302);
     expect(callback.headers.location).toContain("auth=failed");
     expect(fetchImpl).not.toHaveBeenCalled();
     const failureEvent = auditSink.events.find((e) => e.eventType === "auth.failure");
-    expect(failureEvent?.reasonCode).toBe("OAUTH_TRANSACTION_COOKIE_MISSING_OR_EXPIRED");
+    expect(failureEvent?.reasonCode).toBe("OAUTH_STATE_INVALID");
   });
 });

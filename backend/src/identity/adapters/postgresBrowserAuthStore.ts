@@ -64,6 +64,27 @@ export class PostgresBrowserAuthStore implements BrowserAuthStore {
     };
   }
 
+  async consumeLoginTransactionByStateHash(stateHash: string): Promise<OAuthLoginTransactionRecord | undefined> {
+    const result = await this.db.query<OAuthRow>(
+      `UPDATE governance.oauth_login_transactions
+       SET consumed_at = now()
+       WHERE state_hash = $1 AND consumed_at IS NULL AND expires_at > now()
+       RETURNING transaction_hash, state_hash, nonce, code_verifier, return_path, created_at, expires_at`,
+      [stateHash],
+    );
+    const row = result.rows[0];
+    if (!row) return undefined;
+    return {
+      transactionHash: row.transaction_hash,
+      stateHash: row.state_hash,
+      nonce: row.nonce,
+      codeVerifier: row.code_verifier,
+      returnPath: row.return_path,
+      createdAt: new Date(row.created_at).toISOString(),
+      expiresAt: new Date(row.expires_at).toISOString(),
+    };
+  }
+
   async createSession(record: NewBrowserSession): Promise<void> {
     await this.db.query(
       `INSERT INTO governance.browser_sessions
