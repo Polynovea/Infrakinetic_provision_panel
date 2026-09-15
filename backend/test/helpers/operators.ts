@@ -42,6 +42,20 @@ export function disabledOperator(overrides: Partial<OperatorRecord> = {}): Opera
   };
 }
 
+/** The exact shape bootstrapOperatorDb.ts creates: disabled, mfaEnrolled=false, awaiting a first MFA'd login. */
+export function pendingMfaOperator(overrides: Partial<OperatorRecord> = {}): OperatorRecord {
+  return {
+    ...activeAdminOperator(),
+    operatorId: "66666666-6666-4666-8666-666666666666",
+    cognitoSub: "fixture-sub-pending-mfa",
+    status: "disabled",
+    mfaEnrolled: false,
+    disabledAt: "2026-09-15T00:00:00.000Z",
+    disabledReason: "Pending real TOTP MFA enrollment (bootstrap-created, not yet verified)",
+    ...overrides,
+  };
+}
+
 export function revokedOperator(overrides: Partial<OperatorRecord> = {}): OperatorRecord {
   return {
     ...activeViewerOperator(),

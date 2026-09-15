@@ -9,6 +9,11 @@ out/
 .env.local
 .env.*.local
 
+# Real operator bootstrap audit trail — contains real names/emails/subs
+# once used against a live deployment; the [] seed committed at
+# backend/config/operators.seed.json is a fixture, this is not.
+backend/config/operator_bootstrap_audit.jsonl
+
 *.log
 npm-debug.log*
 

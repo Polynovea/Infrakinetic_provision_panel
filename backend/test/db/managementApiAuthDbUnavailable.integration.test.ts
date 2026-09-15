@@ -51,6 +51,9 @@ describe("requireManagementApiAuth — Governance DB unavailable (fail-closed)",
       findByCognitoSub: async () => {
         throw new DatabaseUnavailableError("Missing required environment variable GOVERNANCE_DB_HOST.");
       },
+      activatePendingOperator: async () => {
+        throw new DatabaseUnavailableError("Missing required environment variable GOVERNANCE_DB_HOST.");
+      },
     };
     app.use(
       "/management/v1",

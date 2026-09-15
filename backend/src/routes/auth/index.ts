@@ -174,7 +174,23 @@ export function createBrowserAuthRouter(deps: BrowserAuthRouterDeps): Router {
         return;
       }
 
-      const operator = await deps.operatorDirectory.findByCognitoSub(claims.subject);
+      let operator = await deps.operatorDirectory.findByCognitoSub(claims.subject);
+      let selfActivatedPendingMfa = false;
+      // An operator bootstrapped pending their first MFA'd login lands as
+      // status='disabled', mfaEnrolled=false (bootstrapOperatorDb.ts) — never
+      // the shape a for-cause disable produces (that always starts from an
+      // operator who already had mfaEnrolled=true). On a pool with
+      // MfaConfiguration=ON, MFA is mandatory for every sign-in and Cognito
+      // enforces it itself; reaching this line at all means the ID token we
+      // just verified could not have been issued without it. So this exact
+      // login IS the MFA proof — no human/CLI step is needed to activate the
+      // operator, here or for any future one.
+      if (operator && operator.status === "disabled" && !operator.mfaEnrolled) {
+        await deps.operatorDirectory.activatePendingOperator(operator.operatorId);
+        operator = { ...operator, status: "active", mfaEnrolled: true, disabledAt: undefined, disabledReason: undefined };
+        selfActivatedPendingMfa = true;
+      }
+
       if (!operator || operator.status !== "active" || !operator.mfaEnrolled || !operatorPrivilegeIsConsistent(operator.roles, operator.scopes)) {
         await deps.auditSink.record({
           eventType: "auth.failure",
@@ -226,6 +242,7 @@ export function createBrowserAuthRouter(deps: BrowserAuthRouterDeps): Router {
         operatorSessionId: sessionId,
         route: req.originalUrl,
         method: req.method,
+        detail: selfActivatedPendingMfa ? { selfActivatedPendingMfa: true } : undefined,
       });
 
       res.redirect(302, `${config.frontendOrigin}${transaction.returnPath}`);

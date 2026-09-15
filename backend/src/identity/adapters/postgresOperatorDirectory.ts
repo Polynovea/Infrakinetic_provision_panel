@@ -71,4 +71,13 @@ export class PostgresOperatorDirectory implements OperatorDirectory {
     };
     return record;
   }
+
+  async activatePendingOperator(operatorId: string): Promise<void> {
+    await this.db.query(
+      `UPDATE governance.operators
+       SET status = 'active', mfa_enrolled = true, disabled_at = NULL, disabled_reason = NULL, updated_at = now()
+       WHERE operator_id = $1`,
+      [operatorId],
+    );
+  }
 }

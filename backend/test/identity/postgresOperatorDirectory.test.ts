@@ -59,4 +59,19 @@ describe("identity/adapters/postgresOperatorDirectory", () => {
     expect(record?.roles).toEqual([]);
     expect(record?.scopes).toEqual([]);
   });
+
+  it("activatePendingOperator flips a pending-MFA operator to active and clears the disabled fields", async () => {
+    db.public.none(`
+      INSERT INTO governance.operators (operator_id, cognito_sub, email, display_name, status, mfa_enrolled, created_at, updated_at, disabled_at, disabled_reason)
+      VALUES ('33333333-3333-4333-8333-333333333333', 'sub-pending-mfa', 'c@example.invalid', 'C', 'disabled', false, now(), now(), now(), 'Pending real TOTP MFA enrollment')
+    `);
+
+    await directory.activatePendingOperator("33333333-3333-4333-8333-333333333333");
+
+    const record = await directory.findByCognitoSub("sub-pending-mfa");
+    expect(record?.status).toBe("active");
+    expect(record?.mfaEnrolled).toBe(true);
+    expect(record?.disabledAt).toBeUndefined();
+    expect(record?.disabledReason).toBeUndefined();
+  });
 });

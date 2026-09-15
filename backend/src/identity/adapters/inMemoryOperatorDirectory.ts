@@ -16,4 +16,13 @@ export class InMemoryOperatorDirectory implements OperatorDirectory {
   async findByCognitoSub(cognitoSub: string): Promise<OperatorRecord | undefined> {
     return this.byCognitoSub.get(cognitoSub);
   }
+
+  async activatePendingOperator(operatorId: string): Promise<void> {
+    for (const [sub, op] of this.byCognitoSub) {
+      if (op.operatorId === operatorId) {
+        this.byCognitoSub.set(sub, { ...op, status: "active", mfaEnrolled: true, disabledAt: undefined, disabledReason: undefined });
+        return;
+      }
+    }
+  }
 }

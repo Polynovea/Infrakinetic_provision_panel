@@ -9,4 +9,12 @@ import type { OperatorRecord } from "./types.js";
 // depend on this interface.
 export interface OperatorDirectory {
   findByCognitoSub(cognitoSub: string): Promise<OperatorRecord | undefined>;
+  // Self-service activation for an operator bootstrapped pending their first
+  // MFA'd login (status 'disabled', mfaEnrolled false — see
+  // bootstrapOperatorDb.ts). Callers must only invoke this after already
+  // verifying that exact precondition themselves; the directory does not
+  // re-check it. See routes/auth/index.ts's callback handler for why this is
+  // safe: on a pool with MfaConfiguration=ON, a successfully verified ID
+  // token is itself proof MFA was completed.
+  activatePendingOperator(operatorId: string): Promise<void>;
 }

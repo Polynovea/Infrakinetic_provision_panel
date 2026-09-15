@@ -16,6 +16,14 @@
 // a human who has already created (or is creating) that identity directly
 // in the Cognito console. This script does not call AdminCreateUser.
 //
+// --mark-mfa-verified is a manual override / break-glass path, NOT the
+// normal way an operator gets activated day to day: routes/auth/index.ts's
+// callback handler self-activates a pending operator automatically on their
+// first successful real login (the pool's MfaConfiguration=ON makes a
+// verified ID token itself proof MFA was completed — no human/CLI step is
+// needed per operator). Reach for --mark-mfa-verified only if that
+// self-activation path needs to be bypassed for some reason.
+//
 // Usage:
 //   npx tsx scripts/bootstrapOperatorDb.ts \
 //     --cognito-sub <sub> --email <email> --display-name <name> \
