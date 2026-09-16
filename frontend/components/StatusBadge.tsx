@@ -13,6 +13,7 @@ const TONE_BY_VALUE: Record<string, "success" | "warning" | "danger" | "neutral"
   disabled: "danger",
   suspended: "danger",
   cancelled: "danger",
+  decommissioned: "danger",
   failed: "danger",
   platform: "neutral",
   customer: "neutral",

@@ -58,6 +58,12 @@ export interface TenantRegistryEntry {
   tenant_kind: "customer" | "platform";
   plan: string;
   status: string;
+  // Governance-owned platform-access fact (1A.8.1/1A.8.2), independent of
+  // the Billing-owned `status` above — surfaced by Infrakinetic's tenant
+  // registry read starting 1A.8.3/1A.8.5. Optional because it is a newer
+  // field than this interface's other columns; UI code must not assume a
+  // stale Infrakinetic deploy always sends it.
+  platform_access_state?: "active" | "suspended" | "decommissioned";
   trial_ends_at: string | null;
   industry: string | null;
   country: string;
