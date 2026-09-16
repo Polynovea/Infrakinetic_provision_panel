@@ -16,7 +16,7 @@ export interface ManagementApiCallParams {
   baseUrl: string;
   path: string;
   assertion: string;
-  method?: "GET" | "PUT";
+  method?: "GET" | "PUT" | "POST";
   /** JSON-serializable request body. 1A.6's mutation-specific fields only —
    * never identity/routing fields, which the assertion already carries
    * (see engineStateOperation.ts's header for why). */

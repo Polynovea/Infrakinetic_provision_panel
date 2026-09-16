@@ -1,11 +1,12 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { useOperatorSession } from "../../../lib/session";
 import { StatusBadge } from "../../../components/StatusBadge";
 import { Icon } from "../../../components/Icon";
 import { Drawer } from "../../../components/Drawer";
+import { ConfirmDialog } from "../../../components/ConfirmDialog";
 import { EmptyState, ErrorState } from "../../../components/States";
 import { SkeletonTableRows } from "../../../components/Skeleton";
 
@@ -19,6 +20,8 @@ interface TenantRegistryUser {
   last_active_at: string | null;
 }
 
+type PlatformAccessState = "active" | "suspended" | "decommissioned";
+
 interface TenantRegistryEntry {
   id: string;
   name: string;
@@ -26,6 +29,10 @@ interface TenantRegistryEntry {
   tenant_kind: "customer" | "platform";
   plan: string;
   status: string;
+  // 1A.8.5 — Governance-owned platform-access fact, independent of the
+  // Billing-owned `status` above (scoping doc §3.1/§3.15). Optional:
+  // older Infrakinetic deploys may not send it yet.
+  platform_access_state?: PlatformAccessState;
   trial_ends_at: string | null;
   industry: string | null;
   country: string;
@@ -34,6 +41,26 @@ interface TenantRegistryEntry {
   storage_limit_mb: number | null;
   created_at: string;
   updated_at: string;
+}
+
+interface ManagementOperationWarning {
+  stage: string;
+  message: string;
+}
+
+interface ManagementOperationBody {
+  operation: {
+    operationId: string;
+    status: string;
+    result?: {
+      tenantId?: string;
+      lifecycleOutcome?: string;
+      warnings?: ManagementOperationWarning[];
+      previousPlatformAccessState?: string | null;
+      resultingPlatformAccessState?: string | null;
+    };
+  };
+  replay: boolean;
 }
 
 function formatDate(iso: string): string {
@@ -47,11 +74,12 @@ function uniqueSorted(values: (string | null | undefined)[]): string[] {
 const ALL = "__all__";
 
 export default function TenantsPage() {
-  const { request } = useOperatorSession();
+  const { request, operator } = useOperatorSession();
   const [tenants, setTenants] = useState<TenantRegistryEntry[] | null>(null);
   const [observedAt, setObservedAt] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<TenantRegistryEntry | null>(null);
+  const [showWizard, setShowWizard] = useState(false);
 
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState(ALL);
@@ -59,13 +87,11 @@ export default function TenantsPage() {
   const [kindFilter, setKindFilter] = useState(ALL);
   const [countryFilter, setCountryFilter] = useState(ALL);
 
-  useEffect(() => {
-    let cancelled = false;
+  const loadTenants = useCallback(() => {
     setError(null);
-    request("/management/v1/tenants")
+    return request("/management/v1/tenants")
       .then(async (res) => {
         const body = await res.json();
-        if (cancelled) return;
         if (!res.ok) {
           setError("Could not load tenants.");
           return;
@@ -73,10 +99,20 @@ export default function TenantsPage() {
         setTenants(body.tenants);
         setObservedAt(body.observedAt);
       })
-      .catch(() => !cancelled && setError("Could not load tenants."));
+      .catch(() => setError("Could not load tenants."));
+  }, [request]);
+
+  useEffect(() => {
+    let cancelled = false;
+    loadTenants().then(() => {
+      if (cancelled) return;
+    });
     return () => {
       cancelled = true;
     };
+    // loadTenants is stable across renders (memoized on `request`, which is
+    // itself stable) — only ever needs to run on mount / when request changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [request]);
 
   const counts = useMemo(() => {
@@ -117,11 +153,20 @@ export default function TenantsPage() {
     setCountryFilter(ALL);
   }
 
+  const canCommission = operator?.scopes.includes("tenants.commission") ?? false;
+
   return (
     <>
-      <div className="page-header">
-        <h1 className="text-display">Tenants</h1>
-        <p>{observedAt ? `Last observed ${formatDate(observedAt)}` : "The platform's tenant registry."}</p>
+      <div className="page-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: "0.75rem" }}>
+        <div>
+          <h1 className="text-display">Tenants</h1>
+          <p>{observedAt ? `Last observed ${formatDate(observedAt)}` : "The platform's tenant registry."}</p>
+        </div>
+        {canCommission && (
+          <button className="btn btn-primary" onClick={() => setShowWizard(true)}>
+            <Icon name="add_business" size="sm" /> Commission tenant
+          </button>
+        )}
       </div>
 
       {counts && (
@@ -263,24 +308,56 @@ export default function TenantsPage() {
         )}
       </div>
 
-      {selected && <TenantDetailDrawer tenant={selected} request={request} onClose={() => setSelected(null)} />}
+      {selected && (
+        <TenantDetailDrawer
+          tenant={selected}
+          request={request}
+          operatorScopes={operator?.scopes ?? []}
+          onClose={() => setSelected(null)}
+          onMutated={loadTenants}
+        />
+      )}
+      {showWizard && (
+        <CommissionWizard
+          request={request}
+          onClose={() => setShowWizard(false)}
+          onCommissioned={loadTenants}
+        />
+      )}
     </>
   );
 }
 
+const LIFECYCLE_ACTION_LABEL: Record<"suspend" | "resume" | "decommission", string> = {
+  suspend: "Suspend",
+  resume: "Resume",
+  decommission: "Decommission",
+};
+
 function TenantDetailDrawer({
-  tenant,
+  tenant: initialTenant,
   request,
+  operatorScopes,
   onClose,
+  onMutated,
 }: {
   tenant: TenantRegistryEntry;
   request: (path: string, init?: RequestInit) => Promise<Response>;
+  operatorScopes: readonly string[];
   onClose: () => void;
+  onMutated: () => void;
 }) {
+  const [tenant, setTenant] = useState(initialTenant);
   const [users, setUsers] = useState<TenantRegistryUser[] | null>(null);
   const [usersObservedAt, setUsersObservedAt] = useState<string | null>(null);
   const [usersError, setUsersError] = useState<string | null>(null);
   const [showTechnical, setShowTechnical] = useState(false);
+
+  const [pendingAction, setPendingAction] = useState<"suspend" | "resume" | "decommission" | null>(null);
+  const [reason, setReason] = useState("");
+  const [actionBusy, setActionBusy] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [lastActionStatus, setLastActionStatus] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -303,12 +380,113 @@ function TenantDetailDrawer({
     };
   }, [request, tenant.id]);
 
+  async function refetchTenant() {
+    try {
+      const res = await request(`/management/v1/tenants/${encodeURIComponent(tenant.id)}`);
+      if (res.ok) {
+        const body = await res.json();
+        setTenant(body.tenant);
+      }
+    } catch {
+      // Best-effort refresh — the drawer already shows the last-known
+      // state, and the parent list refresh (onMutated) is the primary
+      // signal the mutation happened.
+    }
+  }
+
+  async function runAction(action: "suspend" | "resume" | "decommission") {
+    if (reason.trim() === "") {
+      setActionError("A reason is required.");
+      return;
+    }
+    setActionBusy(true);
+    setActionError(null);
+    try {
+      const res = await request(`/management/v1/tenants/${encodeURIComponent(tenant.id)}/${action}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ reason, idempotencyKey: crypto.randomUUID() }),
+      });
+      const body = (await res.json()) as ManagementOperationBody & { error?: string; message?: string };
+      if (!res.ok) {
+        setActionError(body.message ?? body.error ?? "The request failed.");
+        return;
+      }
+      setLastActionStatus(body.operation.status);
+      await refetchTenant();
+      onMutated();
+      setPendingAction(null);
+      setReason("");
+    } catch {
+      setActionError("The request failed.");
+    } finally {
+      setActionBusy(false);
+    }
+  }
+
+  const canSuspend = operatorScopes.includes("tenants.suspend");
+  const canResume = operatorScopes.includes("tenants.resume");
+  const canDecommission = operatorScopes.includes("tenants.decommission");
+  const platformState = tenant.platform_access_state;
+  const isPlatformTenant = tenant.tenant_kind === "platform";
+  const hasAnyLifecycleScope = canSuspend || canResume || canDecommission;
+
   return (
     <Drawer title={tenant.name} subtitle={tenant.slug} onClose={onClose}>
       <div style={{ display: "flex", gap: "0.4rem", marginBottom: "1rem" }}>
         <StatusBadge value={tenant.tenant_kind} />
-        <StatusBadge value={tenant.status} />
       </div>
+
+      {/* Two independently-labeled, independently-owned facts — never
+          merged into one status pill (scoping doc §9). A tenant Billing
+          has independently paused/cancelled must not read as a Governance
+          suspension, and vice versa. */}
+      <div className="card" style={{ marginBottom: "1rem", display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.75rem" }}>
+        <div>
+          <div style={{ fontSize: "0.78rem", color: "var(--text-muted)", marginBottom: "0.25rem" }}>Platform access (Governance)</div>
+          {platformState ? <StatusBadge value={platformState} /> : <span className="overlay-note">Not reported</span>}
+        </div>
+        <div>
+          <div style={{ fontSize: "0.78rem", color: "var(--text-muted)", marginBottom: "0.25rem" }}>Commercial status (Billing)</div>
+          <StatusBadge value={tenant.status} />
+        </div>
+      </div>
+
+      {isPlatformTenant && (
+        <p className="overlay-note" style={{ marginBottom: "1rem" }}>
+          The reserved platform tenant has no lifecycle controls.
+        </p>
+      )}
+
+      {!isPlatformTenant && platformState && hasAnyLifecycleScope && (
+        <div className="card" style={{ marginBottom: "1rem" }}>
+          <h3 className="text-subhead" style={{ marginBottom: "0.6rem" }}>
+            Lifecycle actions
+          </h3>
+          <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+            {platformState === "active" && canSuspend && (
+              <button className="btn" onClick={() => setPendingAction("suspend")}>
+                Suspend
+              </button>
+            )}
+            {platformState === "suspended" && canResume && (
+              <button className="btn btn-primary" onClick={() => setPendingAction("resume")}>
+                Resume
+              </button>
+            )}
+            {platformState !== "decommissioned" && canDecommission && (
+              <button className="btn btn-danger" onClick={() => setPendingAction("decommission")}>
+                Decommission
+              </button>
+            )}
+          </div>
+          {lastActionStatus && (
+            <p style={{ marginTop: "0.6rem", fontSize: "0.85rem", display: "flex", gap: "0.4rem", alignItems: "center" }}>
+              Last action: <StatusBadge value={lastActionStatus} />
+            </p>
+          )}
+        </div>
+      )}
 
       <h3 className="text-subhead" style={{ marginBottom: "0.6rem" }}>
         Overview
@@ -409,6 +587,310 @@ function TenantDetailDrawer({
           </dl>
         )}
       </div>
+
+      {pendingAction && (
+        <ConfirmDialog
+          title={`${LIFECYCLE_ACTION_LABEL[pendingAction]} ${tenant.name}?`}
+          description={
+            pendingAction === "decommission"
+              ? "This disables platform access. It does not cancel billing. Tenant data and history are retained."
+              : pendingAction === "suspend"
+                ? "This disables platform access for every user in this tenant. It does not affect billing."
+                : "This restores platform access. Billing/commercial status is unaffected."
+          }
+          confirmLabel={LIFECYCLE_ACTION_LABEL[pendingAction]}
+          danger={pendingAction !== "resume"}
+          busy={actionBusy}
+          onCancel={() => {
+            setPendingAction(null);
+            setReason("");
+            setActionError(null);
+          }}
+          onConfirm={() => runAction(pendingAction)}
+        >
+          <div className="field">
+            <label>Reason</label>
+            <textarea value={reason} onChange={(e) => setReason(e.target.value)} rows={2} placeholder="Required" />
+          </div>
+          {actionError && <ErrorState label={actionError} />}
+        </ConfirmDialog>
+      )}
     </Drawer>
+  );
+}
+
+type AccountType = "demo" | "live";
+
+interface WizardState {
+  name: string;
+  slug: string;
+  industry: string;
+  country: string;
+  timezone: string;
+  plan: string;
+  accountType: AccountType;
+  trialDays: string;
+  sendInvite: boolean;
+  adminName: string;
+  adminEmail: string;
+  reason: string;
+}
+
+const INITIAL_WIZARD_STATE: WizardState = {
+  name: "",
+  slug: "",
+  industry: "",
+  country: "IN",
+  timezone: "Asia/Kolkata",
+  plan: "",
+  accountType: "demo",
+  trialDays: "14",
+  sendInvite: true,
+  adminName: "",
+  adminEmail: "",
+  reason: "",
+};
+
+const WIZARD_STEPS = ["Organisation", "Commercial bootstrap", "Initial administrator", "Review", "Execution"] as const;
+
+function CommissionWizard({
+  request,
+  onClose,
+  onCommissioned,
+}: {
+  request: (path: string, init?: RequestInit) => Promise<Response>;
+  onClose: () => void;
+  onCommissioned: () => void;
+}) {
+  const [step, setStep] = useState(0);
+  const [state, setState] = useState<WizardState>(INITIAL_WIZARD_STATE);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<{ status: string; tenantId: string; warnings: ManagementOperationWarning[] } | null>(null);
+
+  function update<K extends keyof WizardState>(key: K, value: WizardState[K]) {
+    setState((s) => ({ ...s, [key]: value }));
+  }
+
+  const canProceedFromOrg = state.name.trim() !== "";
+  const canProceedFromCommercial =
+    state.plan.trim() !== "" && (state.accountType === "live" || (state.trialDays.trim() !== "" && Number(state.trialDays) >= 0));
+  const canProceedFromAdmin = state.sendInvite ? state.adminName.trim() !== "" && state.adminEmail.trim() !== "" : true;
+  const canExecute = state.reason.trim() !== "";
+
+  async function submit() {
+    setBusy(true);
+    setError(null);
+    try {
+      const hasAdminDetails = state.adminName.trim() !== "" && state.adminEmail.trim() !== "";
+      const res = await request("/management/v1/tenants/commission", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          idempotencyKey: crypto.randomUUID(),
+          name: state.name,
+          slug: state.slug.trim() || undefined,
+          plan: state.plan,
+          industry: state.industry.trim() || undefined,
+          country: state.country.trim() || undefined,
+          timezone: state.timezone.trim() || undefined,
+          accountType: state.accountType,
+          trialDays: state.accountType === "demo" ? Number(state.trialDays) : undefined,
+          sendInvite: state.sendInvite,
+          initialAdmin: state.sendInvite || hasAdminDetails ? { name: state.adminName, email: state.adminEmail } : undefined,
+          reason: state.reason,
+        }),
+      });
+      const body = (await res.json()) as ManagementOperationBody & { error?: string; message?: string };
+      if (!res.ok) {
+        setError(body.message ?? body.error ?? "Commission failed.");
+        return;
+      }
+      setResult({
+        status: body.operation.status,
+        tenantId: body.operation.result?.tenantId ?? "",
+        warnings: body.operation.result?.warnings ?? [],
+      });
+      setStep(4);
+      onCommissioned();
+    } catch {
+      setError("Commission failed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="confirm-backdrop" onClick={result ? onClose : undefined}>
+      <div
+        className="confirm-dialog"
+        style={{ maxWidth: "560px", width: "100%" }}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Commission tenant"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <h2 className="text-subhead">Commission tenant</h2>
+        <p style={{ fontSize: "0.8rem", color: "var(--text-muted)", margin: "0.3rem 0 1rem" }}>
+          Step {step + 1} of {WIZARD_STEPS.length}: {WIZARD_STEPS[step]}
+        </p>
+
+        {step === 0 && (
+          <>
+            <div className="field">
+              <label>Name</label>
+              <input value={state.name} onChange={(e) => update("name", e.target.value)} autoFocus />
+            </div>
+            <div className="field">
+              <label>Slug</label>
+              <input value={state.slug} onChange={(e) => update("slug", e.target.value)} placeholder="Auto-generated from name if left blank" />
+            </div>
+            <div className="field">
+              <label>Industry</label>
+              <input value={state.industry} onChange={(e) => update("industry", e.target.value)} />
+            </div>
+            <div className="field">
+              <label>Country</label>
+              <input value={state.country} onChange={(e) => update("country", e.target.value)} />
+            </div>
+            <div className="field">
+              <label>Timezone</label>
+              <input value={state.timezone} onChange={(e) => update("timezone", e.target.value)} />
+            </div>
+          </>
+        )}
+
+        {step === 1 && (
+          <>
+            <div className="field">
+              <label>Plan</label>
+              <input value={state.plan} onChange={(e) => update("plan", e.target.value)} />
+            </div>
+            <div className="field">
+              <label>Account type</label>
+              <select value={state.accountType} onChange={(e) => update("accountType", e.target.value as AccountType)}>
+                <option value="demo">Demo (trial)</option>
+                <option value="live">Live</option>
+              </select>
+            </div>
+            {state.accountType === "demo" && (
+              <div className="field">
+                <label>Trial days</label>
+                <input type="number" min={0} value={state.trialDays} onChange={(e) => update("trialDays", e.target.value)} />
+                <p className="field-hint">0 means an indefinite trial (no expiry) — not immediate expiry.</p>
+              </div>
+            )}
+          </>
+        )}
+
+        {step === 2 && (
+          <>
+            <div className="field">
+              <label>
+                <input type="checkbox" checked={state.sendInvite} onChange={(e) => update("sendInvite", e.target.checked)} /> Send invite now
+              </label>
+            </div>
+            {!state.sendInvite && (
+              <p className="field-hint" style={{ marginBottom: "0.75rem" }}>
+                The admin can be invited later. Their details below are optional and, if supplied, are recorded now for that later step.
+              </p>
+            )}
+            <div className="field">
+              <label>Admin name{state.sendInvite ? "" : " (optional)"}</label>
+              <input value={state.adminName} onChange={(e) => update("adminName", e.target.value)} />
+            </div>
+            <div className="field">
+              <label>Admin email{state.sendInvite ? "" : " (optional)"}</label>
+              <input value={state.adminEmail} onChange={(e) => update("adminEmail", e.target.value)} />
+            </div>
+          </>
+        )}
+
+        {step === 3 && (
+          <>
+            <dl style={{ fontSize: "0.85rem", marginBottom: "1rem" }}>
+              <dt style={{ color: "var(--text-muted)" }}>Name</dt>
+              <dd style={{ margin: "0 0 0.5rem" }}>{state.name}</dd>
+              <dt style={{ color: "var(--text-muted)" }}>Plan</dt>
+              <dd style={{ margin: "0 0 0.5rem" }}>
+                {state.plan} ({state.accountType})
+              </dd>
+              {state.accountType === "demo" && (
+                <>
+                  <dt style={{ color: "var(--text-muted)" }}>Trial</dt>
+                  <dd style={{ margin: "0 0 0.5rem" }}>{Number(state.trialDays) === 0 ? "Indefinite (no expiry)" : `${state.trialDays} days`}</dd>
+                </>
+              )}
+              <dt style={{ color: "var(--text-muted)" }}>Administrator</dt>
+              <dd style={{ margin: "0 0 0.5rem" }}>
+                {state.adminName || state.adminEmail ? `${state.adminName} <${state.adminEmail}>` : "None supplied"}
+                {" — "}
+                {state.sendInvite ? "invited immediately" : "pending (invite later)"}
+              </dd>
+            </dl>
+            <div className="field">
+              <label>Reason</label>
+              <textarea value={state.reason} onChange={(e) => update("reason", e.target.value)} rows={2} placeholder="Required" />
+            </div>
+            {error && <ErrorState label={error} />}
+          </>
+        )}
+
+        {step === 4 && result && (
+          <div>
+            <p style={{ display: "flex", gap: "0.4rem", alignItems: "center" }}>
+              Commission <StatusBadge value={result.status} />
+            </p>
+            {result.tenantId && (
+              <p style={{ fontFamily: "monospace", fontSize: "0.8rem", color: "var(--text-muted)" }}>Tenant ID: {result.tenantId}</p>
+            )}
+            {result.warnings.length > 0 && (
+              <>
+                <p className="field-hint" style={{ marginTop: "0.75rem" }}>Warnings:</p>
+                <ul style={{ fontSize: "0.85rem", paddingLeft: "1.2rem" }}>
+                  {result.warnings.map((w, i) => (
+                    <li key={i}>
+                      <strong>{w.stage}:</strong> {w.message}
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )}
+          </div>
+        )}
+
+        <div className="confirm-dialog-actions">
+          {step < 4 && (
+            <button className="btn" onClick={onClose} disabled={busy}>
+              Cancel
+            </button>
+          )}
+          {step > 0 && step < 4 && (
+            <button className="btn" onClick={() => setStep((s) => s - 1)} disabled={busy}>
+              Back
+            </button>
+          )}
+          {step < 3 && (
+            <button
+              className="btn btn-primary"
+              disabled={(step === 0 && !canProceedFromOrg) || (step === 1 && !canProceedFromCommercial) || (step === 2 && !canProceedFromAdmin)}
+              onClick={() => setStep((s) => s + 1)}
+            >
+              Next
+            </button>
+          )}
+          {step === 3 && (
+            <button className="btn btn-primary" disabled={!canExecute || busy} onClick={submit}>
+              {busy ? "Commissioning…" : "Commission"}
+            </button>
+          )}
+          {step === 4 && (
+            <button className="btn btn-primary" onClick={onClose}>
+              Done
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
   );
 }

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { Router, type ErrorRequestHandler } from "express";
 
 import type { AuditSink } from "../../identity/auditSink.js";
@@ -24,6 +25,14 @@ import { ManagementOperationError, OperationNotFoundError } from "../../manageme
 import { listTenantRegistry, getTenantRegistryEntry, getTenantRegistryUsers, UnknownTenantError } from "../../management/operations/tenantRegistryQuery.js";
 import { listEngineCatalog } from "../../management/operations/engineCatalogQuery.js";
 import { isOperationStatus, type OperationStatus } from "../../management/operations/lifecycle.js";
+import {
+  requestTenantCommission,
+  requestTenantSuspend,
+  requestTenantResume,
+  requestTenantDecommission,
+  MissingTenantIdentifierError,
+} from "../../management/operations/tenantLifecycleOperation.js";
+import type { CommissionedTenantsRepository } from "../../management/operations/commissionedTenants.js";
 
 export interface ManagementRouterDeps {
   identityProvider: IdentityProvider;
@@ -40,6 +49,10 @@ export interface ManagementRouterDeps {
   getManagementSigningKeys: () => Promise<ManagementSigningKeySet>;
   loadTransportConfig: () => ManagementTransportConfig;
   infrakineticBaseUrl: string;
+  // 1A.8.4 — the desired-tenant-lifecycle projection (governance.
+  // commissioned_tenants), read/written by the commission/suspend/resume/
+  // decommission routes below.
+  commissionedTenants: CommissionedTenantsRepository;
 }
 
 // 1A.2 route integration points (whoami/session/audit) prove the operator
@@ -477,6 +490,162 @@ export function createManagementRouter(deps: ManagementRouterDeps): Router {
       }
     },
   );
+
+  // 1A.8.4 — the real tenant-commissioning vertical, mirroring the engine-
+  // state vertical's own shape above (requireScope, R2 reason requirement,
+  // idempotencyKey requirement, ManagementOperationError/DatabaseUnavailableError
+  // mapping). commissionRequestId is Governance-generated here (not
+  // caller-supplied) — the operator's browser has no legitimate reason to
+  // mint its own commission identity.
+  router.post(
+    "/tenants/commission",
+    requireScope("tenants.commission", deps.auditSink),
+    async (req, res, next) => {
+      try {
+        const ctx = req.operatorContext;
+        if (!ctx) {
+          res.status(403).json({ error: "NOT_AUTHENTICATED" });
+          return;
+        }
+        const body = (req.body ?? {}) as Record<string, unknown>;
+        if (typeof body.idempotencyKey !== "string" || body.idempotencyKey.trim() === "") {
+          res.status(400).json({ error: "IDEMPOTENCY_KEY_REQUIRED" });
+          return;
+        }
+        if (typeof body.reason !== "string" || body.reason.trim() === "") {
+          res.status(400).json({ error: "REASON_REQUIRED" });
+          return;
+        }
+        if (typeof body.name !== "string" || body.name.trim() === "") {
+          res.status(400).json({ error: "NAME_REQUIRED" });
+          return;
+        }
+        if (typeof body.plan !== "string" || body.plan.trim() === "") {
+          res.status(400).json({ error: "PLAN_REQUIRED" });
+          return;
+        }
+        if (body.accountType !== "demo" && body.accountType !== "live") {
+          res.status(400).json({ error: "INVALID_ACCOUNT_TYPE" });
+          return;
+        }
+        const sendInvite = body.sendInvite !== false;
+        const initialAdmin = body.initialAdmin as { name?: string; email?: string } | undefined;
+        if (sendInvite && (!initialAdmin?.name || !initialAdmin?.email)) {
+          res.status(400).json({ error: "INITIAL_ADMIN_REQUIRED" });
+          return;
+        }
+
+        const signingKeys = await deps.getManagementSigningKeys();
+        const transportConfig = deps.loadTransportConfig();
+
+        const result = await requestTenantCommission(
+          { ledger: deps.ledger, commissionedTenants: deps.commissionedTenants, signingKeys, transportConfig, infrakineticBaseUrl: deps.infrakineticBaseUrl },
+          {
+            idempotencyKey: body.idempotencyKey,
+            operatorId: ctx.operatorId,
+            operatorSessionId: ctx.operatorSessionId,
+            operatorRoles: ctx.roles,
+            operatorGrantedScopes: ctx.scopes,
+            commissionRequestId: randomUUID(),
+            name: body.name,
+            slug: typeof body.slug === "string" ? body.slug : undefined,
+            plan: body.plan,
+            industry: typeof body.industry === "string" ? body.industry : undefined,
+            country: typeof body.country === "string" ? body.country : undefined,
+            timezone: typeof body.timezone === "string" ? body.timezone : undefined,
+            accountType: body.accountType,
+            trialDays: typeof body.trialDays === "number" ? body.trialDays : undefined,
+            initialAdmin: sendInvite || initialAdmin ? (initialAdmin as { name: string; email: string }) : undefined,
+            sendInvite,
+            reason: body.reason,
+            correlationId: ctx.correlationId,
+          },
+        );
+        res.status(200).json({ operation: result.operation, replay: result.replay });
+      } catch (err) {
+        if (err instanceof UnexpectedManagementApiResponseError) {
+          res.status(502).json({ error: "MANAGEMENT_API_UPSTREAM_ERROR", message: err.message });
+          return;
+        }
+        if (err instanceof ManagementOperationError) {
+          res.status(err.httpStatus).json({ error: err.code, message: err.message });
+          return;
+        }
+        if (err instanceof DatabaseUnavailableError) {
+          res.status(err.httpStatus).json({ error: err.code, message: err.message });
+          return;
+        }
+        next(err);
+      }
+    },
+  );
+
+  const TENANT_TRANSITION_ROUTES = [
+    { segment: "suspend", scope: "tenants.suspend", fn: requestTenantSuspend },
+    { segment: "resume", scope: "tenants.resume", fn: requestTenantResume },
+    { segment: "decommission", scope: "tenants.decommission", fn: requestTenantDecommission },
+  ] as const;
+
+  for (const { segment, scope, fn } of TENANT_TRANSITION_ROUTES) {
+    router.post(
+      `/tenants/:tenantId/${segment}`,
+      requireScope(scope, deps.auditSink),
+      async (req, res, next) => {
+        try {
+          const ctx = req.operatorContext;
+          if (!ctx) {
+            res.status(403).json({ error: "NOT_AUTHENTICATED" });
+            return;
+          }
+          const body = (req.body ?? {}) as Record<string, unknown>;
+          if (typeof body.idempotencyKey !== "string" || body.idempotencyKey.trim() === "") {
+            res.status(400).json({ error: "IDEMPOTENCY_KEY_REQUIRED" });
+            return;
+          }
+          if (typeof body.reason !== "string" || body.reason.trim() === "") {
+            res.status(400).json({ error: "REASON_REQUIRED" });
+            return;
+          }
+
+          const signingKeys = await deps.getManagementSigningKeys();
+          const transportConfig = deps.loadTransportConfig();
+
+          const result = await fn(
+            { ledger: deps.ledger, commissionedTenants: deps.commissionedTenants, signingKeys, transportConfig, infrakineticBaseUrl: deps.infrakineticBaseUrl },
+            {
+              idempotencyKey: body.idempotencyKey,
+              operatorId: ctx.operatorId,
+              operatorSessionId: ctx.operatorSessionId,
+              operatorRoles: ctx.roles,
+              operatorGrantedScopes: ctx.scopes,
+              tenantId: req.params.tenantId,
+              reason: body.reason,
+              correlationId: ctx.correlationId,
+            },
+          );
+          res.status(200).json({ operation: result.operation, replay: result.replay });
+        } catch (err) {
+          if (err instanceof MissingTenantIdentifierError) {
+            res.status(400).json({ error: "TENANT_ID_REQUIRED", message: err.message });
+            return;
+          }
+          if (err instanceof UnexpectedManagementApiResponseError) {
+            res.status(502).json({ error: "MANAGEMENT_API_UPSTREAM_ERROR", message: err.message });
+            return;
+          }
+          if (err instanceof ManagementOperationError) {
+            res.status(err.httpStatus).json({ error: err.code, message: err.message });
+            return;
+          }
+          if (err instanceof DatabaseUnavailableError) {
+            res.status(err.httpStatus).json({ error: err.code, message: err.message });
+            return;
+          }
+          next(err);
+        }
+      },
+    );
+  }
 
   // Express 4 does not auto-forward rejected async promises. Async handlers
   // above explicitly call next(err), and this router-local typed boundary
