@@ -43,10 +43,47 @@ describe("management/managementAssertionIssuer", () => {
     expect(payload.scopes).toEqual(["engines.read"]);
     expect(payload.actor_tenant_id).toBe(GOVERNANCE_ACTOR_IDENTITY);
     expect(payload.target_engine).toBe("module_billing");
+    expect(payload.target_resource_type).toBe("engine");
+    expect(payload.target_resource_id).toBe("module_billing");
     expect(payload.requested_action).toBe("engines.catalog.read");
     expect(typeof payload.jti).toBe("string");
     expect(typeof payload.correlation_id).toBe("string");
     expect(payload.target_tenant_id).toBeUndefined();
+  });
+
+  it("mints a generic tenant target without inventing target_engine", async () => {
+    const keys = await buildTestKeySet();
+    const token = await mintManagementAssertion(keys, CONFIG, {
+      ...BASE_PARAMS,
+      operatorGrantedScopes: ["tenants.suspend"],
+      requestedScopes: ["tenants.suspend"],
+      targetEngine: undefined,
+      targetResourceType: "tenant",
+      targetResourceId: "11111111-1111-4111-8111-111111111111",
+      requestedAction: "tenant.suspend",
+    });
+    const publicKey = await importJWK(keys.publicJwks[0], "RS256");
+    const { payload } = await jwtVerify(token, publicKey, { algorithms: ["RS256"] });
+    expect(payload.target_engine).toBeUndefined();
+    expect(payload.target_resource_type).toBe("tenant");
+    expect(payload.target_resource_id).toBe("11111111-1111-4111-8111-111111111111");
+  });
+
+  it("rejects missing, partial, or conflicting management target addresses", async () => {
+    const keys = await buildTestKeySet();
+    await expect(
+      mintManagementAssertion(keys, CONFIG, { ...BASE_PARAMS, targetEngine: undefined }),
+    ).rejects.toThrow(/address is required/);
+    await expect(
+      mintManagementAssertion(keys, CONFIG, { ...BASE_PARAMS, targetEngine: undefined, targetResourceType: "tenant" }),
+    ).rejects.toThrow(/must be supplied together/);
+    await expect(
+      mintManagementAssertion(keys, CONFIG, {
+        ...BASE_PARAMS,
+        targetResourceType: "tenant",
+        targetResourceId: "tenant-x",
+      }),
+    ).rejects.toThrow(/conflicts/);
   });
 
   it("carries target_tenant_id only when explicitly provided", async () => {

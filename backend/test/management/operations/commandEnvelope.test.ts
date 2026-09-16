@@ -34,6 +34,41 @@ describe("management/operations/commandEnvelope", () => {
     expect(() => validateCommandEnvelope(buildCommandEnvelope(validParams()))).not.toThrow();
   });
 
+  it("builds and validates a non-engine generic target without fake target_engine", () => {
+    const envelope = buildCommandEnvelope({
+      ...validParams(),
+      targetEngine: undefined,
+      targetResourceType: "commission_request",
+      targetResourceId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+      requestedAction: "tenant.commission",
+    });
+    expect(envelope.target_engine).toBeUndefined();
+    expect(envelope.target_resource_type).toBe("commission_request");
+    expect(envelope.target_resource_id).toBe("dddddddd-dddd-4ddd-8ddd-dddddddddddd");
+    expect(() => validateCommandEnvelope(envelope)).not.toThrow();
+  });
+
+  it("preserves target_engine and projects it to the generic engine address", () => {
+    const envelope = buildCommandEnvelope(validParams());
+    expect(envelope.target_engine).toBe("module_ai");
+    expect(envelope.target_resource_type).toBe("engine");
+    expect(envelope.target_resource_id).toBe("module_ai");
+  });
+
+  it("rejects missing/partial/conflicting target addresses", () => {
+    expect(() => buildCommandEnvelope({ ...validParams(), targetEngine: undefined })).toThrow(InvalidCommandEnvelopeError);
+    expect(() => buildCommandEnvelope({
+      ...validParams(),
+      targetEngine: undefined,
+      targetResourceType: "tenant",
+    })).toThrow(InvalidCommandEnvelopeError);
+    expect(() => validateCommandEnvelope({
+      ...buildCommandEnvelope(validParams()),
+      target_resource_type: "tenant",
+      target_resource_id: "tenant-x",
+    })).toThrow(InvalidCommandEnvelopeError);
+  });
+
   it("rejects a wrong contract string", () => {
     const envelope = { ...buildCommandEnvelope(validParams()), contract: "something-else.v1" };
     expect(() => validateCommandEnvelope(envelope)).toThrow(InvalidCommandEnvelopeError);

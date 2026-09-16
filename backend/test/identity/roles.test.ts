@@ -18,6 +18,14 @@ describe("role/scope catalog", () => {
     expect(new Set(ROLE_SCOPE_CEILING.break_glass)).toEqual(new Set(SCOPES));
   });
 
+  it("gives provisioning_operator the distinct tenant resume/decommission scopes", () => {
+    expect(ROLE_SCOPE_CEILING.provisioning_operator).toEqual(
+      expect.arrayContaining(["tenants.commission", "tenants.suspend", "tenants.resume", "tenants.decommission"]),
+    );
+    expect(isScope("tenants.resume")).toBe(true);
+    expect(isScope("tenants.decommission")).toBe(true);
+  });
+
   it("isRole/isScope reject unknown values", () => {
     expect(isRole("platform_admin")).toBe(true);
     expect(isRole("super_root_god_mode")).toBe(false);

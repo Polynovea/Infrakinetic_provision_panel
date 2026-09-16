@@ -6,6 +6,7 @@ import {
   MissingIdempotencyKeyError,
   InvalidRiskClassError,
   MissingReasonError,
+  InvalidManagementTargetError,
   IdempotencyConflictError,
   InvalidLifecycleTransitionError,
   OperationNotFoundError,
@@ -69,6 +70,44 @@ describe("management/operations/managementOperationLedger", () => {
     expect(operation.requestedAction).toBe("platform.engine-state.set");
     expect(operation.targetEngine).toBe("module_ai");
     expect(operation.contractVersion).toBe("platform-management.operation.v1");
+  });
+
+  it("creates a generic tenant-target operation with no fake engine and retains safe replay/conflict semantics", async () => {
+    const params = baseParams({
+      idempotencyKey: "tenant-generic-key",
+      requestedAction: "tenant.suspend",
+      targetEngine: undefined,
+      targetResourceType: "tenant",
+      targetResourceId: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+      targetTenantId: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+      payload: { reasonCode: "operator-request" },
+    });
+    const first = await ledger.createOrReplayOperation(params);
+    expect(first.operation.targetEngine).toBeUndefined();
+    expect(first.operation.targetResourceType).toBe("tenant");
+    expect(first.operation.targetResourceId).toBe("cccccccc-cccc-4ccc-8ccc-cccccccccccc");
+
+    const replay = await ledger.createOrReplayOperation(params);
+    expect(replay.replay).toBe(true);
+    expect(replay.operation.operationId).toBe(first.operation.operationId);
+
+    await expect(
+      ledger.createOrReplayOperation({ ...params, targetResourceId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd" }),
+    ).rejects.toBeInstanceOf(IdempotencyConflictError);
+  });
+
+  it("rejects missing, partial, and engine/generic-conflicting targets before reserving an idempotency key", async () => {
+    await expect(ledger.createOrReplayOperation(baseParams({ targetEngine: undefined }))).rejects.toBeInstanceOf(
+      InvalidManagementTargetError,
+    );
+    await expect(
+      ledger.createOrReplayOperation(baseParams({ targetEngine: undefined, targetResourceType: "tenant" })),
+    ).rejects.toBeInstanceOf(InvalidManagementTargetError);
+    await expect(
+      ledger.createOrReplayOperation(baseParams({ targetResourceType: "tenant", targetResourceId: "tenant-x" })),
+    ).rejects.toBeInstanceOf(InvalidManagementTargetError);
+    const rows = await client.query("SELECT * FROM governance.management_idempotency_keys");
+    expect(rows.rows).toHaveLength(0);
   });
 
   it("accepts every valid risk class", async () => {

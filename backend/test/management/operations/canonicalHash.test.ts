@@ -29,6 +29,23 @@ describe("management/operations/canonicalHash", () => {
     expect(h1).toBe(h2);
   });
 
+  it("preserves the exact persisted 1A.6 engine hash when generic target fields are omitted", () => {
+    const hash = computeSafePayloadHash({
+      requestedAction: "platform.engine-state.set",
+      targetTenantId: null,
+      targetEngine: "module_ai",
+      payload: { desiredState: "enabled", quota: 10 },
+    });
+    expect(hash).toBe("175c5c28cb1aab51c8d951036cc6619ee03740918125186fdf0eed2e432e6c23");
+  });
+
+  it("binds generic tenant operations to their resource address", () => {
+    const base = { requestedAction: "tenant.suspend", targetTenantId: null, targetResourceType: "tenant", payload: {} };
+    expect(computeSafePayloadHash({ ...base, targetResourceId: "tenant-a" })).not.toBe(
+      computeSafePayloadHash({ ...base, targetResourceId: "tenant-b" }),
+    );
+  });
+
   it("binds the hash to requestedAction — a different action changes the hash even with the same payload", () => {
     const scope = { targetTenantId: null, targetEngine: "module_ai", payload: { desiredState: "enabled" } };
     const h1 = computeSafePayloadHash({ ...scope, requestedAction: "platform.engine-state.set" });
