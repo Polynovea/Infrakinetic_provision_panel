@@ -20,6 +20,7 @@ import {
   UnknownEngineError,
   MissingRecoveryIntentError,
   UnexpectedManagementApiResponseError,
+  ManagementApiUnreachableError,
 } from "../../management/operations/engineStateOperation.js";
 import { ManagementOperationError, OperationNotFoundError } from "../../management/operations/managementOperationErrors.js";
 import { listTenantRegistry, getTenantRegistryEntry, getTenantRegistryUsers, UnknownTenantError } from "../../management/operations/tenantRegistryQuery.js";
@@ -33,6 +34,16 @@ import {
   MissingTenantIdentifierError,
 } from "../../management/operations/tenantLifecycleOperation.js";
 import type { CommissionedTenantsRepository } from "../../management/operations/commissionedTenants.js";
+import {
+  requestTenantEngineEntitlementChange,
+  UnknownEntitlementEngineError,
+  UnknownEntitlementTenantError,
+  MissingEntitlementTenantIdentifierError,
+} from "../../management/operations/tenantEngineEntitlementOperation.js";
+import {
+  getTenantEngineEntitlementRead,
+  listTenantEngineEntitlements,
+} from "../../management/operations/tenantEngineEntitlementQuery.js";
 
 export interface ManagementRouterDeps {
   identityProvider: IdentityProvider;
@@ -401,7 +412,7 @@ export function createManagementRouter(deps: ManagementRouterDeps): Router {
           res.status(400).json({ error: "RECOVERY_INTENT_REQUIRED", message: err.message });
           return;
         }
-        if (err instanceof UnexpectedManagementApiResponseError) {
+        if (err instanceof UnexpectedManagementApiResponseError || err instanceof ManagementApiUnreachableError) {
           res.status(502).json({ error: "MANAGEMENT_API_UPSTREAM_ERROR", message: err.message });
           return;
         }
@@ -646,6 +657,162 @@ export function createManagementRouter(deps: ManagementRouterDeps): Router {
       },
     );
   }
+
+  // 1A.9.4 — engine entitlement lifecycle, read half (R0, no ledger — same
+  // reasoning as /tenants and /engines above). tenants.read already existed,
+  // unused for this purpose, in the 1A.2 scope catalog; no new scope was
+  // introduced for the reads.
+  router.get("/tenants/:tenantId/engines/:engineKey/entitlement", requireScope("tenants.read", deps.auditSink), async (req, res, next) => {
+    try {
+      const ctx = req.operatorContext;
+      if (!ctx) {
+        res.status(403).json({ error: "NOT_AUTHENTICATED" });
+        return;
+      }
+      const signingKeys = await deps.getManagementSigningKeys();
+      const transportConfig = deps.loadTransportConfig();
+      const result = await getTenantEngineEntitlementRead(
+        { signingKeys, transportConfig, infrakineticBaseUrl: deps.infrakineticBaseUrl },
+        {
+          tenantId: req.params.tenantId,
+          engineKeyOrAlias: req.params.engineKey,
+          operatorId: ctx.operatorId,
+          operatorSessionId: ctx.operatorSessionId,
+          operatorRoles: ctx.roles,
+          operatorGrantedScopes: ctx.scopes,
+          correlationId: ctx.correlationId,
+        },
+      );
+      res.status(200).json(result);
+    } catch (err) {
+      if (err instanceof UnknownEntitlementTenantError) {
+        res.status(404).json({ error: "UNKNOWN_TENANT", message: err.message });
+        return;
+      }
+      if (err instanceof UnknownEntitlementEngineError) {
+        res.status(404).json({ error: "UNKNOWN_ENGINE", message: err.message });
+        return;
+      }
+      if (err instanceof UnexpectedManagementApiResponseError) {
+        res.status(502).json({ error: "MANAGEMENT_API_UPSTREAM_ERROR", message: err.message });
+        return;
+      }
+      next(err);
+    }
+  });
+
+  router.get("/tenants/:tenantId/engines", requireScope("tenants.read", deps.auditSink), async (req, res, next) => {
+    try {
+      const ctx = req.operatorContext;
+      if (!ctx) {
+        res.status(403).json({ error: "NOT_AUTHENTICATED" });
+        return;
+      }
+      const signingKeys = await deps.getManagementSigningKeys();
+      const transportConfig = deps.loadTransportConfig();
+      const result = await listTenantEngineEntitlements(
+        { signingKeys, transportConfig, infrakineticBaseUrl: deps.infrakineticBaseUrl },
+        {
+          tenantId: req.params.tenantId,
+          operatorId: ctx.operatorId,
+          operatorSessionId: ctx.operatorSessionId,
+          operatorRoles: ctx.roles,
+          operatorGrantedScopes: ctx.scopes,
+          correlationId: ctx.correlationId,
+        },
+      );
+      res.status(200).json(result);
+    } catch (err) {
+      if (err instanceof UnknownEntitlementTenantError) {
+        res.status(404).json({ error: "UNKNOWN_TENANT", message: err.message });
+        return;
+      }
+      if (err instanceof UnexpectedManagementApiResponseError) {
+        res.status(502).json({ error: "MANAGEMENT_API_UPSTREAM_ERROR", message: err.message });
+        return;
+      }
+      next(err);
+    }
+  });
+
+  // 1A.9.4 — the real mutation vertical, mirroring the engine-state and
+  // tenant-lifecycle verticals' own shape (requireScope, R2 reason
+  // requirement, idempotencyKey requirement, ManagementOperationError/
+  // DatabaseUnavailableError mapping). Uniformly R2 (§3.2 of the scoping
+  // doc) — no step-up/maker-checker gate, same bar as tenant suspend/
+  // resume/decommission.
+  router.put(
+    "/tenants/:tenantId/engines/:engineKey/entitlement",
+    requireScope("engines.entitlement.write", deps.auditSink),
+    async (req, res, next) => {
+      try {
+        const ctx = req.operatorContext;
+        if (!ctx) {
+          res.status(403).json({ error: "NOT_AUTHENTICATED" });
+          return;
+        }
+        const body = (req.body ?? {}) as Record<string, unknown>;
+        if (typeof body.idempotencyKey !== "string" || body.idempotencyKey.trim() === "") {
+          res.status(400).json({ error: "IDEMPOTENCY_KEY_REQUIRED" });
+          return;
+        }
+        if (typeof body.reason !== "string" || body.reason.trim() === "") {
+          res.status(400).json({ error: "REASON_REQUIRED" });
+          return;
+        }
+        if (typeof body.enabled !== "boolean") {
+          res.status(400).json({ error: "INVALID_ENABLED" });
+          return;
+        }
+
+        const signingKeys = await deps.getManagementSigningKeys();
+        const transportConfig = deps.loadTransportConfig();
+
+        const result = await requestTenantEngineEntitlementChange(
+          { ledger: deps.ledger, signingKeys, transportConfig, infrakineticBaseUrl: deps.infrakineticBaseUrl },
+          {
+            idempotencyKey: body.idempotencyKey,
+            operatorId: ctx.operatorId,
+            operatorSessionId: ctx.operatorSessionId,
+            operatorRoles: ctx.roles,
+            operatorGrantedScopes: ctx.scopes,
+            tenantId: req.params.tenantId,
+            engineKeyOrAlias: req.params.engineKey,
+            enabled: body.enabled,
+            reason: body.reason,
+            correlationId: ctx.correlationId,
+          },
+        );
+        res.status(200).json({ operation: result.operation, replay: result.replay });
+      } catch (err) {
+        if (err instanceof MissingEntitlementTenantIdentifierError) {
+          res.status(400).json({ error: "TENANT_ID_REQUIRED", message: err.message });
+          return;
+        }
+        if (err instanceof UnknownEntitlementTenantError) {
+          res.status(404).json({ error: "UNKNOWN_TENANT", message: err.message });
+          return;
+        }
+        if (err instanceof UnknownEntitlementEngineError) {
+          res.status(404).json({ error: "UNKNOWN_ENGINE", message: err.message });
+          return;
+        }
+        if (err instanceof UnexpectedManagementApiResponseError || err instanceof ManagementApiUnreachableError) {
+          res.status(502).json({ error: "MANAGEMENT_API_UPSTREAM_ERROR", message: err.message });
+          return;
+        }
+        if (err instanceof ManagementOperationError) {
+          res.status(err.httpStatus).json({ error: err.code, message: err.message });
+          return;
+        }
+        if (err instanceof DatabaseUnavailableError) {
+          res.status(err.httpStatus).json({ error: err.code, message: err.message });
+          return;
+        }
+        next(err);
+      }
+    },
+  );
 
   // Express 4 does not auto-forward rejected async promises. Async handlers
   // above explicitly call next(err), and this router-local typed boundary

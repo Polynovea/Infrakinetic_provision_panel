@@ -143,6 +143,23 @@ describe("PUT /management/v1/engine-state/:engineKey — Governance's own operat
       .send({ idempotencyKey: "k1", desiredState: "disabled", reason: "x", recoveryIntent: "y" });
     expect(res.status).toBe(401);
   });
+
+  it("a valid request that reaches orchestration but hits an unreachable Infrakinetic during Step 1's resolve-read surfaces as a clean 502, no ledger entry", async () => {
+    const { server, op } = appWithAdmin();
+    const token = await signTestToken(keyPair, { subject: op.cognitoSub });
+    const res = await request(server)
+      .put("/management/v1/engine-state/module_ai")
+      .set("authorization", `Bearer ${token}`)
+      .send({ idempotencyKey: "k1", desiredState: "operational", reason: "recovering from incident" });
+    // No real Infrakinetic reachable at 127.0.0.1:0 — Step 1's resolve-read
+    // fails before any ledger reservation, and is now caught as a
+    // ManagementApiUnreachableError and mapped to a clean 502
+    // (MANAGEMENT_API_UPSTREAM_ERROR), not an unhandled 500.
+    expect(res.status).toBe(502);
+    expect(res.body.error).toBe("MANAGEMENT_API_UPSTREAM_ERROR");
+    const ops = await client.query("SELECT * FROM governance.management_operations");
+    expect(ops.rows).toHaveLength(0);
+  });
 });
 
 describe("GET /management/v1/operations/:operationId", () => {

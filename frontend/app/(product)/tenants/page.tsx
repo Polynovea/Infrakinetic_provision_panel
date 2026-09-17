@@ -43,6 +43,34 @@ interface TenantRegistryEntry {
   updated_at: string;
 }
 
+// 1A.9.4 — engine entitlement lifecycle. Tri-state read (scoping doc §3.3):
+// `configured` distinguishes "no row, default-resolved" from an explicit
+// operator decision — never flattened to one boolean. `platformEngineState`
+// is shown as its own badge, never merged with entitlement into one pill
+// (same "two independently-owned facts" doctrine the platform/commercial
+// status cards above already apply).
+interface TenantEngineEntitlementEntry {
+  canonicalEngine: string;
+  label?: string;
+  configured: boolean;
+  effectiveEnabled: boolean;
+  defaultDeny: boolean;
+  platformEngineState: { state: string; reason: string | null };
+}
+
+interface EntitlementOperationBody {
+  operation: {
+    operationId: string;
+    status: string;
+    result?: {
+      canonicalEngine?: string;
+      requestedEnabled?: boolean;
+      resultingEntitlement?: { configured: boolean; effectiveEnabled: boolean; defaultDeny: boolean };
+    };
+  };
+  replay: boolean;
+}
+
 interface ManagementOperationWarning {
   stage: string;
   message: string;
@@ -359,6 +387,16 @@ function TenantDetailDrawer({
   const [actionError, setActionError] = useState<string | null>(null);
   const [lastActionStatus, setLastActionStatus] = useState<string | null>(null);
 
+  const [engines, setEngines] = useState<TenantEngineEntitlementEntry[] | null>(null);
+  const [enginesObservedAt, setEnginesObservedAt] = useState<string | null>(null);
+  const [enginesError, setEnginesError] = useState<string | null>(null);
+  const [enginesRefreshKey, setEnginesRefreshKey] = useState(0);
+
+  const [pendingEntitlement, setPendingEntitlement] = useState<{ engine: TenantEngineEntitlementEntry; enabled: boolean } | null>(null);
+  const [entitlementReason, setEntitlementReason] = useState("");
+  const [entitlementBusy, setEntitlementBusy] = useState(false);
+  const [entitlementError, setEntitlementError] = useState<string | null>(null);
+
   useEffect(() => {
     let cancelled = false;
     setUsers(null);
@@ -379,6 +417,63 @@ function TenantDetailDrawer({
       cancelled = true;
     };
   }, [request, tenant.id]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setEngines(null);
+    setEnginesError(null);
+    request(`/management/v1/tenants/${encodeURIComponent(tenant.id)}/engines`)
+      .then(async (res) => {
+        const body = await res.json();
+        if (cancelled) return;
+        if (!res.ok) {
+          setEnginesError("Could not load this tenant's engine entitlements.");
+          return;
+        }
+        setEngines(body.engines);
+        setEnginesObservedAt(body.observedAt);
+      })
+      .catch(() => !cancelled && setEnginesError("Could not load this tenant's engine entitlements."));
+    return () => {
+      cancelled = true;
+    };
+  }, [request, tenant.id, enginesRefreshKey]);
+
+  async function runEntitlementChange() {
+    if (!pendingEntitlement) return;
+    if (entitlementReason.trim() === "") {
+      setEntitlementError("A reason is required.");
+      return;
+    }
+    setEntitlementBusy(true);
+    setEntitlementError(null);
+    try {
+      const res = await request(
+        `/management/v1/tenants/${encodeURIComponent(tenant.id)}/engines/${encodeURIComponent(pendingEntitlement.engine.canonicalEngine)}/entitlement`,
+        {
+          method: "PUT",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            enabled: pendingEntitlement.enabled,
+            reason: entitlementReason,
+            idempotencyKey: crypto.randomUUID(),
+          }),
+        },
+      );
+      const body = (await res.json()) as EntitlementOperationBody & { error?: string; message?: string };
+      if (!res.ok) {
+        setEntitlementError(body.message ?? body.error ?? "The request failed.");
+        return;
+      }
+      setPendingEntitlement(null);
+      setEntitlementReason("");
+      setEnginesRefreshKey((k) => k + 1);
+    } catch {
+      setEntitlementError("The request failed.");
+    } finally {
+      setEntitlementBusy(false);
+    }
+  }
 
   async function refetchTenant() {
     try {
@@ -427,6 +522,7 @@ function TenantDetailDrawer({
   const canSuspend = operatorScopes.includes("tenants.suspend");
   const canResume = operatorScopes.includes("tenants.resume");
   const canDecommission = operatorScopes.includes("tenants.decommission");
+  const canWriteEntitlement = operatorScopes.includes("engines.entitlement.write");
   const platformState = tenant.platform_access_state;
   const isPlatformTenant = tenant.tenant_kind === "platform";
   const hasAnyLifecycleScope = canSuspend || canResume || canDecommission;
@@ -572,6 +668,72 @@ function TenantDetailDrawer({
         </div>
       )}
 
+      <h3 className="text-subhead" style={{ margin: "1.5rem 0 0.6rem" }}>
+        Engines &amp; Capabilities
+      </h3>
+      <p className="overlay-note" style={{ margin: "0 0 0.6rem" }}>
+        {enginesObservedAt ? `Last observed ${formatDate(enginesObservedAt)}` : " "}
+      </p>
+      {enginesError && <ErrorState label={enginesError} />}
+      {!enginesError && engines === null && (
+        <div style={{ overflowX: "auto" }}>
+          <table className="data-table">
+            <tbody>
+              <SkeletonTableRows columns={4} rows={4} />
+            </tbody>
+          </table>
+        </div>
+      )}
+      {!enginesError && engines !== null && (
+        <div style={{ overflowX: "auto" }}>
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>Engine</th>
+                <th>Desired entitlement</th>
+                <th>Platform state</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {engines.map((e) => (
+                <tr key={e.canonicalEngine}>
+                  <td>
+                    {e.label ?? e.canonicalEngine}
+                    <div style={{ fontSize: "0.76rem", color: "var(--text-muted)", fontFamily: "monospace" }}>{e.canonicalEngine}</div>
+                  </td>
+                  <td>
+                    <StatusBadge value={e.effectiveEnabled ? "active" : "disabled"} />
+                    {!e.configured && (
+                      <span className="overlay-note" style={{ marginLeft: "0.4rem" }}>
+                        {e.defaultDeny ? "default: off" : "default: on"}
+                      </span>
+                    )}
+                  </td>
+                  <td>
+                    <StatusBadge value={e.platformEngineState.state} />
+                    {e.platformEngineState.reason && (
+                      <div style={{ fontSize: "0.76rem", color: "var(--text-muted)" }}>{e.platformEngineState.reason}</div>
+                    )}
+                  </td>
+                  <td>
+                    {canWriteEntitlement && (
+                      <button
+                        className="btn"
+                        style={{ fontSize: "0.8rem" }}
+                        onClick={() => setPendingEntitlement({ engine: e, enabled: !e.effectiveEnabled })}
+                      >
+                        {e.effectiveEnabled ? "Disable" : "Enable"}
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
       <div className="card" style={{ marginTop: "1.5rem" }}>
         <button
           className="btn"
@@ -613,6 +775,32 @@ function TenantDetailDrawer({
             <textarea value={reason} onChange={(e) => setReason(e.target.value)} rows={2} placeholder="Required" />
           </div>
           {actionError && <ErrorState label={actionError} />}
+        </ConfirmDialog>
+      )}
+
+      {pendingEntitlement && (
+        <ConfirmDialog
+          title={`${pendingEntitlement.enabled ? "Enable" : "Disable"} ${pendingEntitlement.engine.label ?? pendingEntitlement.engine.canonicalEngine} for ${tenant.name}?`}
+          description={
+            pendingEntitlement.enabled
+              ? "This sets the tenant's desired entitlement to enabled. Effective access still depends on platform engine state and any team-level restriction."
+              : "This sets the tenant's desired entitlement to disabled. Every team/user in this tenant loses access to this engine on the next request."
+          }
+          confirmLabel={pendingEntitlement.enabled ? "Enable" : "Disable"}
+          danger={!pendingEntitlement.enabled}
+          busy={entitlementBusy}
+          onCancel={() => {
+            setPendingEntitlement(null);
+            setEntitlementReason("");
+            setEntitlementError(null);
+          }}
+          onConfirm={runEntitlementChange}
+        >
+          <div className="field">
+            <label>Reason</label>
+            <textarea value={entitlementReason} onChange={(e) => setEntitlementReason(e.target.value)} rows={2} placeholder="Required" />
+          </div>
+          {entitlementError && <ErrorState label={entitlementError} />}
         </ConfirmDialog>
       )}
     </Drawer>
