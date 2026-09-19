@@ -167,14 +167,16 @@ describe("POST /management/v1/reconciliation/tenants/:tenantId/recheck", () => {
     expect(res.status).toBe(401);
   });
 
-  it("valid request against an unreachable registry surfaces a clean 502, not an unhandled 500", async () => {
+  it("valid request against an unreachable registry surfaces a 200 with a partial outcome, not a thrown error (projection repair and stuck-op resolution are isolated)", async () => {
     const { server, op } = appWithAdmin({ infrakineticBaseUrl: "http://127.0.0.1:1" });
     const token = await signTestToken(keyPair, { subject: op.cognitoSub });
     const res = await request(server)
       .post(`/management/v1/reconciliation/tenants/${TENANT_ID}/recheck`)
       .set("authorization", `Bearer ${token}`)
       .send({ idempotencyKey: "recheck-key-2" });
-    expect(res.status).toBe(502);
-    expect(res.body.error).toBe("MANAGEMENT_API_UPSTREAM_ERROR");
+    expect(res.status).toBe(200);
+    expect(res.body.outcome).toBe("partial");
+    expect(res.body.projectionError).toBeTruthy();
+    expect(res.body.stuckOperationsError).toBeUndefined();
   });
 });

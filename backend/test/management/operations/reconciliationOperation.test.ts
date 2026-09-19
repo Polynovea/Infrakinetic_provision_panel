@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { generateKeyPairSync } from "node:crypto";
 import { exportJWK } from "jose";
 
@@ -6,7 +6,6 @@ import { buildMigratedPgMemClient } from "../../helpers/pgMemDb.js";
 import { ManagementOperationLedger } from "../../../src/management/operations/managementOperationLedger.js";
 import { CommissionedTenantsRepository } from "../../../src/management/operations/commissionedTenants.js";
 import { reconcileTenant, type ReconciliationOperationDeps } from "../../../src/management/operations/reconciliationOperation.js";
-import { ManagementApiUnreachableError } from "../../../src/management/operations/engineStateOperation.js";
 import type { DbClient } from "../../../src/db/dbClient.js";
 import type { ManagementSigningKeySet } from "../../../src/management/managementSigningKeys.js";
 import type { ManagementTransportConfig } from "../../../src/management/managementConfig.js";
@@ -141,13 +140,86 @@ describe("management/operations/reconciliationOperation", () => {
     return ledger.transitionOperation(operation.operationId, { toStatus: "partially_completed", partialFailureState });
   }
 
-  it("registry unreachable during repair -> a clean ManagementApiUnreachableError, not an uncaught throw", async () => {
+  it("registry unreachable during repair -> reported as a partial outcome, never thrown (projection repair and stuck-op resolution are isolated)", async () => {
     const unreachableFetch = (async () => {
       throw new TypeError("fetch failed");
     }) as unknown as typeof fetch;
-    await expect(
-      reconcileTenant(baseDeps(unreachableFetch), { idempotencyKey: "recheck-unreachable", tenantId: TENANT_ID, ...OPERATOR_PARAMS }),
-    ).rejects.toBeInstanceOf(ManagementApiUnreachableError);
+    const result = await reconcileTenant(baseDeps(unreachableFetch), { idempotencyKey: "recheck-unreachable", tenantId: TENANT_ID, ...OPERATOR_PARAMS });
+
+    expect(result.outcome).toBe("partial");
+    expect(result.projection).toEqual({ created: false, observedRefreshed: false });
+    expect(result.projectionError).toContain("Could not reach Infrakinetic's management API");
+    expect(result.stuckOperationsError).toBeUndefined();
+  });
+
+  it("stuck-operation resolution still runs and succeeds even though projection repair fails on an unreachable registry", async () => {
+    await commissionedTenants.createLegacyExisting({ tenantId: TENANT_ID, createdAt: "2026-01-01T00:00:00.000Z", observedPlatformAccessState: "active" });
+    const stuck = await seedStuckOperation({ idempotencyKey: "lifecycle-key-independent-1", requestedAction: "tenant.suspend" }, { stage: "mutation-call" });
+
+    // Registry GET fails; the lifecycle-commands receipt read (a DIFFERENT
+    // Infrakinetic endpoint, not the registry) succeeds normally.
+    const fetchImpl = (async (input: string | URL) => {
+      const url = new URL(String(input));
+      if (url.pathname === `/management/v1/tenants/${TENANT_ID}`) {
+        throw new TypeError("fetch failed");
+      }
+      if (url.pathname === "/management/v1/tenant-lifecycle-commands/lifecycle-key-independent-1") {
+        return { status: 200, json: async () => ({ command: { idempotencyKey: "lifecycle-key-independent-1", status: "completed" } }) } as Response;
+      }
+      return { status: 404, json: async () => ({ error: "NOT_FOUND" }) } as Response;
+    }) as unknown as typeof fetch;
+
+    const result = await reconcileTenant(baseDeps(fetchImpl), { idempotencyKey: "recheck-independent-1", tenantId: TENANT_ID, ...OPERATOR_PARAMS });
+
+    expect(result.outcome).toBe("partial");
+    expect(result.projectionError).toContain("Could not reach Infrakinetic's management API");
+    expect(result.stuckOperationsError).toBeUndefined();
+    expect(result.resolvedOperations).toEqual([{ operationId: stuck.operationId, requestedAction: "tenant.suspend", from: "partially_completed", to: "completed", stage: "mutation-call" }]);
+    const final = await ledger.getOperation(stuck.operationId);
+    expect(final.status).toBe("completed"); // real, committed side effect despite the other sub-task failing
+  });
+
+  it("projection repair still runs and succeeds even though the stuck-operation sweep fails (ledger unavailable)", async () => {
+    const { fetchImpl } = buildFakeInfrakinetic({ platformAccessState: "active" });
+    vi.spyOn(ledger, "listOperations").mockRejectedValueOnce(new Error("governance db unavailable"));
+
+    const result = await reconcileTenant(baseDeps(fetchImpl), { idempotencyKey: "recheck-independent-2", tenantId: TENANT_ID, ...OPERATOR_PARAMS });
+
+    expect(result.outcome).toBe("partial");
+    expect(result.projectionError).toBeUndefined();
+    expect(result.projection).toEqual({ created: true, observedRefreshed: false });
+    expect(result.stuckOperationsError).toContain("governance db unavailable");
+    expect(result.resolvedOperations).toEqual([]);
+    expect(result.remainingDrift).toEqual([]);
+    const projection = await commissionedTenants.getByTenantId(TENANT_ID);
+    expect(projection?.provenance).toBe("legacy_existing"); // real, committed side effect despite the other sub-task failing
+  });
+
+  it("both sub-tasks fail -> outcome is 'failed', both errors visible, nothing falsely reported as succeeded", async () => {
+    const unreachableFetch = (async () => {
+      throw new TypeError("fetch failed");
+    }) as unknown as typeof fetch;
+    vi.spyOn(ledger, "listOperations").mockRejectedValueOnce(new Error("governance db unavailable"));
+
+    const result = await reconcileTenant(baseDeps(unreachableFetch), { idempotencyKey: "recheck-both-fail", tenantId: TENANT_ID, ...OPERATOR_PARAMS });
+
+    expect(result.outcome).toBe("failed");
+    expect(result.projectionError).toContain("Could not reach Infrakinetic's management API");
+    expect(result.stuckOperationsError).toContain("governance db unavailable");
+    expect(result.projection).toEqual({ created: false, observedRefreshed: false });
+    expect(result.resolvedOperations).toEqual([]);
+    expect(result.remainingDrift).toEqual([]);
+  });
+
+  it("both sub-tasks succeed -> outcome is 'complete', no error fields set", async () => {
+    await commissionedTenants.createLegacyExisting({ tenantId: TENANT_ID, createdAt: "2026-01-01T00:00:00.000Z", observedPlatformAccessState: "active" });
+    const { fetchImpl } = buildFakeInfrakinetic({ platformAccessState: "active" });
+
+    const result = await reconcileTenant(baseDeps(fetchImpl), { idempotencyKey: "recheck-both-succeed", tenantId: TENANT_ID, ...OPERATOR_PARAMS });
+
+    expect(result.outcome).toBe("complete");
+    expect(result.projectionError).toBeUndefined();
+    expect(result.stuckOperationsError).toBeUndefined();
   });
 
   it("no existing projection: creates one via getOrCreateLegacyExisting, recorded as a completed R1 ledger operation", async () => {
