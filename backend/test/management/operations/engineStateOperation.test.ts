@@ -59,6 +59,8 @@ interface FakeInfrakineticOptions {
   forceVerifyStateOnCall?: { call: number; state: string; reason?: string | null };
   /** If set, the Nth verify-GET throws instead of responding. */
   failVerifyOnCall?: number;
+  /** If set, the mutation PUT throws an outcome-ambiguous network error instead of responding. */
+  failMutation?: boolean;
 }
 
 function buildFakeInfrakinetic(
@@ -119,6 +121,9 @@ function buildFakeInfrakinetic(
       const canonical = decodeURIComponent(putMatch[1]);
       if (!CANONICAL_ENGINES.has(canonical)) {
         return jsonResponse(404, { error: "UNKNOWN_ENGINE_KEY", engineKey: canonical });
+      }
+      if (options.failMutation) {
+        throw new Error("simulated network failure on mutation call");
       }
       const previous = store.get(canonical) ?? { state: "operational", reason: null };
       const desiredState = body?.desiredState as string;
@@ -195,6 +200,31 @@ describe("management/operations/engineStateOperation", () => {
     ).rejects.toBeInstanceOf(ManagementApiUnreachableError);
     const ops = await client.query("SELECT * FROM governance.management_operations");
     expect(ops.rows).toHaveLength(0);
+  });
+
+  it("outcome-ambiguous network failure on the mutation call -> partially_completed, not failed (1A.10.1)", async () => {
+    const { fetchImpl } = buildFakeInfrakinetic({ module_ai: { state: "operational", reason: null } }, { failMutation: true });
+    const { operation } = await requestEngineStateChange(baseDeps(fetchImpl), baseParams());
+    expect(operation.status).toBe("partially_completed");
+    expect((operation.partialFailureState as { stage?: string })?.stage).toBe("mutation-call");
+  });
+
+  it("connection never established (DNS/connection-refused) on the mutation call -> unambiguous failed (1A.10.1)", async () => {
+    const { fetchImpl: resolveFetch } = buildFakeInfrakinetic({ module_ai: { state: "operational", reason: null } });
+    let mutationAttempted = false;
+    const neverConnectsOnMutation = (async (input: string | URL, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.pathname.startsWith("/management/v1/engine-state/")) {
+        mutationAttempted = true;
+        throw Object.assign(new Error("fetch failed"), { cause: Object.assign(new Error("refused"), { code: "ECONNREFUSED" }) });
+      }
+      return resolveFetch(input, init);
+    }) as unknown as typeof fetch;
+
+    const { operation } = await requestEngineStateChange(baseDeps(neverConnectsOnMutation), baseParams());
+    expect(mutationAttempted).toBe(true);
+    expect(operation.status).toBe("failed");
+    expect((operation.partialFailureState as { stage?: string })?.stage).toBe("mutation-call-never-dispatched");
   });
 
   it("an alias is canonicalized before the ledger and Infrakinetic ever see it", async () => {

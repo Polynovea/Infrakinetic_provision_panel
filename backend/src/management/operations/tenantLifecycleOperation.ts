@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import type { ManagementSigningKeySet } from "../managementSigningKeys.js";
 import type { ManagementTransportConfig } from "../managementConfig.js";
 import { mintManagementAssertion } from "../managementAssertionIssuer.js";
-import { callInfrakineticManagementApi } from "../managementApiClient.js";
+import { callInfrakineticManagementApi, isNeverDispatchedNetworkError } from "../managementApiClient.js";
 import type { ManagementOperationLedger, ManagementOperationRecord } from "./managementOperationLedger.js";
 import { buildSafeSnapshot, redactSecretShapedFields } from "./evidence.js";
 import { MANAGEMENT_COMMAND_CONTRACT } from "./commandEnvelope.js";
@@ -36,20 +36,11 @@ export class MissingTenantIdentifierError extends Error {
   }
 }
 
-// §8's corrected failure matrix (audit point 4): a connection that was
-// NEVER established (DNS failure, connection refused) is unambiguous — no
-// owner mutation could possibly have been dispatched, so this is a plain
-// `failed`, safe to repair immediately. Anything else (a timeout or reset
-// AFTER a connection existed) is outcome-ambiguous — the owner side may
-// already have executed — and must land in `partially_completed`, per the
-// classification below.
-const NEVER_DISPATCHED_ERROR_CODES = new Set(["ECONNREFUSED", "ENOTFOUND", "EAI_AGAIN", "EADDRNOTAVAIL"]);
-
-function isNeverDispatchedNetworkError(err: unknown): boolean {
-  const cause = err instanceof Error ? (err as Error & { cause?: unknown }).cause : undefined;
-  const code = cause && typeof cause === "object" && "code" in cause ? (cause as { code?: unknown }).code : undefined;
-  return typeof code === "string" && NEVER_DISPATCHED_ERROR_CODES.has(code);
-}
+// §8's corrected failure matrix (audit point 4): never-dispatched vs.
+// outcome-ambiguous network failures. isNeverDispatchedNetworkError() was
+// authored here originally; it now lives in managementApiClient.ts (1A.10.1)
+// so engineStateOperation.ts and tenantEngineEntitlementOperation.ts apply
+// the identical distinction instead of collapsing both cases into `failed`.
 
 export interface TenantLifecycleOperationDeps {
   ledger: ManagementOperationLedger;

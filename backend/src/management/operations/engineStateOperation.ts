@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import type { ManagementSigningKeySet } from "../managementSigningKeys.js";
 import type { ManagementTransportConfig } from "../managementConfig.js";
 import { mintManagementAssertion } from "../managementAssertionIssuer.js";
-import { callInfrakineticManagementApi } from "../managementApiClient.js";
+import { callInfrakineticManagementApi, isNeverDispatchedNetworkError } from "../managementApiClient.js";
 import type { ManagementOperationLedger, ManagementOperationRecord } from "./managementOperationLedger.js";
 import { buildSafeSnapshot, redactSecretShapedFields } from "./evidence.js";
 import { MANAGEMENT_COMMAND_CONTRACT } from "./commandEnvelope.js";
@@ -242,14 +242,30 @@ export async function requestEngineStateChange(
       idempotencyKey: params.idempotencyKey,
     });
   } catch (err) {
-    const failed = await deps.ledger.transitionOperation(submitted.operationId, {
-      toStatus: "failed",
+    // 1A.10.1 — never-dispatched (DNS/connection-refused) is unambiguous:
+    // no owner mutation could possibly have happened, safe to fail cleanly.
+    // Anything else is outcome-ambiguous — the owner side may already have
+    // executed — and must land in partially_completed, never a plain
+    // `failed` an operator might safely retry (same distinction
+    // tenantLifecycleOperation.ts already applies).
+    if (isNeverDispatchedNetworkError(err)) {
+      const failed = await deps.ledger.transitionOperation(submitted.operationId, {
+        toStatus: "failed",
+        partialFailureState: {
+          stage: "mutation-call-never-dispatched",
+          message: err instanceof Error ? err.message : String(err),
+        },
+      });
+      return { operation: failed, replay: false };
+    }
+    const partial = await deps.ledger.transitionOperation(submitted.operationId, {
+      toStatus: "partially_completed",
       partialFailureState: {
         stage: "mutation-call",
         message: err instanceof Error ? err.message : String(err),
       },
     });
-    return { operation: failed, replay: false };
+    return { operation: partial, replay: false };
   }
 
   if (mutateResult.status !== 200) {

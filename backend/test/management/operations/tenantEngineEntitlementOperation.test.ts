@@ -64,6 +64,8 @@ interface FakeInfrakineticOptions {
   /** If set, the Nth verify-GET throws instead of responding. */
   failVerifyOnCall?: number;
   platformState?: { state: string; reason: string | null };
+  /** If set, the mutation PUT throws an outcome-ambiguous network error instead of responding. */
+  failMutation?: boolean;
 }
 
 function buildFakeInfrakinetic(
@@ -114,6 +116,9 @@ function buildFakeInfrakinetic(
       }
 
       if (method === "PUT") {
+        if (options.failMutation) {
+          throw new Error("simulated network failure on mutation call");
+        }
         const enabled = body?.enabled as boolean;
         putCount += 1;
         const previous = entitlementBody(canonical);
@@ -223,6 +228,31 @@ describe("management/operations/tenantEngineEntitlementOperation", () => {
     ).rejects.toBeInstanceOf(ManagementApiUnreachableError);
     const ops = await client.query("SELECT * FROM governance.management_operations");
     expect(ops.rows).toHaveLength(0);
+  });
+
+  it("outcome-ambiguous network failure on the mutation call -> partially_completed, not failed (1A.10.1)", async () => {
+    const { fetchImpl } = buildFakeInfrakinetic({}, { failMutation: true });
+    const { operation } = await requestTenantEngineEntitlementChange(baseDeps(fetchImpl), baseParams());
+    expect(operation.status).toBe("partially_completed");
+    expect((operation.partialFailureState as { stage?: string })?.stage).toBe("mutation-call");
+  });
+
+  it("connection never established (DNS/connection-refused) on the mutation call -> unambiguous failed (1A.10.1)", async () => {
+    const { fetchImpl: resolveFetch } = buildFakeInfrakinetic();
+    let mutationAttempted = false;
+    const neverConnectsOnMutation = (async (input: string | URL, init?: RequestInit) => {
+      const method = (init?.method ?? "GET") as string;
+      if (method === "PUT") {
+        mutationAttempted = true;
+        throw Object.assign(new Error("fetch failed"), { cause: Object.assign(new Error("refused"), { code: "ECONNREFUSED" }) });
+      }
+      return resolveFetch(input, init);
+    }) as unknown as typeof fetch;
+
+    const { operation } = await requestTenantEngineEntitlementChange(baseDeps(neverConnectsOnMutation), baseParams());
+    expect(mutationAttempted).toBe(true);
+    expect(operation.status).toBe("failed");
+    expect((operation.partialFailureState as { stage?: string })?.stage).toBe("mutation-call-never-dispatched");
   });
 
   it("an alias is canonicalized before the ledger and Infrakinetic mutation route ever see it", async () => {
