@@ -49,6 +49,8 @@ interface FakeOptions {
   platformAccessState?: "active" | "suspended" | "decommissioned";
   lifecycleReceipts?: Record<string, "accepted" | "executing" | "partially_completed" | "completed" | "failed">;
   entitlementReceipts?: Record<string, "accepted" | "executing" | "partially_completed" | "completed" | "failed">;
+  /** Idempotency keys whose receipt read returns a transient 500 instead of a real answer. */
+  receiptServerErrorKeys?: string[];
 }
 
 function buildFakeInfrakinetic(options: FakeOptions = {}) {
@@ -76,6 +78,7 @@ function buildFakeInfrakinetic(options: FakeOptions = {}) {
     const lifecycleMatch = url.pathname.match(/^\/management\/v1\/tenant-lifecycle-commands\/([^/]+)$/);
     if (lifecycleMatch) {
       const key = decodeURIComponent(lifecycleMatch[1]);
+      if (options.receiptServerErrorKeys?.includes(key)) return { status: 500, json: async () => ({ error: "INTERNAL" }) } as Response;
       const status = options.lifecycleReceipts?.[key];
       if (!status) return { status: 404, json: async () => ({ error: "UNKNOWN_LIFECYCLE_COMMAND" }) } as Response;
       return { status: 200, json: async () => ({ command: { idempotencyKey: key, status } }) } as Response;
@@ -233,6 +236,29 @@ describe("management/operations/reconciliationOperation", () => {
 
     const final = await ledger.getOperation(stuck.operationId);
     expect(final.status).toBe("failed");
+  });
+
+  // Regression test for a real bug caught during re-audit: a transient
+  // failure reading the receipt (500, unparseable body) is NOT the same
+  // signal as a confirmed 404, and must never be resolved to `failed` —
+  // doing so would let an operator retry a mutation that may have actually
+  // succeeded on the owner side.
+  it("receipt read fails with a transient error (not 404) -> left unresolved, never falsely marked failed", async () => {
+    await commissionedTenants.createLegacyExisting({ tenantId: TENANT_ID, createdAt: "2026-01-01T00:00:00.000Z", observedPlatformAccessState: "active" });
+    const stuck = await seedStuckOperation({ idempotencyKey: "lifecycle-key-error", requestedAction: "tenant.suspend" }, { stage: "mutation-call" });
+    const { fetchImpl } = buildFakeInfrakinetic({ platformAccessState: "active", receiptServerErrorKeys: ["lifecycle-key-error"] });
+
+    const result = await reconcileTenant(baseDeps(fetchImpl), { idempotencyKey: "recheck-error", tenantId: TENANT_ID, ...OPERATOR_PARAMS });
+
+    expect(result.resolvedOperations).toEqual([]);
+    expect(result.remainingDrift).toEqual([{
+      operationId: stuck.operationId,
+      requestedAction: "tenant.suspend",
+      class: "transport_ambiguous",
+      note: expect.stringContaining("could not read the owner-side receipt"),
+    }]);
+    const final = await ledger.getOperation(stuck.operationId);
+    expect(final.status).toBe("partially_completed"); // untouched — not falsely resolved
   });
 
   it("owner receipt still in flight -> surfaced as remaining drift, not resolved", async () => {
