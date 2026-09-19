@@ -6,6 +6,7 @@ import {
   type TenantLifecycleState,
   type TenantLifecycleProvenance,
 } from "./tenantLifecycle.js";
+import { isUniqueViolation } from "./managementOperationLedger.js";
 
 // Phase 1A.8.4 — Governance's own desired-state projection
 // (governance.commissioned_tenants, migrations 0005/0006). Control/fleet
@@ -191,6 +192,43 @@ export class CommissionedTenantsRepository {
       ],
     );
     return mapRow(result.rows[0]);
+  }
+
+  // 1A.10.2 — the production-safe, idempotent entry point master plan §64
+  // names as this phase's job (`getOrCreateLegacyExisting()` or equivalent).
+  // createLegacyExisting() above is a bare INSERT with no ON CONFLICT; two
+  // concurrent calls for the same real tenant would otherwise race, with
+  // the loser throwing a raw unique-violation Error instead of a graceful
+  // "someone already reconciled this" outcome. This wraps it with the same
+  // race-safety pattern managementOperationLedger.ts's own idempotency-key
+  // reservation already establishes (attempt the INSERT, catch the
+  // unique-violation via isUniqueViolation(), re-read on conflict) rather
+  // than a SELECT-then-INSERT check, which would leave a window between the
+  // two statements. Never overwrites an existing row's provenance — a
+  // `governance_commissioned` row is real commissioning history and must
+  // never be downgraded to `legacy_existing` (master plan §64 line 2882),
+  // so on conflict this simply returns whatever row already exists,
+  // whatever its provenance.
+  async getOrCreateLegacyExisting(params: {
+    tenantId: string;
+    createdAt: string;
+    observedPlatformAccessState: "active" | "suspended" | "decommissioned";
+  }): Promise<{ record: CommissionedTenantRecord; created: boolean }> {
+    try {
+      const record = await this.createLegacyExisting(params);
+      return { record, created: true };
+    } catch (err) {
+      if (!isUniqueViolation(err)) throw err;
+      const existing = await this.getByTenantId(params.tenantId);
+      if (!existing) {
+        // The conflicting row was concurrently deleted between our failed
+        // INSERT and this read — vanishingly unlikely (nothing in this
+        // codebase deletes commissioned_tenants rows) but re-throwing the
+        // original error is more honest than silently retrying forever.
+        throw err;
+      }
+      return { record: existing, created: false };
+    }
   }
 
   async getByCommissionRequestId(commissionRequestId: string): Promise<CommissionedTenantRecord | undefined> {

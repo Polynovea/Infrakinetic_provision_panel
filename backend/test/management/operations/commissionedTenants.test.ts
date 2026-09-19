@@ -138,4 +138,54 @@ describe("management/operations/commissionedTenants", () => {
     const all = await repo.listAll();
     expect(all.length).toBe(2);
   });
+
+  describe("getOrCreateLegacyExisting (1A.10.2)", () => {
+    const TENANT_ID = "b0000000-0000-4000-8000-000000000001";
+
+    it("no existing row -> creates one, created: true", async () => {
+      const { record, created } = await repo.getOrCreateLegacyExisting({
+        tenantId: TENANT_ID,
+        createdAt: "2026-01-01T00:00:00.000Z",
+        observedPlatformAccessState: "active",
+      });
+      expect(created).toBe(true);
+      expect(record.provenance).toBe("legacy_existing");
+      expect(record.tenantId).toBe(TENANT_ID);
+    });
+
+    it("existing governance_commissioned row -> returned unchanged, never downgraded to legacy_existing", async () => {
+      const commissioned = await repo.createForCommissionRequest({
+        commissionRequestId: "c0000000-0000-4000-8000-000000000001",
+        desiredName: "Acme", desiredPlan: "pro", accountType: "live", responsibleOperatorId: OPERATOR_ID,
+      });
+      await repo.transitionLifecycleState(commissioned.projectionId, { toState: "approved" });
+      await repo.transitionLifecycleState(commissioned.projectionId, { toState: "provisioning", tenantId: TENANT_ID });
+      await repo.transitionLifecycleState(commissioned.projectionId, {
+        toState: "active", observedPlatformAccessState: "active",
+      });
+
+      const { record, created } = await repo.getOrCreateLegacyExisting({
+        tenantId: TENANT_ID,
+        createdAt: "2026-01-01T00:00:00.000Z",
+        observedPlatformAccessState: "active",
+      });
+
+      expect(created).toBe(false);
+      expect(record.projectionId).toBe(commissioned.projectionId);
+      expect(record.provenance).toBe("governance_commissioned");
+    });
+
+    it("two concurrent calls for the same real tenant converge to exactly one row", async () => {
+      const [a, b] = await Promise.all([
+        repo.getOrCreateLegacyExisting({ tenantId: TENANT_ID, createdAt: "2026-01-01T00:00:00.000Z", observedPlatformAccessState: "active" }),
+        repo.getOrCreateLegacyExisting({ tenantId: TENANT_ID, createdAt: "2026-01-01T00:00:00.000Z", observedPlatformAccessState: "active" }),
+      ]);
+
+      expect(a.record.projectionId).toBe(b.record.projectionId);
+      expect([a.created, b.created].sort()).toEqual([false, true]);
+
+      const all = await repo.listAll();
+      expect(all.filter((r) => r.tenantId === TENANT_ID)).toHaveLength(1);
+    });
+  });
 });
