@@ -10,12 +10,14 @@ const NAV_ITEMS = [
   { href: "/", label: "Overview", icon: "space_dashboard" },
   { href: "/tenants", label: "Tenants", icon: "domain" },
   { href: "/engine-state", label: "Platform", icon: "dns" },
+  { href: "/reconciliation", label: "Reconciliation", icon: "fact_check" },
 ] as const;
 
 const PAGE_TITLES: Record<string, string> = {
   "/": "Overview",
   "/tenants": "Tenants",
   "/engine-state": "Platform",
+  "/reconciliation": "Reconciliation",
 };
 
 function operatorRoleLabel(roles: readonly string[]): string {

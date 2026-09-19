@@ -30,6 +30,25 @@ export interface ManagementApiCallResult {
   body: unknown;
 }
 
+// 1A.10.1 — shared classification of a mutation-call network failure,
+// promoted here from tenantLifecycleOperation.ts (1A.8) so every operation
+// module that performs a mutating call through this client applies the same
+// distinction. A connection that never established (DNS failure, connection
+// refused) is unambiguous: no owner-side mutation could possibly have been
+// dispatched, so callers may treat it as a plain failure, safe to retry
+// immediately. Anything else (a timeout or reset AFTER a connection
+// existed) is outcome-ambiguous — the owner side may already have executed
+// — and callers must treat it as partially_completed, never retried with a
+// fresh idempotency key without first reading the durable owner-side
+// receipt (see docs/Phase1A.10_Ground_Truth_and_Scoping §1.1/§3.1).
+const NEVER_DISPATCHED_ERROR_CODES = new Set(["ECONNREFUSED", "ENOTFOUND", "EAI_AGAIN", "EADDRNOTAVAIL"]);
+
+export function isNeverDispatchedNetworkError(err: unknown): boolean {
+  const cause = err instanceof Error ? (err as Error & { cause?: unknown }).cause : undefined;
+  const code = cause && typeof cause === "object" && "code" in cause ? (cause as { code?: unknown }).code : undefined;
+  return typeof code === "string" && NEVER_DISPATCHED_ERROR_CODES.has(code);
+}
+
 export async function callInfrakineticManagementApi(params: ManagementApiCallParams): Promise<ManagementApiCallResult> {
   const doFetch = params.fetchImpl ?? fetch;
   const url = new URL(params.path, params.baseUrl).toString();

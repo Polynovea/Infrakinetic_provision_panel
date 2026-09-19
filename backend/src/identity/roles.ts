@@ -118,6 +118,14 @@ export const ROLE_SCOPE_CEILING: Readonly<Record<Role, readonly Scope[]>> = {
     "engines.read",
     "engines.entitlement.write",
     "identity.read",
+    // 1A.10 — reconciliation drift read/repair over the exact same
+    // commissioned_tenants/management_operations rows this role's own
+    // commission/suspend/resume/decommission mutations produce; the role
+    // that owns those mutations is the natural owner of repairing their
+    // drift too. runtime.read/runtime.repair.request already existed in
+    // the 1A.2 scope catalog, unused, until this phase.
+    "runtime.read",
+    "runtime.repair.request",
     "audit.read",
   ],
   identity_operator: [

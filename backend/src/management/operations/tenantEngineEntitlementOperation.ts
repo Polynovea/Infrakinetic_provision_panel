@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import type { ManagementSigningKeySet } from "../managementSigningKeys.js";
 import type { ManagementTransportConfig } from "../managementConfig.js";
 import { mintManagementAssertion } from "../managementAssertionIssuer.js";
-import { callInfrakineticManagementApi } from "../managementApiClient.js";
+import { callInfrakineticManagementApi, isNeverDispatchedNetworkError } from "../managementApiClient.js";
 import type { ManagementOperationLedger, ManagementOperationRecord } from "./managementOperationLedger.js";
 import { buildSafeSnapshot, redactSecretShapedFields } from "./evidence.js";
 import { MANAGEMENT_COMMAND_CONTRACT } from "./commandEnvelope.js";
@@ -204,14 +204,27 @@ export async function requestTenantEngineEntitlementChange(
       idempotencyKey: params.idempotencyKey,
     });
   } catch (err) {
-    const failed = await deps.ledger.transitionOperation(submitted.operationId, {
-      toStatus: "failed",
+    // 1A.10.1 — same never-dispatched vs. outcome-ambiguous distinction
+    // engineStateOperation.ts and tenantLifecycleOperation.ts apply; see
+    // managementApiClient.ts's isNeverDispatchedNetworkError header.
+    if (isNeverDispatchedNetworkError(err)) {
+      const failed = await deps.ledger.transitionOperation(submitted.operationId, {
+        toStatus: "failed",
+        partialFailureState: {
+          stage: "mutation-call-never-dispatched",
+          message: err instanceof Error ? err.message : String(err),
+        },
+      });
+      return { operation: failed, replay: false };
+    }
+    const partial = await deps.ledger.transitionOperation(submitted.operationId, {
+      toStatus: "partially_completed",
       partialFailureState: {
         stage: "mutation-call",
         message: err instanceof Error ? err.message : String(err),
       },
     });
-    return { operation: failed, replay: false };
+    return { operation: partial, replay: false };
   }
 
   if (mutateResult.status !== 200) {

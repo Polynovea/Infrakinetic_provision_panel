@@ -257,7 +257,11 @@ type TransitionOutcome = { kind: "transitioned"; row: OperationRow } | { kind: "
 // standard wording, which pg-mem (this repo's test double) reproduces
 // exactly. This is deliberately narrow: it must not match a config/network
 // failure as if it were an expected conflict.
-function isUniqueViolation(err: unknown): boolean {
+// Exported so other repositories needing the identical "was this the
+// tenant_id/idempotency_key unique constraint" check (1A.10.2's
+// getOrCreateLegacyExisting(), specifically) reuse the same narrow,
+// PgDbClient-error-wrapping-aware match instead of re-deriving it.
+export function isUniqueViolation(err: unknown): boolean {
   const message = err instanceof Error ? err.message : String(err);
   return /duplicate key value violates unique constraint/i.test(message);
 }
