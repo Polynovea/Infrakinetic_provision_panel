@@ -101,6 +101,22 @@ interface CommandReceipt {
   status: "accepted" | "executing" | "partially_completed" | "completed" | "failed";
 }
 
+// A confirmed 404 ("not_found") is a positive signal — Infrakinetic
+// durably reserves the receipt row very early in its handler, before the
+// mutation itself, so a genuine absence means the request never reached
+// that point. Any OTHER failure to read the receipt (non-200/non-404
+// status, an unparseable body) is NOT the same thing and must not be
+// treated as it — it means the outcome is still unknown, not that it's
+// confirmed never-executed. Collapsing these two cases together (an
+// earlier version of this function did, via a shared `undefined` return)
+// would let a transient 500 on this read resolve a stuck operation to
+// `failed` and invite a retry of a mutation that may have actually
+// succeeded — exactly the mistake this phase exists to prevent.
+type ReceiptLookup =
+  | { kind: "found"; receipt: CommandReceipt }
+  | { kind: "not_found" }
+  | { kind: "unknown"; detail: string };
+
 // Honest sentinel, same reasoning tenantRegistryQuery.ts's own
 // TENANT_REGISTRY_TARGET comment gives: a receipt lookup by idempotencyKey
 // isn't really engine-scoped, but target_engine is a required claim on
@@ -138,22 +154,27 @@ async function readCommandReceipt(
   params: ReconcileTenantParams,
   requestedAction: string,
   idempotencyKey: string,
-): Promise<CommandReceipt | undefined> {
+): Promise<ReceiptLookup> {
   const receiptPath = TENANT_LIFECYCLE_ACTIONS.has(requestedAction)
     ? `${MANAGEMENT_V1_PREFIX}/tenant-lifecycle-commands/${encodeURIComponent(idempotencyKey)}`
     : `${MANAGEMENT_V1_PREFIX}/tenant-engine-entitlement-commands/${encodeURIComponent(idempotencyKey)}`;
   const readAction = TENANT_LIFECYCLE_ACTIONS.has(requestedAction)
     ? "tenants.lifecycle-commands.read"
     : "tenants.entitlement-commands.read";
-  const result = await mintAndCall(deps, params, readAction, receiptPath);
-  if (result.status === 404) return undefined;
-  if (result.status !== 200) return undefined; // treat any other unexpected status as "could not confirm", not a false positive
+  let result;
+  try {
+    result = await mintAndCall(deps, params, readAction, receiptPath);
+  } catch (err) {
+    return { kind: "unknown", detail: err instanceof Error ? err.message : String(err) };
+  }
+  if (result.status === 404) return { kind: "not_found" };
+  if (result.status !== 200) return { kind: "unknown", detail: `unexpected status ${result.status} from ${receiptPath}` };
   const body = result.body as { command?: { status?: string } };
   const status = body.command?.status;
   if (status === "accepted" || status === "executing" || status === "partially_completed" || status === "completed" || status === "failed") {
-    return { status };
+    return { kind: "found", receipt: { status } };
   }
-  return undefined;
+  return { kind: "unknown", detail: `unparseable receipt body from ${receiptPath}` };
 }
 
 function hasDurableReceipt(requestedAction: string): boolean {
@@ -288,9 +309,24 @@ async function resolveStuckOperation(
     };
   }
 
-  const receipt = await readCommandReceipt(deps, params, op.requestedAction, op.idempotencyKey);
+  const lookup = await readCommandReceipt(deps, params, op.requestedAction, op.idempotencyKey);
 
-  if (receipt?.status === "completed") {
+  if (lookup.kind === "unknown") {
+    // Could not determine the real outcome (transient error, unexpected
+    // status, unparseable body) — this is NOT the same as a confirmed
+    // absence and must never be treated as "safe to conclude failed".
+    // Surfaced, left exactly as-is, retried on the next recheck.
+    return {
+      remaining: {
+        operationId: op.operationId,
+        requestedAction: op.requestedAction,
+        class: "transport_ambiguous",
+        note: `could not read the owner-side receipt (${lookup.detail}) — recheck later`,
+      },
+    };
+  }
+
+  if (lookup.kind === "found" && lookup.receipt.status === "completed") {
     const updated = await deps.ledger.transitionOperation(op.operationId, {
       toStatus: "completed",
       result: { resolvedByReconciliation: true, receiptStatus: "completed" },
@@ -298,8 +334,8 @@ async function resolveStuckOperation(
     return { resolved: { operationId: op.operationId, requestedAction: op.requestedAction, from: "partially_completed", to: updated.status, stage } };
   }
 
-  if (!receipt || receipt.status === "failed") {
-    // No receipt at all means the request never reached the point where
+  if (lookup.kind === "not_found" || (lookup.kind === "found" && lookup.receipt.status === "failed")) {
+    // A confirmed 404 means the request never reached the point where
     // Infrakinetic durably records one (reservation happens very early in
     // its handler, before the actual mutation) — as confident a "this never
     // executed" signal as an explicit 'failed' receipt.
@@ -307,7 +343,7 @@ async function resolveStuckOperation(
       toStatus: "failed",
       partialFailureState: {
         stage: "mutation-call-resolved-not-dispatched",
-        receiptStatus: receipt?.status ?? "not_found",
+        receiptStatus: lookup.kind === "found" ? lookup.receipt.status : "not_found",
         message: "resolved via reconciliation: owner-side receipt confirms this command never completed",
       },
     });
@@ -321,7 +357,7 @@ async function resolveStuckOperation(
       operationId: op.operationId,
       requestedAction: op.requestedAction,
       class: "transport_ambiguous",
-      note: `owner-side receipt still '${receipt.status}' — recheck later`,
+      note: `owner-side receipt still '${lookup.kind === "found" ? lookup.receipt.status : "unknown"}' — recheck later`,
     },
   };
 }
