@@ -76,6 +76,15 @@ interface ManagementOperationWarning {
   message: string;
 }
 
+// 1A.10.5 — reconciliation repair result (POST .../reconciliation/tenants/:tenantId/recheck).
+interface ReconcileTenantResult {
+  tenantId: string;
+  projection: { created: boolean; observedRefreshed: boolean };
+  resolvedOperations: Array<{ operationId: string; requestedAction: string; from: string; to: string; stage?: string }>;
+  remainingDrift: Array<{ operationId: string; requestedAction: string; class: string; note: string }>;
+  observedAt: string;
+}
+
 interface ManagementOperationBody {
   operation: {
     operationId: string;
@@ -397,6 +406,10 @@ function TenantDetailDrawer({
   const [entitlementBusy, setEntitlementBusy] = useState(false);
   const [entitlementError, setEntitlementError] = useState<string | null>(null);
 
+  const [recheckBusy, setRecheckBusy] = useState(false);
+  const [recheckError, setRecheckError] = useState<string | null>(null);
+  const [recheckResult, setRecheckResult] = useState<ReconcileTenantResult | null>(null);
+
   useEffect(() => {
     let cancelled = false;
     setUsers(null);
@@ -475,6 +488,32 @@ function TenantDetailDrawer({
     }
   }
 
+  async function runRecheck() {
+    setRecheckBusy(true);
+    setRecheckError(null);
+    try {
+      const res = await request(`/management/v1/reconciliation/tenants/${encodeURIComponent(tenant.id)}/recheck`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ idempotencyKey: crypto.randomUUID() }),
+      });
+      const body = (await res.json()) as ReconcileTenantResult & { error?: string; message?: string };
+      if (!res.ok) {
+        setRecheckError(body.message ?? body.error ?? "The recheck failed.");
+        return;
+      }
+      setRecheckResult(body);
+      if (body.projection.created || body.projection.observedRefreshed || body.resolvedOperations.length > 0) {
+        await refetchTenant();
+        onMutated();
+      }
+    } catch {
+      setRecheckError("The recheck failed.");
+    } finally {
+      setRecheckBusy(false);
+    }
+  }
+
   async function refetchTenant() {
     try {
       const res = await request(`/management/v1/tenants/${encodeURIComponent(tenant.id)}`);
@@ -523,6 +562,7 @@ function TenantDetailDrawer({
   const canResume = operatorScopes.includes("tenants.resume");
   const canDecommission = operatorScopes.includes("tenants.decommission");
   const canWriteEntitlement = operatorScopes.includes("engines.entitlement.write");
+  const canReconcile = operatorScopes.includes("runtime.repair.request");
   const platformState = tenant.platform_access_state;
   const isPlatformTenant = tenant.tenant_kind === "platform";
   const hasAnyLifecycleScope = canSuspend || canResume || canDecommission;
@@ -731,6 +771,55 @@ function TenantDetailDrawer({
               ))}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {canReconcile && !isPlatformTenant && (
+        <div className="card" style={{ marginTop: "1.5rem" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.6rem" }}>
+            <h3 className="text-subhead" style={{ margin: 0 }}>
+              Reconciliation
+            </h3>
+            <button className="btn" onClick={() => void runRecheck()} disabled={recheckBusy}>
+              <Icon name="sync" size="sm" /> {recheckBusy ? "Rechecking…" : "Recheck"}
+            </button>
+          </div>
+          <p className="overlay-note" style={{ margin: "0 0 0.6rem" }}>
+            Creates a missing Governance projection from a fresh owner read, refreshes a stale observed state, and resolves any stuck
+            operations for this tenant from their durable owner-side receipt — never resends a mutation.
+          </p>
+          {recheckError && <ErrorState label={recheckError} />}
+          {recheckResult && (
+            <div style={{ fontSize: "0.85rem" }}>
+              <p style={{ margin: "0 0 0.4rem" }}>
+                Projection: {recheckResult.projection.created ? "created" : recheckResult.projection.observedRefreshed ? "refreshed" : "no drift found"}
+              </p>
+              {recheckResult.resolvedOperations.length > 0 && (
+                <div style={{ marginBottom: "0.4rem" }}>
+                  <strong>Resolved:</strong>
+                  <ul style={{ margin: "0.2rem 0 0", paddingLeft: "1.2rem" }}>
+                    {recheckResult.resolvedOperations.map((o) => (
+                      <li key={o.operationId}>
+                        {o.requestedAction}: {o.from} → {o.to}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {recheckResult.remainingDrift.length > 0 && (
+                <div>
+                  <strong>Still needs attention:</strong>
+                  <ul style={{ margin: "0.2rem 0 0", paddingLeft: "1.2rem" }}>
+                    {recheckResult.remainingDrift.map((d) => (
+                      <li key={d.operationId}>
+                        {d.requestedAction} ({d.class}): {d.note}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
 
