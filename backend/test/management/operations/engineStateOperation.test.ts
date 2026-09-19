@@ -9,6 +9,7 @@ import {
   recoverEngineState,
   UnknownEngineError,
   MissingRecoveryIntentError,
+  ManagementApiUnreachableError,
 } from "../../../src/management/operations/engineStateOperation.js";
 import { MissingReasonError, IdempotencyConflictError } from "../../../src/management/operations/managementOperationErrors.js";
 import type { DbClient } from "../../../src/db/dbClient.js";
@@ -181,6 +182,17 @@ describe("management/operations/engineStateOperation", () => {
       requestEngineStateChange(baseDeps(fetchImpl), baseParams({ engineKeyOrAlias: "not_a_real_engine" })),
     ).rejects.toBeInstanceOf(UnknownEngineError);
     expect(calls.filter((c) => c.method === "PUT")).toHaveLength(0);
+    const ops = await client.query("SELECT * FROM governance.management_operations");
+    expect(ops.rows).toHaveLength(0);
+  });
+
+  it("a network failure on Step 1's resolve-read (before any ledger reservation) is a clean ManagementApiUnreachableError, not an uncaught throw, and creates no ledger row", async () => {
+    const unreachableFetch = (async () => {
+      throw new TypeError("fetch failed");
+    }) as unknown as typeof fetch;
+    await expect(
+      requestEngineStateChange(baseDeps(unreachableFetch), baseParams()),
+    ).rejects.toBeInstanceOf(ManagementApiUnreachableError);
     const ops = await client.query("SELECT * FROM governance.management_operations");
     expect(ops.rows).toHaveLength(0);
   });

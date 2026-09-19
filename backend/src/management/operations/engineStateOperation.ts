@@ -56,6 +56,28 @@ export class UnexpectedManagementApiResponseError extends Error {
   }
 }
 
+// Step 1 below (resolve + validate) runs BEFORE the 1A.5 ledger reservation
+// — deliberately: the canonical engine key it resolves is what gets bound
+// into the ledger's target_engine and idempotency hash (never the caller's
+// alias), and an unknown-engine 404 there must reject with zero ledger rows
+// created (see this module's and tenantEngineEntitlementOperation.ts's own
+// "rejected before any ledger operation is created" tests). That means a
+// network failure at Step 1 (Infrakinetic briefly unreachable, DNS failure,
+// timeout) has no operation to record itself against either — there is
+// nothing yet to attach a `failed` transition to, and fabricating one
+// without a real canonical key/before-state would produce a lower-quality
+// ledger entry than the "before-state is independently observed" guarantee
+// this module's Step 1 exists to provide. This error class exists so that
+// gap fails CLEANLY (caught by the route, mapped to a 502) instead of
+// propagating as a raw, unhandled 500 — not to manufacture a ledger row for
+// an attempt that never reached a validated target.
+export class ManagementApiUnreachableError extends Error {
+  constructor(readonly path: string, readonly cause: unknown) {
+    super(`Could not reach Infrakinetic's management API at ${path}: ${cause instanceof Error ? cause.message : String(cause)}`);
+    this.name = "ManagementApiUnreachableError";
+  }
+}
+
 export interface EngineStateOperationDeps {
   ledger: ManagementOperationLedger;
   signingKeys: ManagementSigningKeySet;
@@ -150,7 +172,12 @@ export async function requestEngineStateChange(
   // not merely asserted by the caller.
   const resolveReadPath = `${MANAGEMENT_V1_PREFIX}/engines/${encodeURIComponent(params.engineKeyOrAlias)}/state`;
   const resolveAssertion = await mint("engines.state.read", "engines.read", params.engineKeyOrAlias);
-  const resolveResult = await call(resolveAssertion, "GET", resolveReadPath);
+  let resolveResult;
+  try {
+    resolveResult = await call(resolveAssertion, "GET", resolveReadPath);
+  } catch (err) {
+    throw new ManagementApiUnreachableError(resolveReadPath, err);
+  }
   if (resolveResult.status === 404) {
     throw new UnknownEngineError(params.engineKeyOrAlias);
   }
