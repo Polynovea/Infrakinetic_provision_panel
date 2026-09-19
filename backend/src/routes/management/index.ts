@@ -44,6 +44,8 @@ import {
   getTenantEngineEntitlementRead,
   listTenantEngineEntitlements,
 } from "../../management/operations/tenantEngineEntitlementQuery.js";
+import { listDrift } from "../../management/operations/reconciliationQuery.js";
+import { reconcileTenant } from "../../management/operations/reconciliationOperation.js";
 
 export interface ManagementRouterDeps {
   identityProvider: IdentityProvider;
@@ -795,6 +797,106 @@ export function createManagementRouter(deps: ManagementRouterDeps): Router {
         }
         if (err instanceof UnknownEntitlementEngineError) {
           res.status(404).json({ error: "UNKNOWN_ENGINE", message: err.message });
+          return;
+        }
+        if (err instanceof UnexpectedManagementApiResponseError || err instanceof ManagementApiUnreachableError) {
+          res.status(502).json({ error: "MANAGEMENT_API_UPSTREAM_ERROR", message: err.message });
+          return;
+        }
+        if (err instanceof ManagementOperationError) {
+          res.status(err.httpStatus).json({ error: err.code, message: err.message });
+          return;
+        }
+        if (err instanceof DatabaseUnavailableError) {
+          res.status(err.httpStatus).json({ error: err.code, message: err.message });
+          return;
+        }
+        next(err);
+      }
+    },
+  );
+
+  // 1A.10.5 — reconciliation drift read (R0). runtime.read already existed,
+  // unused, in the 1A.2 scope catalog. Optional ?tenantId narrows every
+  // drift class to one real tenant, same shape as /operations' own optional
+  // filters above.
+  router.get("/reconciliation/drift", requireScope("runtime.read", deps.auditSink), async (req, res, next) => {
+    try {
+      const ctx = req.operatorContext;
+      if (!ctx) {
+        res.status(403).json({ error: "NOT_AUTHENTICATED" });
+        return;
+      }
+      const tenantId = typeof req.query.tenantId === "string" && req.query.tenantId.trim() !== "" ? req.query.tenantId : undefined;
+      const signingKeys = await deps.getManagementSigningKeys();
+      const transportConfig = deps.loadTransportConfig();
+      const result = await listDrift(
+        { ledger: deps.ledger, commissionedTenants: deps.commissionedTenants, signingKeys, transportConfig, infrakineticBaseUrl: deps.infrakineticBaseUrl },
+        {
+          operatorId: ctx.operatorId,
+          operatorSessionId: ctx.operatorSessionId,
+          operatorRoles: ctx.roles,
+          operatorGrantedScopes: ctx.scopes,
+          correlationId: ctx.correlationId,
+          tenantId,
+        },
+      );
+      res.status(200).json(result);
+    } catch (err) {
+      if (err instanceof UnknownTenantError) {
+        res.status(404).json({ error: "UNKNOWN_TENANT", message: err.message });
+        return;
+      }
+      if (err instanceof DatabaseUnavailableError) {
+        res.status(err.httpStatus).json({ error: err.code, message: err.message });
+        return;
+      }
+      next(err);
+    }
+  });
+
+  // 1A.10.5 — the reconciliation repair vertical. R1 (§3.9 of the scoping
+  // doc — low-impact metadata, no reason required): every repair here
+  // either writes Governance's own projection from a fresh owner read or
+  // resolves a stuck ledger operation from a durable owner-side receipt —
+  // it never mutates owner state and never resends the original mutation.
+  // runtime.repair.request already existed, unused, in the 1A.2 scope
+  // catalog.
+  router.post(
+    "/reconciliation/tenants/:tenantId/recheck",
+    requireScope("runtime.repair.request", deps.auditSink),
+    async (req, res, next) => {
+      try {
+        const ctx = req.operatorContext;
+        if (!ctx) {
+          res.status(403).json({ error: "NOT_AUTHENTICATED" });
+          return;
+        }
+        const body = (req.body ?? {}) as Record<string, unknown>;
+        if (typeof body.idempotencyKey !== "string" || body.idempotencyKey.trim() === "") {
+          res.status(400).json({ error: "IDEMPOTENCY_KEY_REQUIRED" });
+          return;
+        }
+
+        const signingKeys = await deps.getManagementSigningKeys();
+        const transportConfig = deps.loadTransportConfig();
+
+        const result = await reconcileTenant(
+          { ledger: deps.ledger, commissionedTenants: deps.commissionedTenants, signingKeys, transportConfig, infrakineticBaseUrl: deps.infrakineticBaseUrl },
+          {
+            idempotencyKey: body.idempotencyKey,
+            operatorId: ctx.operatorId,
+            operatorSessionId: ctx.operatorSessionId,
+            operatorRoles: ctx.roles,
+            operatorGrantedScopes: ctx.scopes,
+            tenantId: req.params.tenantId,
+            correlationId: ctx.correlationId,
+          },
+        );
+        res.status(200).json(result);
+      } catch (err) {
+        if (err instanceof UnknownTenantError) {
+          res.status(404).json({ error: "UNKNOWN_TENANT", message: err.message });
           return;
         }
         if (err instanceof UnexpectedManagementApiResponseError || err instanceof ManagementApiUnreachableError) {

@@ -6,6 +6,7 @@ import { buildMigratedPgMemClient } from "../../helpers/pgMemDb.js";
 import { ManagementOperationLedger } from "../../../src/management/operations/managementOperationLedger.js";
 import { CommissionedTenantsRepository } from "../../../src/management/operations/commissionedTenants.js";
 import { reconcileTenant, type ReconciliationOperationDeps } from "../../../src/management/operations/reconciliationOperation.js";
+import { ManagementApiUnreachableError } from "../../../src/management/operations/engineStateOperation.js";
 import type { DbClient } from "../../../src/db/dbClient.js";
 import type { ManagementSigningKeySet } from "../../../src/management/managementSigningKeys.js";
 import type { ManagementTransportConfig } from "../../../src/management/managementConfig.js";
@@ -136,6 +137,15 @@ describe("management/operations/reconciliationOperation", () => {
     await ledger.transitionOperation(operation.operationId, { toStatus: "running" });
     return ledger.transitionOperation(operation.operationId, { toStatus: "partially_completed", partialFailureState });
   }
+
+  it("registry unreachable during repair -> a clean ManagementApiUnreachableError, not an uncaught throw", async () => {
+    const unreachableFetch = (async () => {
+      throw new TypeError("fetch failed");
+    }) as unknown as typeof fetch;
+    await expect(
+      reconcileTenant(baseDeps(unreachableFetch), { idempotencyKey: "recheck-unreachable", tenantId: TENANT_ID, ...OPERATOR_PARAMS }),
+    ).rejects.toBeInstanceOf(ManagementApiUnreachableError);
+  });
 
   it("no existing projection: creates one via getOrCreateLegacyExisting, recorded as a completed R1 ledger operation", async () => {
     const { fetchImpl } = buildFakeInfrakinetic({ platformAccessState: "active" });

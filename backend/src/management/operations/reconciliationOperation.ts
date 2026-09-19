@@ -4,8 +4,8 @@ import type { ManagementSigningKeySet } from "../managementSigningKeys.js";
 import type { ManagementTransportConfig } from "../managementConfig.js";
 import { mintManagementAssertion } from "../managementAssertionIssuer.js";
 import { callInfrakineticManagementApi } from "../managementApiClient.js";
-import { getTenantRegistryEntry } from "./tenantRegistryQuery.js";
-import { MANAGEMENT_V1_PREFIX } from "./engineStateOperation.js";
+import { getTenantRegistryEntry, UnknownTenantError } from "./tenantRegistryQuery.js";
+import { MANAGEMENT_V1_PREFIX, ManagementApiUnreachableError } from "./engineStateOperation.js";
 import { buildSafeSnapshot } from "./evidence.js";
 import { MANAGEMENT_COMMAND_CONTRACT } from "./commandEnvelope.js";
 import { CommissionedTenantsRepository } from "./commissionedTenants.js";
@@ -164,7 +164,22 @@ async function repairProjection(
   deps: ReconciliationOperationDeps,
   params: ReconcileTenantParams,
 ): Promise<ProjectionRepairResult> {
-  const fresh = await getTenantRegistryEntry(deps, { ...params, identifier: params.tenantId });
+  // Unlike listDrift() (reconciliationQuery.ts), which degrades gracefully
+  // on a registry read failure because it has other drift classes still
+  // worth returning, a repair has no fallback data to act on — but the
+  // failure must still surface as a typed, clean error (same
+  // ManagementApiUnreachableError the 1A.9 retro introduced for
+  // engineStateOperation.ts's own pre-reservation resolve-read), not the
+  // uncaught-network-exception shape that retro flagged as a known,
+  // deferred gap on every GET route in this router — this is exactly the
+  // read route the gap now had to be closed on.
+  let fresh;
+  try {
+    fresh = await getTenantRegistryEntry(deps, { ...params, identifier: params.tenantId });
+  } catch (err) {
+    if (err instanceof UnknownTenantError) throw err;
+    throw new ManagementApiUnreachableError(`${MANAGEMENT_V1_PREFIX}/tenants/${params.tenantId}`, err);
+  }
   const observedState = fresh.tenant.platform_access_state;
   const existing = await deps.commissionedTenants.getByTenantId(params.tenantId);
 
