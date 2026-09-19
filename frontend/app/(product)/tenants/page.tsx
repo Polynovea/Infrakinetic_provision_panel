@@ -77,11 +77,18 @@ interface ManagementOperationWarning {
 }
 
 // 1A.10.5 — reconciliation repair result (POST .../reconciliation/tenants/:tenantId/recheck).
+// Projection repair and stuck-operation resolution run isolated from each
+// other (a resilience patch after 1A.10.5) — either can fail without
+// blocking the other, so both must be checked independently rather than
+// inferred from projection/resolvedOperations alone.
 interface ReconcileTenantResult {
   tenantId: string;
   projection: { created: boolean; observedRefreshed: boolean };
+  projectionError?: string;
   resolvedOperations: Array<{ operationId: string; requestedAction: string; from: string; to: string; stage?: string }>;
   remainingDrift: Array<{ operationId: string; requestedAction: string; class: string; note: string }>;
+  stuckOperationsError?: string;
+  outcome: "complete" | "partial" | "failed";
   observedAt: string;
 }
 
@@ -791,8 +798,16 @@ function TenantDetailDrawer({
           {recheckError && <ErrorState label={recheckError} />}
           {recheckResult && (
             <div style={{ fontSize: "0.85rem" }}>
+              {recheckResult.outcome !== "complete" && (
+                <p style={{ margin: "0 0 0.4rem", color: "var(--warning-fg)" }}>
+                  {recheckResult.outcome === "failed" ? "Recheck could not complete: " : "Recheck partially completed: "}
+                  {[recheckResult.projectionError, recheckResult.stuckOperationsError].filter(Boolean).join(" · ")}
+                </p>
+              )}
               <p style={{ margin: "0 0 0.4rem" }}>
-                Projection: {recheckResult.projection.created ? "created" : recheckResult.projection.observedRefreshed ? "refreshed" : "no drift found"}
+                Projection: {recheckResult.projectionError
+                  ? "could not be checked"
+                  : recheckResult.projection.created ? "created" : recheckResult.projection.observedRefreshed ? "refreshed" : "no drift found"}
               </p>
               {recheckResult.resolvedOperations.length > 0 && (
                 <div style={{ marginBottom: "0.4rem" }}>

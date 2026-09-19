@@ -57,9 +57,23 @@ export interface RemainingStuckOperation {
 
 export interface ReconcileTenantResult {
   tenantId: string;
+  // Projection repair and stuck-operation resolution are independent
+  // activities (neither reads nor mutates data the other depends on) and
+  // run isolated from each other — a failure in one must never prevent the
+  // other from making progress. `projection` falls back to an inert
+  // "nothing happened" value when its own repair attempt failed;
+  // `projectionError`/`stuckOperationsError` are set whenever that
+  // sub-task did not complete, so a failure is always visible in the
+  // response, never silently reported as if it were a clean no-op.
   projection: ProjectionRepairResult;
+  projectionError?: string;
   resolvedOperations: ResolvedStuckOperation[];
   remainingDrift: RemainingStuckOperation[];
+  stuckOperationsError?: string;
+  // Truthful summary: "complete" only when BOTH sub-tasks ran without
+  // error (independent of whether either found anything to repair);
+  // "partial" when exactly one failed; "failed" when both did.
+  outcome: "complete" | "partial" | "failed";
   observedAt: string;
 }
 
@@ -362,28 +376,86 @@ async function resolveStuckOperation(
   };
 }
 
-export async function reconcileTenant(
+function describeError(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+interface StuckOperationsSweepResult {
+  resolvedOperations: ResolvedStuckOperation[];
+  remainingDrift: RemainingStuckOperation[];
+}
+
+// The list-then-resolve sweep as its own unit, so reconcileTenant() can run
+// it independently of, and isolated from, projection repair. A single
+// stuck operation whose OWN resolution attempt throws unexpectedly (every
+// expected failure mode — a network error, a non-200, an unparseable body —
+// is already absorbed inside resolveStuckOperation()/readCommandReceipt()
+// and reported as `remaining`, never thrown) is caught here too, so one
+// bad row can't erase the real, already-committed results of the rows
+// resolved before it in the same sweep.
+async function resolveStuckOperations(
   deps: ReconciliationOperationDeps,
   params: ReconcileTenantParams,
-): Promise<ReconcileTenantResult> {
-  const [projection, stuckOperations] = await Promise.all([
-    repairProjection(deps, params),
-    deps.ledger.listOperations({ status: "partially_completed", targetTenantId: params.tenantId, limit: OPERATIONS_LIST_MAX_LIMIT }),
-  ]);
+): Promise<StuckOperationsSweepResult> {
+  const stuckOperations = await deps.ledger.listOperations({
+    status: "partially_completed",
+    targetTenantId: params.tenantId,
+    limit: OPERATIONS_LIST_MAX_LIMIT,
+  });
 
   const resolvedOperations: ResolvedStuckOperation[] = [];
   const remainingDrift: RemainingStuckOperation[] = [];
   for (const op of stuckOperations) {
-    const outcome = await resolveStuckOperation(deps, params, op);
-    if (outcome.resolved) resolvedOperations.push(outcome.resolved);
-    if (outcome.remaining) remainingDrift.push(outcome.remaining);
+    try {
+      const outcome = await resolveStuckOperation(deps, params, op);
+      if (outcome.resolved) resolvedOperations.push(outcome.resolved);
+      if (outcome.remaining) remainingDrift.push(outcome.remaining);
+    } catch (err) {
+      remainingDrift.push({
+        operationId: op.operationId,
+        requestedAction: op.requestedAction,
+        class: "unclassified",
+        note: `resolution attempt failed unexpectedly (${describeError(err)}) — recheck later`,
+      });
+    }
   }
+  return { resolvedOperations, remainingDrift };
+}
+
+export async function reconcileTenant(
+  deps: ReconciliationOperationDeps,
+  params: ReconcileTenantParams,
+): Promise<ReconcileTenantResult> {
+  // Projection repair (needs a fresh owner-registry read) and stuck-
+  // operation resolution (needs only the ledger plus, per-op, an owner
+  // receipt read) are independent — neither depends on the other's
+  // success. Promise.allSettled (not Promise.all) so a failure on one
+  // side — e.g. the tenant registry being unreachable — can never prevent
+  // the other from completing and being reported.
+  const [projectionSettled, stuckOpsSettled] = await Promise.allSettled([
+    repairProjection(deps, params),
+    resolveStuckOperations(deps, params),
+  ]);
+
+  const projection = projectionSettled.status === "fulfilled" ? projectionSettled.value : { created: false, observedRefreshed: false };
+  const projectionError = projectionSettled.status === "rejected" ? describeError(projectionSettled.reason) : undefined;
+
+  const { resolvedOperations, remainingDrift } =
+    stuckOpsSettled.status === "fulfilled" ? stuckOpsSettled.value : { resolvedOperations: [], remainingDrift: [] };
+  const stuckOperationsError = stuckOpsSettled.status === "rejected" ? describeError(stuckOpsSettled.reason) : undefined;
+
+  const outcome: ReconcileTenantResult["outcome"] = projectionError
+    ? (stuckOperationsError ? "failed" : "partial")
+    : (stuckOperationsError ? "partial" : "complete");
 
   return {
     tenantId: params.tenantId,
     projection,
+    projectionError,
     resolvedOperations,
     remainingDrift,
+    stuckOperationsError,
+    outcome,
     observedAt: new Date().toISOString(),
   };
 }
