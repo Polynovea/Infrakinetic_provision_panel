@@ -11,7 +11,6 @@ import {
   ProjectionMissingForPlanChangeError,
 } from "../../../src/management/operations/tenantPlanChangeOperation.js";
 import { UnknownTenantError } from "../../../src/management/operations/tenantRegistryQuery.js";
-import { ManagementApiUnreachableError } from "../../../src/management/operations/engineStateOperation.js";
 import { MissingReasonError, IdempotencyConflictError } from "../../../src/management/operations/managementOperationErrors.js";
 import type { DbClient } from "../../../src/db/dbClient.js";
 import type { ManagementSigningKeySet } from "../../../src/management/managementSigningKeys.js";
