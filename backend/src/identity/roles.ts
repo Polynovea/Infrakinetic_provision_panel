@@ -22,6 +22,7 @@ export const SCOPES = [
   "tenants.suspend",
   "tenants.resume",
   "tenants.decommission",
+  "tenants.plan.write",
 
   "engines.read",
   "engines.entitlement.write",
@@ -115,6 +116,11 @@ export const ROLE_SCOPE_CEILING: Readonly<Record<Role, readonly Scope[]>> = {
     "tenants.suspend",
     "tenants.resume",
     "tenants.decommission",
+    // 1A.11 — plan is a pricing-tier change with revenue implications, same
+    // operator population and same R2 bar as suspend/resume/decommission
+    // above (see tenantPlanChangeOperation.ts's own header for why this
+    // stays R2 and not R3/R4).
+    "tenants.plan.write",
     "engines.read",
     "engines.entitlement.write",
     "identity.read",
