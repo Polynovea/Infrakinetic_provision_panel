@@ -107,6 +107,22 @@ interface ManagementOperationBody {
   replay: boolean;
 }
 
+// 1A.11 — tenant.plan.change. Only the three sellable, customer-facing plans
+// (matches backend's CANONICAL_SELLABLE_TENANT_PLANS in
+// lib/tenantPlanCatalog.js) are offered here — performance_lab is a reserved
+// internal tier with no public.plans row and is never operator-selectable.
+const SELLABLE_PLANS = ["starter", "growth", "enterprise"] as const;
+
+interface PlanChangeOperationBody {
+  operation: {
+    operationId: string;
+    status: string;
+    partialFailureState?: { body?: { error?: string; message?: string } } | null;
+    result?: { previousPlan?: string; requestedPlan?: string; resultingPlan?: string };
+  };
+  replay: boolean;
+}
+
 function formatDate(iso: string): string {
   return new Date(iso).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
 }
@@ -417,6 +433,13 @@ function TenantDetailDrawer({
   const [recheckError, setRecheckError] = useState<string | null>(null);
   const [recheckResult, setRecheckResult] = useState<ReconcileTenantResult | null>(null);
 
+  const [showPlanChange, setShowPlanChange] = useState(false);
+  const [planChoice, setPlanChoice] = useState(tenant.plan);
+  const [planChangeReason, setPlanChangeReason] = useState("");
+  const [planChangeBusy, setPlanChangeBusy] = useState(false);
+  const [planChangeError, setPlanChangeError] = useState<string | null>(null);
+  const [planChangeResult, setPlanChangeResult] = useState<PlanChangeOperationBody["operation"] | null>(null);
+
   useEffect(() => {
     let cancelled = false;
     setUsers(null);
@@ -565,10 +588,41 @@ function TenantDetailDrawer({
     }
   }
 
+  async function runPlanChange() {
+    if (planChangeReason.trim() === "") {
+      setPlanChangeError("A reason is required.");
+      return;
+    }
+    setPlanChangeBusy(true);
+    setPlanChangeError(null);
+    try {
+      const res = await request(`/management/v1/tenants/${encodeURIComponent(tenant.id)}/plan`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ plan: planChoice, reason: planChangeReason, idempotencyKey: crypto.randomUUID() }),
+      });
+      const body = (await res.json()) as PlanChangeOperationBody & { error?: string; message?: string };
+      if (!res.ok) {
+        setPlanChangeError(body.message ?? body.error ?? "The request failed.");
+        return;
+      }
+      setPlanChangeResult(body.operation);
+      if (body.operation.status === "completed") {
+        await refetchTenant();
+        onMutated();
+      }
+    } catch {
+      setPlanChangeError("The request failed.");
+    } finally {
+      setPlanChangeBusy(false);
+    }
+  }
+
   const canSuspend = operatorScopes.includes("tenants.suspend");
   const canResume = operatorScopes.includes("tenants.resume");
   const canDecommission = operatorScopes.includes("tenants.decommission");
   const canWriteEntitlement = operatorScopes.includes("engines.entitlement.write");
+  const canChangePlan = operatorScopes.includes("tenants.plan.write");
   const canReconcile = operatorScopes.includes("runtime.repair.request");
   const platformState = tenant.platform_access_state;
   const isPlatformTenant = tenant.tenant_kind === "platform";
@@ -637,7 +691,24 @@ function TenantDetailDrawer({
       <dl style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.6rem", fontSize: "0.88rem" }}>
         <div>
           <dt style={{ color: "var(--text-muted)" }}>Plan</dt>
-          <dd style={{ margin: 0 }}>{tenant.plan}</dd>
+          <dd style={{ margin: 0, display: "flex", alignItems: "center", gap: "0.5rem" }}>
+            {tenant.plan}
+            {canChangePlan && !isPlatformTenant && (
+              <button
+                className="btn"
+                style={{ fontSize: "0.76rem", padding: "0.1rem 0.5rem" }}
+                onClick={() => {
+                  setPlanChoice(tenant.plan);
+                  setPlanChangeReason("");
+                  setPlanChangeError(null);
+                  setPlanChangeResult(null);
+                  setShowPlanChange(true);
+                }}
+              >
+                Change
+              </button>
+            )}
+          </dd>
         </div>
         <div>
           <dt style={{ color: "var(--text-muted)" }}>Industry</dt>
@@ -905,6 +976,64 @@ function TenantDetailDrawer({
             <textarea value={entitlementReason} onChange={(e) => setEntitlementReason(e.target.value)} rows={2} placeholder="Required" />
           </div>
           {entitlementError && <ErrorState label={entitlementError} />}
+        </ConfirmDialog>
+      )}
+
+      {showPlanChange && (
+        <ConfirmDialog
+          title={`Change plan for ${tenant.name}`}
+          description="Governance owns desired plan going forward. A tenant with a live Razorpay subscription cannot be changed through this path — the request will be blocked rather than silently applied."
+          confirmLabel={planChangeResult ? "Close" : "Change plan"}
+          danger={false}
+          busy={planChangeBusy}
+          // No reason to open an R2 ledger operation, a desired-state write, and a
+          // signed owner command for a plan the tenant is already on.
+          confirmDisabled={!planChangeResult && planChoice === tenant.plan}
+          onCancel={() => setShowPlanChange(false)}
+          onConfirm={planChangeResult ? () => setShowPlanChange(false) : runPlanChange}
+        >
+          {!planChangeResult && (
+            <>
+              <div className="field">
+                <label>Plan</label>
+                <select value={planChoice} onChange={(e) => setPlanChoice(e.target.value)}>
+                  {SELLABLE_PLANS.map((p) => (
+                    <option key={p} value={p}>
+                      {p}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              {planChoice === tenant.plan && (
+                <p className="overlay-note" style={{ margin: "0 0 0.75rem" }}>
+                  This tenant is already on the {tenant.plan} plan. Choose a different plan to proceed.
+                </p>
+              )}
+              <div className="field">
+                <label>Reason</label>
+                <textarea value={planChangeReason} onChange={(e) => setPlanChangeReason(e.target.value)} rows={2} placeholder="Required" />
+              </div>
+              {planChangeError && <ErrorState label={planChangeError} />}
+            </>
+          )}
+          {planChangeResult && (
+            <div style={{ fontSize: "0.85rem" }}>
+              <p style={{ display: "flex", gap: "0.4rem", alignItems: "center", margin: "0 0 0.5rem" }}>
+                Outcome <StatusBadge value={planChangeResult.status} />
+              </p>
+              {planChangeResult.status !== "completed" &&
+                planChangeResult.partialFailureState?.body?.error === "RAZORPAY_SUBSCRIPTION_BOUND" && (
+                  <p className="overlay-note">
+                    This tenant has a live Razorpay subscription. Plan changes are blocked through this governed path until a
+                    billing-plan transition flow exists — desired plan is recorded but not applied.
+                  </p>
+                )}
+              {planChangeResult.status !== "completed" &&
+                planChangeResult.partialFailureState?.body?.error !== "RAZORPAY_SUBSCRIPTION_BOUND" && (
+                  <p className="overlay-note">The change did not complete. See Audit for details.</p>
+                )}
+            </div>
+          )}
         </ConfirmDialog>
       )}
     </Drawer>

@@ -309,6 +309,26 @@ export class CommissionedTenantsRepository {
     return mapRow(result.rows[0]);
   }
 
+  // 1A.11 — updates ONLY desired_plan, Governance's own record of operator
+  // intent (governance.commissioned_tenants.desired_plan, 0006). Called by
+  // tenantPlanChangeOperation.ts BEFORE the owner-side apply attempt —
+  // desired state is Governance's to declare immediately, independent of
+  // whether Infrakinetic can or does converge to it. If the owner apply
+  // then fails or is blocked (e.g. a live Razorpay subscription), this
+  // value legitimately stays at the new plan and shows up as a real,
+  // intentional desiredProvisionedMismatch via 1A.10's own reconciliation
+  // read — that is the documented, deliberate behavior (see
+  // tenantPlanChangeOperation.ts's own header), not something this method
+  // rolls back on a later failure.
+  async updateDesiredPlan(projectionId: string, desiredPlan: string): Promise<CommissionedTenantRecord> {
+    const result = await this.db.query<ProjectionRow>(
+      `UPDATE governance.commissioned_tenants SET desired_plan = $2, updated_at = now() WHERE projection_id = $1 RETURNING *`,
+      [projectionId, desiredPlan],
+    );
+    if (!result.rows[0]) throw new CommissionedTenantNotFoundError(projectionId);
+    return mapRow(result.rows[0]);
+  }
+
   // Refreshes only the observed-fact read cache, without a lifecycle
   // transition — used after suspend/resume/decommission, whose lifecycle
   // projection transition (active<->suspended, ->decommission_requested->

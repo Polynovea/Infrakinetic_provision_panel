@@ -30,6 +30,7 @@ describe("db/migrationRunner", () => {
       "0004_browser_operator_sessions.sql",
       "0005_tenant_lifecycle_foundation.sql",
       "0006_commissioned_tenants_control_fields.sql",
+      "0007_public_onboarding_service_operator.sql",
     ]);
     expect(results.every((r) => r.applied)).toBe(true);
 
@@ -127,6 +128,7 @@ describe("db/migrationRunner", () => {
       { id: "0004_browser_operator_sessions.sql", applied: true },
       { id: "0005_tenant_lifecycle_foundation.sql", applied: true },
       { id: "0006_commissioned_tenants_control_fields.sql", applied: true },
+      { id: "0007_public_onboarding_service_operator.sql", applied: true },
     ]);
   });
 
@@ -162,6 +164,7 @@ describe("db/migrationRunner", () => {
       { id: "0004_browser_operator_sessions.sql", applied: true },
       { id: "0005_tenant_lifecycle_foundation.sql", applied: true },
       { id: "0006_commissioned_tenants_control_fields.sql", applied: true },
+      { id: "0007_public_onboarding_service_operator.sql", applied: true },
     ]);
 
     // Idempotent from here on, same as every other migration.
