@@ -15,7 +15,6 @@ import { ManagementOperationLedger } from "./management/operations/managementOpe
 import { CommissionedTenantsRepository } from "./management/operations/commissionedTenants.js";
 import { createBrowserAuthRouter } from "./routes/auth/index.js";
 import { createManagementRouter } from "./routes/management/index.js";
-import { createPublicOnboardingRouter } from "./routes/publicOnboarding/index.js";
 import { DatabaseUnavailableError } from "./db/errors.js";
 
 // 1A.1 — infrastructure-only, still true: no database connection, no calls
@@ -99,23 +98,6 @@ const managementDeps = {
 
 app.use("/auth", createBrowserAuthRouter({ identityProvider, operatorDirectory, browserAuthStore, auditSink }));
 app.use("/management/v1", createManagementRouter(managementDeps));
-
-// 1A.11 — public self-service signup boundary. Deliberately mounted at its
-// own base path, not under /management/v1 (see routes/publicOnboarding/
-// index.ts's header for why): a server-to-server caller (Infrakinetic's
-// backend, never a browser) authenticated by a narrow, dedicated shared
-// secret, not requireManagementApiAuth's human-operator machinery.
-app.use(
-  "/public-onboarding/v1",
-  createPublicOnboardingRouter({
-    auditSink,
-    ledger: managementDeps.ledger,
-    commissionedTenants: managementDeps.commissionedTenants,
-    getManagementSigningKeys: getManagementSigningKeysLazy,
-    loadTransportConfig: loadManagementTransportConfig,
-    infrakineticBaseUrl: managementDeps.infrakineticBaseUrl,
-  }),
-);
 
 // 1A.4 — public verification material for the assertions Governance mints
 // for Infrakinetic's `/management/v1/*`. Deliberately unauthenticated, same

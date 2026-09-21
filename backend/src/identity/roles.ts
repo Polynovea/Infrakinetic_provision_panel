@@ -22,7 +22,6 @@ export const SCOPES = [
   "tenants.suspend",
   "tenants.resume",
   "tenants.decommission",
-  "tenants.plan.write",
 
   "engines.read",
   "engines.entitlement.write",
@@ -116,12 +115,12 @@ export const ROLE_SCOPE_CEILING: Readonly<Record<Role, readonly Scope[]>> = {
     "tenants.suspend",
     "tenants.resume",
     "tenants.decommission",
-    // 1A.11 — plan is a pricing-tier change with revenue implications, same
-    // operator population and same R2 bar as suspend/resume/decommission
-    // above (see tenantPlanChangeOperation.ts's own header for why this
-    // stays R2 and not R3/R4).
-    "tenants.plan.write",
-    "engines.read",
+    // Historical 1A.11 compatibility vocabulary only. The temporary
+    // tenant.plan.change endpoint was removed after the B2B commissioning
+    // model was re-grounded: commercial/subscription/payment state does not
+    // authorize tenant provisioning. Keep the scope in the role ceiling for
+    // already-provisioned operator rows; no active route consumes it.
+      "engines.read",
     "engines.entitlement.write",
     "identity.read",
     // 1A.10 — reconciliation drift read/repair over the exact same

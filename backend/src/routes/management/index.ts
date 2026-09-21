@@ -46,11 +46,6 @@ import {
 } from "../../management/operations/tenantEngineEntitlementQuery.js";
 import { listDrift } from "../../management/operations/reconciliationQuery.js";
 import { reconcileTenant } from "../../management/operations/reconciliationOperation.js";
-import {
-  requestTenantPlanChange,
-  MissingTenantIdentifierForPlanChangeError,
-  ProjectionMissingForPlanChangeError,
-} from "../../management/operations/tenantPlanChangeOperation.js";
 
 export interface ManagementRouterDeps {
   identityProvider: IdentityProvider;
@@ -802,87 +797,6 @@ export function createManagementRouter(deps: ManagementRouterDeps): Router {
         }
         if (err instanceof UnknownEntitlementEngineError) {
           res.status(404).json({ error: "UNKNOWN_ENGINE", message: err.message });
-          return;
-        }
-        if (err instanceof UnexpectedManagementApiResponseError || err instanceof ManagementApiUnreachableError) {
-          res.status(502).json({ error: "MANAGEMENT_API_UPSTREAM_ERROR", message: err.message });
-          return;
-        }
-        if (err instanceof ManagementOperationError) {
-          res.status(err.httpStatus).json({ error: err.code, message: err.message });
-          return;
-        }
-        if (err instanceof DatabaseUnavailableError) {
-          res.status(err.httpStatus).json({ error: err.code, message: err.message });
-          return;
-        }
-        next(err);
-      }
-    },
-  );
-
-  // 1A.11 — tenant.plan.change. Governance owns desired tenant plan going
-  // forward (decision log 2026-09-19: no billing/subscription system syncs
-  // tenants.plan today; 1A.10 already treats desiredPlan as the
-  // Governance-owned comparison point). Mirrors the entitlement mutation
-  // route's shape exactly (requireScope, R2 reason requirement,
-  // idempotencyKey requirement, ManagementOperationError/
-  // DatabaseUnavailableError mapping). Deliberately scoped to `plan` only —
-  // name/industry/country/timezone stay on the legacy route pending their
-  // own ownership pass (PlatformRectification/1A.11_caller_migration_matrix.md).
-  router.put(
-    "/tenants/:tenantId/plan",
-    requireScope("tenants.plan.write", deps.auditSink),
-    async (req, res, next) => {
-      try {
-        const ctx = req.operatorContext;
-        if (!ctx) {
-          res.status(403).json({ error: "NOT_AUTHENTICATED" });
-          return;
-        }
-        const body = (req.body ?? {}) as Record<string, unknown>;
-        if (typeof body.idempotencyKey !== "string" || body.idempotencyKey.trim() === "") {
-          res.status(400).json({ error: "IDEMPOTENCY_KEY_REQUIRED" });
-          return;
-        }
-        if (typeof body.reason !== "string" || body.reason.trim() === "") {
-          res.status(400).json({ error: "REASON_REQUIRED" });
-          return;
-        }
-        if (typeof body.plan !== "string" || body.plan.trim() === "") {
-          res.status(400).json({ error: "PLAN_REQUIRED" });
-          return;
-        }
-
-        const signingKeys = await deps.getManagementSigningKeys();
-        const transportConfig = deps.loadTransportConfig();
-
-        const result = await requestTenantPlanChange(
-          { ledger: deps.ledger, commissionedTenants: deps.commissionedTenants, signingKeys, transportConfig, infrakineticBaseUrl: deps.infrakineticBaseUrl },
-          {
-            idempotencyKey: body.idempotencyKey,
-            operatorId: ctx.operatorId,
-            operatorSessionId: ctx.operatorSessionId,
-            operatorRoles: ctx.roles,
-            operatorGrantedScopes: ctx.scopes,
-            tenantId: req.params.tenantId,
-            plan: body.plan,
-            reason: body.reason,
-            correlationId: ctx.correlationId,
-          },
-        );
-        res.status(200).json({ operation: result.operation, replay: result.replay });
-      } catch (err) {
-        if (err instanceof MissingTenantIdentifierForPlanChangeError) {
-          res.status(400).json({ error: "TENANT_ID_REQUIRED", message: err.message });
-          return;
-        }
-        if (err instanceof ProjectionMissingForPlanChangeError) {
-          res.status(409).json({ error: "PROJECTION_MISSING", message: err.message });
-          return;
-        }
-        if (err instanceof UnknownTenantError) {
-          res.status(404).json({ error: "UNKNOWN_TENANT", message: err.message });
           return;
         }
         if (err instanceof UnexpectedManagementApiResponseError || err instanceof ManagementApiUnreachableError) {
