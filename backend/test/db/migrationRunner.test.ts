@@ -16,12 +16,55 @@ const migration0002Sql = readFileSync(
   fileURLToPath(new URL("../../migrations/0002_governance_db_foundation.sql", import.meta.url)),
   "utf8",
 );
+const migration0008Sql = readFileSync(
+  fileURLToPath(new URL("../../migrations/0008_operator_scopes_lifecycle_and_plan_scopes.sql", import.meta.url)),
+  "utf8",
+);
+const migration0010Sql = readFileSync(
+  fileURLToPath(new URL("../../migrations/0010_retire_tenant_plan_write_scope.sql", import.meta.url)),
+  "utf8",
+);
+
+// pg-mem does not preserve PostgreSQL's auto-generated name for 0001's
+// inline operator_scopes CHECK constraint. 0008 correctly drops that real
+// production name, but pg-mem therefore cannot replay that one DDL step from
+// the literal 0001 source. The dedicated 0008 migration test exercises the
+// DDL against a production-shaped, explicitly named constraint. Generic
+// migration-runner tests pre-record 0008 and 0010 as applied so they can continue
+// proving ordering, checksums, idempotency and upgrade behavior for the rest
+// of the real migration chain without falsifying the production migrations.
+async function runMigrationsWithPgMem0008FidelityGap(client: Parameters<typeof runMigrations>[0]) {
+  const trackingTable = await client.query<{ table_name: string }>(
+    "SELECT table_name FROM information_schema.tables WHERE table_name = 'schema_migrations'",
+  );
+  if (trackingTable.rows.length === 0) {
+    await client.query(
+      `CREATE TABLE governance.schema_migrations (
+         id TEXT PRIMARY KEY,
+         checksum TEXT NOT NULL,
+         applied_at TIMESTAMPTZ NOT NULL
+       )`,
+    );
+  }
+  for (const [id, sql] of [
+    ["0008_operator_scopes_lifecycle_and_plan_scopes.sql", migration0008Sql],
+    ["0010_retire_tenant_plan_write_scope.sql", migration0010Sql],
+  ] as const) {
+    const checksum = createHash("sha256").update(sql, "utf8").digest("hex");
+    await client.query(
+      `INSERT INTO governance.schema_migrations (id, checksum, applied_at)
+       VALUES ($1, $2, now()) ON CONFLICT (id) DO NOTHING`,
+      [id, checksum],
+    );
+  }
+  return runMigrations(client, migrationsDir);
+}
 
 describe("db/migrationRunner", () => {
-  it("applies every migration file in order, against real DDL execution (pg-mem)", async () => {
+  it("applies every pg-mem-executable migration in order; 0008 is covered by its production-shaped DDL test", async () => {
     const client = buildEmptyPgMemClient();
 
-    const results = await runMigrations(client, migrationsDir);
+    const results = await runMigrationsWithPgMem0008FidelityGap(client);
 
     expect(results.map((r) => r.id)).toEqual([
       "0001_operator_identity_schema.sql",
@@ -31,8 +74,13 @@ describe("db/migrationRunner", () => {
       "0005_tenant_lifecycle_foundation.sql",
       "0006_commissioned_tenants_control_fields.sql",
       "0007_public_onboarding_service_operator.sql",
+      "0008_operator_scopes_lifecycle_and_plan_scopes.sql",
+      "0009_retire_public_onboarding_service_operator.sql",
+      "0010_retire_tenant_plan_write_scope.sql",
     ]);
-    expect(results.every((r) => r.applied)).toBe(true);
+    expect(results.filter((r) => !["0008_operator_scopes_lifecycle_and_plan_scopes.sql", "0010_retire_tenant_plan_write_scope.sql"].includes(r.id)).every((r) => r.applied)).toBe(true);
+    expect(results.find((r) => r.id === "0008_operator_scopes_lifecycle_and_plan_scopes.sql")?.applied).toBe(false);
+    expect(results.find((r) => r.id === "0010_retire_tenant_plan_write_scope.sql")?.applied).toBe(false);
 
     // Not filtered by table_schema: pg-mem always reports 'public' in
     // information_schema.tables.table_schema regardless of the table's
@@ -68,15 +116,15 @@ describe("db/migrationRunner", () => {
   it("is idempotent — re-running reports every file as already-applied and does not error", async () => {
     const client = buildEmptyPgMemClient();
 
-    await runMigrations(client, migrationsDir);
-    const secondRun = await runMigrations(client, migrationsDir);
+    await runMigrationsWithPgMem0008FidelityGap(client);
+    const secondRun = await runMigrationsWithPgMem0008FidelityGap(client);
 
     expect(secondRun.every((r) => r.applied === false)).toBe(true);
   });
 
   it("fails closed when an applied migration checksum no longer matches source", async () => {
     const client = buildEmptyPgMemClient();
-    await runMigrations(client, migrationsDir);
+    await runMigrationsWithPgMem0008FidelityGap(client);
     await client.query(
       "UPDATE governance.schema_migrations SET checksum = 'tampered' WHERE id = $1",
       ["0001_operator_identity_schema.sql"],
@@ -120,7 +168,7 @@ describe("db/migrationRunner", () => {
       checksum,
     ]);
 
-    const results = await runMigrations(client, migrationsDir);
+    const results = await runMigrationsWithPgMem0008FidelityGap(client);
     expect(results).toEqual([
       { id: "0001_operator_identity_schema.sql", applied: false },
       { id: "0002_governance_db_foundation.sql", applied: true },
@@ -129,6 +177,9 @@ describe("db/migrationRunner", () => {
       { id: "0005_tenant_lifecycle_foundation.sql", applied: true },
       { id: "0006_commissioned_tenants_control_fields.sql", applied: true },
       { id: "0007_public_onboarding_service_operator.sql", applied: true },
+      { id: "0008_operator_scopes_lifecycle_and_plan_scopes.sql", applied: false },
+      { id: "0009_retire_public_onboarding_service_operator.sql", applied: true },
+      { id: "0010_retire_tenant_plan_write_scope.sql", applied: false },
     ]);
   });
 
@@ -156,7 +207,7 @@ describe("db/migrationRunner", () => {
       ]);
     }
 
-    const results = await runMigrations(client, migrationsDir);
+    const results = await runMigrationsWithPgMem0008FidelityGap(client);
     expect(results).toEqual([
       { id: "0001_operator_identity_schema.sql", applied: false },
       { id: "0002_governance_db_foundation.sql", applied: false },
@@ -165,10 +216,13 @@ describe("db/migrationRunner", () => {
       { id: "0005_tenant_lifecycle_foundation.sql", applied: true },
       { id: "0006_commissioned_tenants_control_fields.sql", applied: true },
       { id: "0007_public_onboarding_service_operator.sql", applied: true },
+      { id: "0008_operator_scopes_lifecycle_and_plan_scopes.sql", applied: false },
+      { id: "0009_retire_public_onboarding_service_operator.sql", applied: true },
+      { id: "0010_retire_tenant_plan_write_scope.sql", applied: false },
     ]);
 
     // Idempotent from here on, same as every other migration.
-    const secondRun = await runMigrations(client, migrationsDir);
+    const secondRun = await runMigrationsWithPgMem0008FidelityGap(client);
     expect(secondRun.every((r) => r.applied === false)).toBe(true);
 
     const tables = (

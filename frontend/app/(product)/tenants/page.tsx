@@ -107,22 +107,6 @@ interface ManagementOperationBody {
   replay: boolean;
 }
 
-// 1A.11 — tenant.plan.change. Only the three sellable, customer-facing plans
-// (matches backend's CANONICAL_SELLABLE_TENANT_PLANS in
-// lib/tenantPlanCatalog.js) are offered here — performance_lab is a reserved
-// internal tier with no public.plans row and is never operator-selectable.
-const SELLABLE_PLANS = ["starter", "growth", "enterprise"] as const;
-
-interface PlanChangeOperationBody {
-  operation: {
-    operationId: string;
-    status: string;
-    partialFailureState?: { body?: { error?: string; message?: string } } | null;
-    result?: { previousPlan?: string; requestedPlan?: string; resultingPlan?: string };
-  };
-  replay: boolean;
-}
-
 function formatDate(iso: string): string {
   return new Date(iso).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
 }
@@ -433,13 +417,6 @@ function TenantDetailDrawer({
   const [recheckError, setRecheckError] = useState<string | null>(null);
   const [recheckResult, setRecheckResult] = useState<ReconcileTenantResult | null>(null);
 
-  const [showPlanChange, setShowPlanChange] = useState(false);
-  const [planChoice, setPlanChoice] = useState(tenant.plan);
-  const [planChangeReason, setPlanChangeReason] = useState("");
-  const [planChangeBusy, setPlanChangeBusy] = useState(false);
-  const [planChangeError, setPlanChangeError] = useState<string | null>(null);
-  const [planChangeResult, setPlanChangeResult] = useState<PlanChangeOperationBody["operation"] | null>(null);
-
   useEffect(() => {
     let cancelled = false;
     setUsers(null);
@@ -588,41 +565,10 @@ function TenantDetailDrawer({
     }
   }
 
-  async function runPlanChange() {
-    if (planChangeReason.trim() === "") {
-      setPlanChangeError("A reason is required.");
-      return;
-    }
-    setPlanChangeBusy(true);
-    setPlanChangeError(null);
-    try {
-      const res = await request(`/management/v1/tenants/${encodeURIComponent(tenant.id)}/plan`, {
-        method: "PUT",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ plan: planChoice, reason: planChangeReason, idempotencyKey: crypto.randomUUID() }),
-      });
-      const body = (await res.json()) as PlanChangeOperationBody & { error?: string; message?: string };
-      if (!res.ok) {
-        setPlanChangeError(body.message ?? body.error ?? "The request failed.");
-        return;
-      }
-      setPlanChangeResult(body.operation);
-      if (body.operation.status === "completed") {
-        await refetchTenant();
-        onMutated();
-      }
-    } catch {
-      setPlanChangeError("The request failed.");
-    } finally {
-      setPlanChangeBusy(false);
-    }
-  }
-
   const canSuspend = operatorScopes.includes("tenants.suspend");
   const canResume = operatorScopes.includes("tenants.resume");
   const canDecommission = operatorScopes.includes("tenants.decommission");
   const canWriteEntitlement = operatorScopes.includes("engines.entitlement.write");
-  const canChangePlan = operatorScopes.includes("tenants.plan.write");
   const canReconcile = operatorScopes.includes("runtime.repair.request");
   const platformState = tenant.platform_access_state;
   const isPlatformTenant = tenant.tenant_kind === "platform";
@@ -690,25 +636,8 @@ function TenantDetailDrawer({
       </h3>
       <dl style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.6rem", fontSize: "0.88rem" }}>
         <div>
-          <dt style={{ color: "var(--text-muted)" }}>Plan</dt>
-          <dd style={{ margin: 0, display: "flex", alignItems: "center", gap: "0.5rem" }}>
-            {tenant.plan}
-            {canChangePlan && !isPlatformTenant && (
-              <button
-                className="btn"
-                style={{ fontSize: "0.76rem", padding: "0.1rem 0.5rem" }}
-                onClick={() => {
-                  setPlanChoice(tenant.plan);
-                  setPlanChangeReason("");
-                  setPlanChangeError(null);
-                  setPlanChangeResult(null);
-                  setShowPlanChange(true);
-                }}
-              >
-                Change
-              </button>
-            )}
-          </dd>
+          <dt style={{ color: "var(--text-muted)" }}>Legacy bootstrap profile</dt>
+          <dd style={{ margin: 0 }}>{tenant.plan}</dd>
         </div>
         <div>
           <dt style={{ color: "var(--text-muted)" }}>Industry</dt>
@@ -978,64 +907,6 @@ function TenantDetailDrawer({
           {entitlementError && <ErrorState label={entitlementError} />}
         </ConfirmDialog>
       )}
-
-      {showPlanChange && (
-        <ConfirmDialog
-          title={`Change plan for ${tenant.name}`}
-          description="Governance owns desired plan going forward. A tenant with a live Razorpay subscription cannot be changed through this path — the request will be blocked rather than silently applied."
-          confirmLabel={planChangeResult ? "Close" : "Change plan"}
-          danger={false}
-          busy={planChangeBusy}
-          // No reason to open an R2 ledger operation, a desired-state write, and a
-          // signed owner command for a plan the tenant is already on.
-          confirmDisabled={!planChangeResult && planChoice === tenant.plan}
-          onCancel={() => setShowPlanChange(false)}
-          onConfirm={planChangeResult ? () => setShowPlanChange(false) : runPlanChange}
-        >
-          {!planChangeResult && (
-            <>
-              <div className="field">
-                <label>Plan</label>
-                <select value={planChoice} onChange={(e) => setPlanChoice(e.target.value)}>
-                  {SELLABLE_PLANS.map((p) => (
-                    <option key={p} value={p}>
-                      {p}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              {planChoice === tenant.plan && (
-                <p className="overlay-note" style={{ margin: "0 0 0.75rem" }}>
-                  This tenant is already on the {tenant.plan} plan. Choose a different plan to proceed.
-                </p>
-              )}
-              <div className="field">
-                <label>Reason</label>
-                <textarea value={planChangeReason} onChange={(e) => setPlanChangeReason(e.target.value)} rows={2} placeholder="Required" />
-              </div>
-              {planChangeError && <ErrorState label={planChangeError} />}
-            </>
-          )}
-          {planChangeResult && (
-            <div style={{ fontSize: "0.85rem" }}>
-              <p style={{ display: "flex", gap: "0.4rem", alignItems: "center", margin: "0 0 0.5rem" }}>
-                Outcome <StatusBadge value={planChangeResult.status} />
-              </p>
-              {planChangeResult.status !== "completed" &&
-                planChangeResult.partialFailureState?.body?.error === "RAZORPAY_SUBSCRIPTION_BOUND" && (
-                  <p className="overlay-note">
-                    This tenant has a live Razorpay subscription. Plan changes are blocked through this governed path until a
-                    billing-plan transition flow exists — desired plan is recorded but not applied.
-                  </p>
-                )}
-              {planChangeResult.status !== "completed" &&
-                planChangeResult.partialFailureState?.body?.error !== "RAZORPAY_SUBSCRIPTION_BOUND" && (
-                  <p className="overlay-note">The change did not complete. See Audit for details.</p>
-                )}
-            </div>
-          )}
-        </ConfirmDialog>
-      )}
     </Drawer>
   );
 }
@@ -1064,7 +935,7 @@ const INITIAL_WIZARD_STATE: WizardState = {
   country: "IN",
   timezone: "Asia/Kolkata",
   plan: "",
-  accountType: "demo",
+  accountType: "live",
   trialDays: "14",
   sendInvite: true,
   adminName: "",
@@ -1072,7 +943,7 @@ const INITIAL_WIZARD_STATE: WizardState = {
   reason: "",
 };
 
-const WIZARD_STEPS = ["Organisation", "Commercial bootstrap", "Initial administrator", "Review", "Execution"] as const;
+const WIZARD_STEPS = ["Organisation", "Provisioning bootstrap", "Initial administrator", "Review", "Execution"] as const;
 
 function CommissionWizard({
   request,
@@ -1094,7 +965,7 @@ function CommissionWizard({
   }
 
   const canProceedFromOrg = state.name.trim() !== "";
-  const canProceedFromCommercial =
+  const canProceedFromProvisioning =
     state.plan.trim() !== "" && (state.accountType === "live" || (state.trialDays.trim() !== "" && Number(state.trialDays) >= 0));
   const canProceedFromAdmin = state.sendInvite ? state.adminName.trim() !== "" && state.adminEmail.trim() !== "" : true;
   const canExecute = state.reason.trim() !== "";
@@ -1184,21 +1055,24 @@ function CommissionWizard({
         {step === 1 && (
           <>
             <div className="field">
-              <label>Plan</label>
+              <label>Legacy bootstrap profile</label>
               <input value={state.plan} onChange={(e) => update("plan", e.target.value)} />
+              <p className="field-hint">
+                Technical compatibility input for the current owner-side provisioning primitive. This is not a commercial/pricing tier; contracted engines are commissioned separately through engine entitlements.
+              </p>
             </div>
             <div className="field">
-              <label>Account type</label>
+              <label>Provisioning mode</label>
               <select value={state.accountType} onChange={(e) => update("accountType", e.target.value as AccountType)}>
-                <option value="demo">Demo (trial)</option>
-                <option value="live">Live</option>
+                <option value="live">Live customer</option>
+                <option value="demo">Synthetic / test only</option>
               </select>
             </div>
             {state.accountType === "demo" && (
               <div className="field">
-                <label>Trial days</label>
+                <label>Test expiry days</label>
                 <input type="number" min={0} value={state.trialDays} onChange={(e) => update("trialDays", e.target.value)} />
-                <p className="field-hint">0 means an indefinite trial (no expiry) — not immediate expiry.</p>
+                <p className="field-hint">Synthetic/test commissioning only. 0 means no expiry.</p>
               </div>
             )}
           </>
@@ -1232,13 +1106,13 @@ function CommissionWizard({
             <dl style={{ fontSize: "0.85rem", marginBottom: "1rem" }}>
               <dt style={{ color: "var(--text-muted)" }}>Name</dt>
               <dd style={{ margin: "0 0 0.5rem" }}>{state.name}</dd>
-              <dt style={{ color: "var(--text-muted)" }}>Plan</dt>
+              <dt style={{ color: "var(--text-muted)" }}>Legacy bootstrap profile</dt>
               <dd style={{ margin: "0 0 0.5rem" }}>
                 {state.plan} ({state.accountType})
               </dd>
               {state.accountType === "demo" && (
                 <>
-                  <dt style={{ color: "var(--text-muted)" }}>Trial</dt>
+                  <dt style={{ color: "var(--text-muted)" }}>Synthetic/test expiry</dt>
                   <dd style={{ margin: "0 0 0.5rem" }}>{Number(state.trialDays) === 0 ? "Indefinite (no expiry)" : `${state.trialDays} days`}</dd>
                 </>
               )}
@@ -1294,7 +1168,7 @@ function CommissionWizard({
           {step < 3 && (
             <button
               className="btn btn-primary"
-              disabled={(step === 0 && !canProceedFromOrg) || (step === 1 && !canProceedFromCommercial) || (step === 2 && !canProceedFromAdmin)}
+              disabled={(step === 0 && !canProceedFromOrg) || (step === 1 && !canProceedFromProvisioning) || (step === 2 && !canProceedFromAdmin)}
               onClick={() => setStep((s) => s + 1)}
             >
               Next
