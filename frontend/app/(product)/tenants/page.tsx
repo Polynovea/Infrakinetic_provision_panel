@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
 
 import { useOperatorSession } from "../../../lib/session";
 import { StatusBadge } from "../../../components/StatusBadge";
@@ -9,6 +10,7 @@ import { Drawer } from "../../../components/Drawer";
 import { ConfirmDialog } from "../../../components/ConfirmDialog";
 import { EmptyState, ErrorState } from "../../../components/States";
 import { SkeletonTableRows } from "../../../components/Skeleton";
+import { IdentityPanel } from "../../../components/IdentityPanel";
 
 interface TenantRegistryUser {
   id: string;
@@ -76,6 +78,18 @@ interface ManagementOperationWarning {
   message: string;
 }
 
+// 1A.12.6 — pending invitation, listed alongside Users in the tenant
+// identity section (§14's suggested information architecture).
+interface IdentityInvitationSummary {
+  invitationId: string;
+  email: string;
+  displayName: string;
+  roleKey: string;
+  status: string;
+  expiresAt: string | null;
+  createdAt: string;
+}
+
 // 1A.10.5 — reconciliation repair result (POST .../reconciliation/tenants/:tenantId/recheck).
 // Projection repair and stuck-operation resolution run isolated from each
 // other (a resilience patch after 1A.10.5) — either can fail without
@@ -107,7 +121,8 @@ interface ManagementOperationBody {
   replay: boolean;
 }
 
-function formatDate(iso: string): string {
+function formatDate(iso: string | null | undefined): string {
+  if (!iso) return "—";
   return new Date(iso).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
 }
 
@@ -118,7 +133,8 @@ function uniqueSorted(values: (string | null | undefined)[]): string[] {
 const ALL = "__all__";
 
 export default function TenantsPage() {
-  const { request, operator } = useOperatorSession();
+  const { request, operator, stepUp } = useOperatorSession();
+  const searchParams = useSearchParams();
   const [tenants, setTenants] = useState<TenantRegistryEntry[] | null>(null);
   const [observedAt, setObservedAt] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -158,6 +174,26 @@ export default function TenantsPage() {
     // itself stable) — only ever needs to run on mount / when request changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [request]);
+
+  // 1A.12.4/1A.12.6 — the step-up OAuth round trip is a full-page
+  // navigation away and back (see useOperatorSession's stepUp()), which
+  // discards this page's in-memory state. Reopening the right tenant's
+  // drawer via a `?tenant=` query param (set as the step-up `returnTo`) is
+  // a deliberately minimal restoration — it does not attempt to reopen the
+  // specific user's identity panel or pending-action dialog, which would
+  // need considerably more state threaded through the URL for a marginal
+  // UX gain over "click the user again."
+  useEffect(() => {
+    if (!tenants) return;
+    const tenantId = searchParams.get("tenant");
+    if (!tenantId) return;
+    const match = tenants.find((t) => t.id === tenantId);
+    if (match) setSelected(match);
+    // Only reacts to `tenants` finishing its first load — deliberately not
+    // re-running on every searchParams change, which would fight the user
+    // manually closing the drawer.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tenants]);
 
   const counts = useMemo(() => {
     if (!tenants) return null;
@@ -352,11 +388,13 @@ export default function TenantsPage() {
         )}
       </div>
 
-      {selected && (
+      {selected && operator && (
         <TenantDetailDrawer
           tenant={selected}
           request={request}
-          operatorScopes={operator?.scopes ?? []}
+          stepUp={stepUp}
+          operatorId={operator.operatorId}
+          operatorScopes={operator.scopes}
           onClose={() => setSelected(null)}
           onMutated={loadTenants}
         />
@@ -381,12 +419,16 @@ const LIFECYCLE_ACTION_LABEL: Record<"suspend" | "resume" | "decommission", stri
 function TenantDetailDrawer({
   tenant: initialTenant,
   request,
+  stepUp,
+  operatorId,
   operatorScopes,
   onClose,
   onMutated,
 }: {
   tenant: TenantRegistryEntry;
   request: (path: string, init?: RequestInit) => Promise<Response>;
+  stepUp: (returnTo?: string) => void;
+  operatorId: string;
   operatorScopes: readonly string[];
   onClose: () => void;
   onMutated: () => void;
@@ -396,6 +438,19 @@ function TenantDetailDrawer({
   const [usersObservedAt, setUsersObservedAt] = useState<string | null>(null);
   const [usersError, setUsersError] = useState<string | null>(null);
   const [showTechnical, setShowTechnical] = useState(false);
+  const [selectedUser, setSelectedUser] = useState<TenantRegistryUser | null>(null);
+
+  const [invitations, setInvitations] = useState<IdentityInvitationSummary[] | null>(null);
+  const [invitationsError, setInvitationsError] = useState<string | null>(null);
+  const [invitationsRefreshKey, setInvitationsRefreshKey] = useState(0);
+  const [showInviteForm, setShowInviteForm] = useState(false);
+  const [inviteEmail, setInviteEmail] = useState("");
+  const [inviteName, setInviteName] = useState("");
+  const [inviteRole, setInviteRole] = useState("member");
+  const [inviteReason, setInviteReason] = useState("");
+  const [inviteBusy, setInviteBusy] = useState(false);
+  const [inviteError, setInviteError] = useState<string | null>(null);
+  const [invitationActionBusy, setInvitationActionBusy] = useState<string | null>(null);
 
   const [pendingAction, setPendingAction] = useState<"suspend" | "resume" | "decommission" | null>(null);
   const [reason, setReason] = useState("");
@@ -437,6 +492,73 @@ function TenantDetailDrawer({
       cancelled = true;
     };
   }, [request, tenant.id]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setInvitations(null);
+    setInvitationsError(null);
+    request(`/management/v1/tenants/${encodeURIComponent(tenant.id)}/identity-invitations`)
+      .then(async (res) => {
+        const body = await res.json();
+        if (cancelled) return;
+        if (!res.ok) {
+          setInvitationsError("Could not load pending invitations.");
+          return;
+        }
+        setInvitations(body.invitations);
+      })
+      .catch(() => !cancelled && setInvitationsError("Could not load pending invitations."));
+    return () => {
+      cancelled = true;
+    };
+  }, [request, tenant.id, invitationsRefreshKey]);
+
+  async function submitInvite() {
+    if (inviteEmail.trim() === "" || inviteReason.trim() === "") {
+      setInviteError("Email and reason are required.");
+      return;
+    }
+    setInviteBusy(true);
+    setInviteError(null);
+    try {
+      const res = await request(`/management/v1/tenants/${encodeURIComponent(tenant.id)}/identity-invitations`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          email: inviteEmail, fullName: inviteName.trim() || undefined, roleKey: inviteRole,
+          reason: inviteReason, idempotencyKey: crypto.randomUUID(),
+        }),
+      });
+      const body = await res.json();
+      if (!res.ok) {
+        setInviteError(body.message ?? body.error ?? "The invitation could not be sent.");
+        return;
+      }
+      setShowInviteForm(false);
+      setInviteEmail("");
+      setInviteName("");
+      setInviteReason("");
+      setInvitationsRefreshKey((k) => k + 1);
+    } catch {
+      setInviteError("The invitation could not be sent.");
+    } finally {
+      setInviteBusy(false);
+    }
+  }
+
+  async function runInvitationAction(invitationId: string, action: "resend" | "cancel") {
+    setInvitationActionBusy(invitationId);
+    try {
+      await request(`/management/v1/tenants/${encodeURIComponent(tenant.id)}/identity-invitations/${encodeURIComponent(invitationId)}/${action}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ reason: `${action} via Governance UI`, idempotencyKey: crypto.randomUUID() }),
+      });
+      setInvitationsRefreshKey((k) => k + 1);
+    } finally {
+      setInvitationActionBusy(null);
+    }
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -570,6 +692,8 @@ function TenantDetailDrawer({
   const canDecommission = operatorScopes.includes("tenants.decommission");
   const canWriteEntitlement = operatorScopes.includes("engines.entitlement.write");
   const canReconcile = operatorScopes.includes("runtime.repair.request");
+  const canReadIdentity = operatorScopes.includes("identity.read");
+  const canInvite = operatorScopes.includes("identity.recovery");
   const platformState = tenant.platform_access_state;
   const isPlatformTenant = tenant.tenant_kind === "platform";
   const hasAnyLifecycleScope = canSuspend || canResume || canDecommission;
@@ -699,7 +823,11 @@ function TenantDetailDrawer({
           </thead>
           <tbody>
             {users.map((u) => (
-              <tr key={u.id}>
+              <tr
+                key={u.id}
+                onClick={canReadIdentity ? () => setSelectedUser(u) : undefined}
+                style={canReadIdentity ? { cursor: "pointer" } : undefined}
+              >
                 <td>{u.full_name || "—"}</td>
                 <td>{u.email}</td>
                 <td>{u.role_key}</td>
@@ -713,6 +841,100 @@ function TenantDetailDrawer({
           </tbody>
         </table>
         </div>
+      )}
+
+      {canReadIdentity && selectedUser && (
+        <IdentityPanel
+          tenantId={tenant.id}
+          userId={selectedUser.id}
+          displayName={selectedUser.full_name || selectedUser.email}
+          request={request}
+          stepUp={stepUp}
+          operatorId={operatorId}
+          operatorScopes={operatorScopes}
+          onClose={() => setSelectedUser(null)}
+          onMutated={() => {
+            onMutated();
+            setInvitationsRefreshKey((k) => k + 1);
+          }}
+        />
+      )}
+
+      {canReadIdentity && (
+        <>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", margin: "1.5rem 0 0.6rem" }}>
+            <h3 className="text-subhead" style={{ margin: 0 }}>
+              Invitations
+            </h3>
+            {canInvite && (
+              <button className="btn" style={{ fontSize: "0.82rem" }} onClick={() => setShowInviteForm(true)}>
+                <Icon name="person_add" size="sm" /> Invite user
+              </button>
+            )}
+          </div>
+          {invitationsError && <ErrorState label={invitationsError} />}
+          {!invitationsError && invitations === null && (
+            <div style={{ overflowX: "auto" }}>
+              <table className="data-table">
+                <tbody>
+                  <SkeletonTableRows columns={5} rows={1} />
+                </tbody>
+              </table>
+            </div>
+          )}
+          {!invitationsError && invitations !== null && invitations.length === 0 && (
+            <EmptyState label="No pending invitations." icon="mail" />
+          )}
+          {!invitationsError && invitations !== null && invitations.length > 0 && (
+            <div style={{ overflowX: "auto" }}>
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Email</th>
+                    <th>Role</th>
+                    <th>Status</th>
+                    <th>Expires</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {invitations.map((inv) => (
+                    <tr key={inv.invitationId}>
+                      <td>{inv.email}</td>
+                      <td>{inv.roleKey}</td>
+                      <td>
+                        <StatusBadge value={inv.status} />
+                      </td>
+                      <td>{formatDate(inv.expiresAt)}</td>
+                      <td style={{ display: "flex", gap: "0.35rem" }}>
+                        {canInvite && (
+                          <>
+                            <button
+                              className="btn"
+                              style={{ fontSize: "0.78rem" }}
+                              disabled={invitationActionBusy === inv.invitationId}
+                              onClick={() => runInvitationAction(inv.invitationId, "resend")}
+                            >
+                              Resend
+                            </button>
+                            <button
+                              className="btn btn-danger"
+                              style={{ fontSize: "0.78rem" }}
+                              disabled={invitationActionBusy === inv.invitationId}
+                              onClick={() => runInvitationAction(inv.invitationId, "cancel")}
+                            >
+                              Cancel
+                            </button>
+                          </>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </>
       )}
 
       <h3 className="text-subhead" style={{ margin: "1.5rem 0 0.6rem" }}>
@@ -905,6 +1127,42 @@ function TenantDetailDrawer({
             <textarea value={entitlementReason} onChange={(e) => setEntitlementReason(e.target.value)} rows={2} placeholder="Required" />
           </div>
           {entitlementError && <ErrorState label={entitlementError} />}
+        </ConfirmDialog>
+      )}
+
+      {showInviteForm && (
+        <ConfirmDialog
+          title={`Invite a user to ${tenant.name}`}
+          confirmLabel="Send invitation"
+          busy={inviteBusy}
+          onCancel={() => {
+            setShowInviteForm(false);
+            setInviteError(null);
+          }}
+          onConfirm={submitInvite}
+        >
+          <div className="field">
+            <label>Email</label>
+            <input value={inviteEmail} onChange={(e) => setInviteEmail(e.target.value)} autoFocus />
+          </div>
+          <div className="field">
+            <label>Full name</label>
+            <input value={inviteName} onChange={(e) => setInviteName(e.target.value)} />
+          </div>
+          <div className="field">
+            <label>Role</label>
+            <select value={inviteRole} onChange={(e) => setInviteRole(e.target.value)}>
+              <option value="member">Member</option>
+              <option value="manager">Manager</option>
+              <option value="admin">Admin</option>
+              <option value="viewer">Viewer</option>
+            </select>
+          </div>
+          <div className="field">
+            <label>Reason</label>
+            <textarea value={inviteReason} onChange={(e) => setInviteReason(e.target.value)} rows={2} placeholder="Required" />
+          </div>
+          {inviteError && <ErrorState label={inviteError} />}
         </ConfirmDialog>
       )}
     </Drawer>
