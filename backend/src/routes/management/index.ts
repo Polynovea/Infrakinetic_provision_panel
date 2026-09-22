@@ -7,6 +7,16 @@ import { ManagementAuthError, StepUpNotConfiguredError } from "../../identity/er
 import type { IdentityProvider } from "../../identity/identityProvider.js";
 import type { OperatorDirectory } from "../../identity/operatorDirectory.js";
 import type { OperatorSessionStore } from "../../identity/sessionStore.js";
+import type { BrowserAuthConfig } from "../../identity/browserAuthConfig.js";
+import { loadBrowserAuthConfig } from "../../identity/browserAuthConfig.js";
+import { browserCookieNames, parseCookies } from "../../identity/browserCookies.js";
+import {
+  pkceChallenge,
+  randomOpaqueSecret,
+  safeEqualText,
+  safeRelativeReturnPath,
+  sha256Base64Url,
+} from "../../identity/browserAuthCrypto.js";
 import { requireRole, requireScope, requireStepUp } from "../../middleware/authorize.js";
 import { requireBrowserCsrf } from "../../middleware/requireBrowserCsrf.js";
 import { requireManagementApiAuth } from "../../middleware/requireManagementApiAuth.js";
@@ -83,6 +93,10 @@ export interface ManagementRouterDeps {
   // commissioned_tenants), read/written by the commission/suspend/resume/
   // decommission routes below.
   commissionedTenants: CommissionedTenantsRepository;
+  // 1A.12.4 — real operator step-up. Injectable for tests, same pattern as
+  // createBrowserAuthRouter's own loadConfig/fetchImpl.
+  loadBrowserAuthConfig?: () => BrowserAuthConfig;
+  fetchImpl?: typeof fetch;
 }
 
 // 1A.2 route integration points (whoami/session/audit) prove the operator
@@ -138,6 +152,213 @@ export function createManagementRouter(deps: ManagementRouterDeps): Router {
   // backed by a fresh Cognito MFA challenge before this route is enabled.
   router.post("/session/step-up", (_req, _res, next) => {
     next(new StepUpNotConfiguredError());
+  });
+
+  // ───────────────────────────────────────────────────────────────────────
+  // 1A.12.4 — real operator step-up. Browser-navigated (GET, redirect-
+  // based), NOT the JSON POST stub above: a step-up cannot be "asserted" by
+  // a fetch() call, only proven by the operator actually completing a
+  // second, forced-fresh Cognito authentication. Mirrors routes/auth/
+  // index.ts's login/callback OAuth mechanics exactly (PKCE + state + nonce
+  // + cookie-binding-when-present), with two deliberate differences:
+  //   - `prompt=login` on the authorize URL forces a fresh interactive
+  //     Cognito authentication rather than silently reusing an existing
+  //     Hosted UI SSO session (§9.1 — "not silent SSO reuse"). The exact
+  //     parameter is Cognito Hosted UI behavior that must be proven live
+  //     during 1A.12.8 certification, not merely assumed from docs.
+  //   - the callback's success path never mints a new session; it can only
+  //     recordStepUp() on the SAME operator session /start was called from,
+  //     and only after verifying the fresh re-auth's Cognito subject
+  //     matches that session's own cognito_sub. A subject mismatch fails
+  //     closed and the transaction is already consumed (single-use) by the
+  //     time that check runs, so it cannot be retried.
+  router.get("/session/step-up/start", async (req, res, next) => {
+    try {
+      const ctx = req.operatorContext;
+      if (!ctx) {
+        res.status(403).json({ error: "NOT_AUTHENTICATED" });
+        return;
+      }
+      const config = deps.loadBrowserAuthConfig ? deps.loadBrowserAuthConfig() : loadBrowserAuthConfig();
+      if (!deps.browserAuthStore) {
+        next(new StepUpNotConfiguredError());
+        return;
+      }
+      const names = browserCookieNames(config.secureCookies);
+      const transactionSecret = randomOpaqueSecret();
+      const state = randomOpaqueSecret();
+      const nonce = randomOpaqueSecret();
+      const codeVerifier = randomOpaqueSecret(48);
+      const now = new Date();
+      const expiresAt = new Date(now.getTime() + config.oauthTransactionTtlSeconds * 1000);
+      const stepUpRedirectUri = new URL("/management/v1/session/step-up/callback", new URL(config.redirectUri).origin).toString();
+
+      await deps.browserAuthStore.createStepUpTransaction({
+        transactionHash: sha256Base64Url(transactionSecret),
+        stateHash: sha256Base64Url(state),
+        nonce,
+        codeVerifier,
+        boundOperatorSessionId: ctx.operatorSessionId,
+        boundCognitoSub: ctx.cognitoSub,
+        returnPath: safeRelativeReturnPath(req.query.returnTo),
+        createdAt: now.toISOString(),
+        expiresAt: expiresAt.toISOString(),
+      });
+
+      res.cookie(names.stepUp, transactionSecret, {
+        httpOnly: true,
+        secure: config.secureCookies,
+        sameSite: "lax",
+        path: "/",
+        maxAge: config.oauthTransactionTtlSeconds * 1000,
+      });
+
+      const url = new URL(`${config.cognitoDomain}/login`);
+      url.searchParams.set("client_id", config.appClientId);
+      url.searchParams.set("response_type", "code");
+      url.searchParams.set("scope", "openid email");
+      url.searchParams.set("redirect_uri", stepUpRedirectUri);
+      url.searchParams.set("code_challenge_method", "S256");
+      url.searchParams.set("code_challenge", pkceChallenge(codeVerifier));
+      url.searchParams.set("state", state);
+      url.searchParams.set("nonce", nonce);
+      url.searchParams.set("prompt", "login");
+      res.redirect(302, url.toString());
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  router.get("/session/step-up/callback", async (req, res, next) => {
+    let config: BrowserAuthConfig;
+    try {
+      config = deps.loadBrowserAuthConfig ? deps.loadBrowserAuthConfig() : loadBrowserAuthConfig();
+    } catch (err) {
+      next(err);
+      return;
+    }
+    if (!deps.browserAuthStore) {
+      next(new StepUpNotConfiguredError());
+      return;
+    }
+    const fetchImpl = deps.fetchImpl ?? fetch;
+    const names = browserCookieNames(config.secureCookies);
+
+    function clearStepUpCookie() {
+      res.clearCookie(names.stepUp, { httpOnly: true, secure: config.secureCookies, sameSite: "lax", path: "/" });
+    }
+    function redirectStepUpFailure(code: string) {
+      const url = new URL(config.frontendOrigin);
+      url.searchParams.set("stepUp", code);
+      res.redirect(302, url.toString());
+    }
+
+    try {
+      const cookies = parseCookies(req.header("cookie"));
+      const transactionSecret = cookies[names.stepUp];
+      const code = typeof req.query.code === "string" ? req.query.code : undefined;
+      const state = typeof req.query.state === "string" ? req.query.state : undefined;
+
+      if (!code || !state || typeof req.query.error === "string") {
+        await deps.auditSink.record({
+          eventType: "authz.denied",
+          occurredAt: new Date().toISOString(),
+          operatorId: req.operatorContext?.operatorId,
+          operatorSessionId: req.operatorContext?.operatorSessionId,
+          reasonCode: typeof req.query.error === "string" ? "STEP_UP_OAUTH_PROVIDER_ERROR" : "STEP_UP_CALLBACK_PARAMS_MISSING",
+        });
+        clearStepUpCookie();
+        redirectStepUpFailure("failed");
+        return;
+      }
+
+      // Single-use: consuming by state hash immediately marks the
+      // transaction consumed, so a subject-mismatch failure below can never
+      // be retried against the same transaction.
+      const transaction = await deps.browserAuthStore.consumeStepUpTransactionByStateHash(sha256Base64Url(state));
+      clearStepUpCookie();
+      if (!transaction) {
+        await deps.auditSink.record({ eventType: "authz.denied", occurredAt: new Date().toISOString(), reasonCode: "STEP_UP_STATE_INVALID" });
+        redirectStepUpFailure("failed");
+        return;
+      }
+
+      const cookieBindingVerified = Boolean(transactionSecret) && safeEqualText(sha256Base64Url(transactionSecret ?? ""), transaction.transactionHash);
+      if (transactionSecret && !cookieBindingVerified) {
+        await deps.auditSink.record({ eventType: "authz.denied", occurredAt: new Date().toISOString(), reasonCode: "STEP_UP_COOKIE_BINDING_MISMATCH" });
+        redirectStepUpFailure("failed");
+        return;
+      }
+
+      const basicAuth = Buffer.from(`${config.appClientId}:${config.appClientSecret}`, "utf8").toString("base64");
+      const stepUpRedirectUri = new URL("/management/v1/session/step-up/callback", new URL(config.redirectUri).origin).toString();
+      const tokenResponse = await fetchImpl(`${config.cognitoDomain}/oauth2/token`, {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded", authorization: `Basic ${basicAuth}` },
+        body: new URLSearchParams({
+          grant_type: "authorization_code",
+          client_id: config.appClientId,
+          code,
+          redirect_uri: stepUpRedirectUri,
+          code_verifier: transaction.codeVerifier,
+        }).toString(),
+      });
+      if (!tokenResponse.ok) {
+        await deps.auditSink.record({
+          eventType: "authz.denied", occurredAt: new Date().toISOString(),
+          operatorSessionId: transaction.boundOperatorSessionId, reasonCode: "STEP_UP_TOKEN_EXCHANGE_FAILED",
+        });
+        redirectStepUpFailure("failed");
+        return;
+      }
+
+      const tokenBody = (await tokenResponse.json()) as { id_token?: string };
+      if (!tokenBody.id_token) {
+        await deps.auditSink.record({
+          eventType: "authz.denied", occurredAt: new Date().toISOString(),
+          operatorSessionId: transaction.boundOperatorSessionId, reasonCode: "STEP_UP_ID_TOKEN_MISSING",
+        });
+        redirectStepUpFailure("failed");
+        return;
+      }
+
+      const claims = await deps.identityProvider.verifyToken(tokenBody.id_token);
+      if (claims.rawClaims.nonce !== transaction.nonce) {
+        await deps.auditSink.record({
+          eventType: "authz.denied", occurredAt: new Date().toISOString(),
+          operatorSessionId: transaction.boundOperatorSessionId, reasonCode: "STEP_UP_NONCE_INVALID",
+        });
+        redirectStepUpFailure("failed");
+        return;
+      }
+
+      // The one check this whole flow exists for: the fresh re-auth MUST be
+      // the SAME subject as the session that started it. This is what
+      // prevents the callback from ever annotating a different operator's
+      // session with someone else's step-up proof.
+      if (claims.subject !== transaction.boundCognitoSub) {
+        await deps.auditSink.record({
+          eventType: "authz.denied", occurredAt: new Date().toISOString(),
+          operatorSessionId: transaction.boundOperatorSessionId, reasonCode: "STEP_UP_SUBJECT_MISMATCH",
+        });
+        redirectStepUpFailure("forbidden");
+        return;
+      }
+
+      const verifiedAt = new Date().toISOString();
+      await deps.sessionStore.recordStepUp(transaction.boundOperatorSessionId, { verifiedAt, method: "cognito-fresh-reauth" });
+      await deps.auditSink.record({
+        eventType: "session.step_up_recorded",
+        occurredAt: verifiedAt,
+        operatorSessionId: transaction.boundOperatorSessionId,
+        reasonCode: "STEP_UP_VERIFIED",
+        detail: { cookieBindingVerified },
+      });
+
+      res.redirect(302, `${config.frontendOrigin}${transaction.returnPath}`);
+    } catch (err) {
+      next(err);
+    }
   });
 
   router.get("/audit/self-test", requireScope("audit.read", deps.auditSink), (req, res) => {

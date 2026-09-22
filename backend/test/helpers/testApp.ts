@@ -26,7 +26,12 @@ export interface TestAppHandle {
 export function buildTestApp(
   identityProvider: IdentityProvider,
   operators: readonly OperatorRecord[],
-  overrides: Partial<Pick<ManagementRouterDeps, "ledger" | "commissionedTenants" | "getManagementSigningKeys" | "loadTransportConfig" | "infrakineticBaseUrl">> = {},
+  overrides: Partial<
+    Pick<
+      ManagementRouterDeps,
+      "ledger" | "commissionedTenants" | "getManagementSigningKeys" | "loadTransportConfig" | "infrakineticBaseUrl" | "loadBrowserAuthConfig" | "fetchImpl"
+    >
+  > = {},
 ): TestAppHandle {
   const app = express();
   app.use(express.json());
@@ -58,6 +63,8 @@ export function buildTestApp(
       getManagementSigningKeys: overrides.getManagementSigningKeys ?? (() => Promise.reject(new Error("management signing keys not configured in this test"))),
       loadTransportConfig: overrides.loadTransportConfig ?? (() => { throw new Error("management transport config not configured in this test"); }),
       infrakineticBaseUrl: overrides.infrakineticBaseUrl ?? "http://127.0.0.1:0",
+      loadBrowserAuthConfig: overrides.loadBrowserAuthConfig,
+      fetchImpl: overrides.fetchImpl,
     }),
   );
 

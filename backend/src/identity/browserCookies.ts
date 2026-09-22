@@ -1,6 +1,7 @@
 export interface BrowserCookieNames {
   oauth: string;
   session: string;
+  stepUp: string;
 }
 
 export function browserCookieNames(secure: boolean): BrowserCookieNames {
@@ -8,6 +9,10 @@ export function browserCookieNames(secure: boolean): BrowserCookieNames {
   return {
     oauth: `${prefix}governance_oauth`,
     session: `${prefix}governance_session`,
+    // Phase 1A.12.4 — distinct from `oauth` so a concurrent ordinary login
+    // transaction (a different tab) and a step-up transaction never share
+    // one cookie slot.
+    stepUp: `${prefix}governance_stepup`,
   };
 }
 

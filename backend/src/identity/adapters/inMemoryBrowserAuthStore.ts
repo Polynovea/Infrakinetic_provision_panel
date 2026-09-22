@@ -3,11 +3,13 @@ import type {
   BrowserSessionRecord,
   NewBrowserSession,
   OAuthLoginTransactionRecord,
+  StepUpTransactionRecord,
 } from "../browserAuthStore.js";
 
 export class InMemoryBrowserAuthStore implements BrowserAuthStore {
   private readonly transactions = new Map<string, OAuthLoginTransactionRecord>();
   private readonly sessionsByHash = new Map<string, BrowserSessionRecord>();
+  private readonly stepUpTransactions = new Map<string, StepUpTransactionRecord>();
 
   async createLoginTransaction(record: OAuthLoginTransactionRecord): Promise<void> {
     this.transactions.set(record.transactionHash, { ...record });
@@ -51,5 +53,19 @@ export class InMemoryBrowserAuthStore implements BrowserAuthStore {
       });
       return;
     }
+  }
+
+  async createStepUpTransaction(record: StepUpTransactionRecord): Promise<void> {
+    this.stepUpTransactions.set(record.transactionHash, { ...record });
+  }
+
+  async consumeStepUpTransactionByStateHash(stateHash: string): Promise<StepUpTransactionRecord | undefined> {
+    for (const [hash, record] of this.stepUpTransactions) {
+      if (record.stateHash !== stateHash) continue;
+      this.stepUpTransactions.delete(hash);
+      if (new Date(record.expiresAt).getTime() <= Date.now()) return undefined;
+      return { ...record };
+    }
+    return undefined;
   }
 }

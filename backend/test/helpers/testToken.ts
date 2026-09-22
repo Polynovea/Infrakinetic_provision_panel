@@ -35,6 +35,8 @@ export interface SignOptions {
   omitSub?: boolean;
   omitJti?: boolean;
   tokenUse?: string;
+  /** Extra top-level claims (e.g. `nonce`, for OAuth login/step-up callback tests). */
+  extraClaims?: Record<string, unknown>;
 }
 
 export async function signTestToken(keyPair: TestKeyPair, options: SignOptions = {}): Promise<string> {
@@ -42,7 +44,7 @@ export async function signTestToken(keyPair: TestKeyPair, options: SignOptions =
   const iat = nowSeconds - (options.issuedAtSecondsAgo ?? 0);
   const exp = iat + (options.expiresInSeconds ?? 3600);
 
-  let builder = new SignJWT({ token_use: options.tokenUse ?? "id" })
+  let builder = new SignJWT({ token_use: options.tokenUse ?? "id", ...options.extraClaims })
     .setProtectedHeader({ alg: "RS256", kid: keyPair.kid })
     .setIssuedAt(iat)
     .setExpirationTime(exp)
