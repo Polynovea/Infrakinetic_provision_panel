@@ -46,6 +46,23 @@ import {
 } from "../../management/operations/tenantEngineEntitlementQuery.js";
 import { listDrift } from "../../management/operations/reconciliationQuery.js";
 import { reconcileTenant } from "../../management/operations/reconciliationOperation.js";
+import {
+  listTenantIdentities,
+  getIdentityDetail,
+  getIdentityHistory,
+  UnknownIdentityError,
+} from "../../management/operations/identityQuery.js";
+import {
+  requestIdentityInvitation,
+  requestIdentityInvitationResend,
+  requestIdentityInvitationCancel,
+  requestIdentityRecovery,
+  requestIdentitySuspend,
+  requestIdentityRestore,
+  requestIdentityGlobalSignout,
+  requestIdentitySessionsRevoke,
+  MissingIdentityTargetError,
+} from "../../management/operations/identityOperation.js";
 
 export interface ManagementRouterDeps {
   identityProvider: IdentityProvider;
@@ -915,6 +932,178 @@ export function createManagementRouter(deps: ManagementRouterDeps): Router {
       }
     },
   );
+
+  // ───────────────────────────────────────────────────────────────────────
+  // 1A.12 — identity administration. Reads (R0, no ledger, same reasoning
+  // as /tenants above) plus the routine (R2) invitation/recovery/access-
+  // lifecycle commands. R3 actions (force-reset, mfa.reset) are a separate
+  // vertical (identityApprovalOperation.ts, 1A.12.5) requiring step-up and
+  // maker-checker approval — not wired here.
+  // ───────────────────────────────────────────────────────────────────────
+
+  router.get("/tenants/:tenantId/identities", requireScope("identity.read", deps.auditSink), async (req, res, next) => {
+    try {
+      const ctx = req.operatorContext;
+      if (!ctx) { res.status(403).json({ error: "NOT_AUTHENTICATED" }); return; }
+      const signingKeys = await deps.getManagementSigningKeys();
+      const transportConfig = deps.loadTransportConfig();
+      const result = await listTenantIdentities(
+        { signingKeys, transportConfig, infrakineticBaseUrl: deps.infrakineticBaseUrl },
+        { tenantId: req.params.tenantId, operatorId: ctx.operatorId, operatorSessionId: ctx.operatorSessionId, operatorRoles: ctx.roles, operatorGrantedScopes: ctx.scopes, correlationId: ctx.correlationId },
+      );
+      res.status(200).json(result);
+    } catch (err) {
+      if (err instanceof UnexpectedManagementApiResponseError) { res.status(502).json({ error: "MANAGEMENT_API_UPSTREAM_ERROR", message: err.message }); return; }
+      if (err instanceof DatabaseUnavailableError) { res.status(err.httpStatus).json({ error: err.code, message: err.message }); return; }
+      next(err);
+    }
+  });
+
+  router.get("/tenants/:tenantId/identities/:userId", requireScope("identity.read", deps.auditSink), async (req, res, next) => {
+    try {
+      const ctx = req.operatorContext;
+      if (!ctx) { res.status(403).json({ error: "NOT_AUTHENTICATED" }); return; }
+      const signingKeys = await deps.getManagementSigningKeys();
+      const transportConfig = deps.loadTransportConfig();
+      const result = await getIdentityDetail(
+        { signingKeys, transportConfig, infrakineticBaseUrl: deps.infrakineticBaseUrl },
+        { tenantId: req.params.tenantId, userId: req.params.userId, operatorId: ctx.operatorId, operatorSessionId: ctx.operatorSessionId, operatorRoles: ctx.roles, operatorGrantedScopes: ctx.scopes, correlationId: ctx.correlationId },
+      );
+      res.status(200).json(result);
+    } catch (err) {
+      if (err instanceof UnknownIdentityError) { res.status(404).json({ error: "IDENTITY_NOT_FOUND", message: err.message }); return; }
+      if (err instanceof UnexpectedManagementApiResponseError) { res.status(502).json({ error: "MANAGEMENT_API_UPSTREAM_ERROR", message: err.message }); return; }
+      if (err instanceof DatabaseUnavailableError) { res.status(err.httpStatus).json({ error: err.code, message: err.message }); return; }
+      next(err);
+    }
+  });
+
+  router.get("/tenants/:tenantId/identities/:userId/history", requireScope("identity.read", deps.auditSink), async (req, res, next) => {
+    try {
+      const ctx = req.operatorContext;
+      if (!ctx) { res.status(403).json({ error: "NOT_AUTHENTICATED" }); return; }
+      const signingKeys = await deps.getManagementSigningKeys();
+      const transportConfig = deps.loadTransportConfig();
+      const result = await getIdentityHistory(
+        { signingKeys, transportConfig, infrakineticBaseUrl: deps.infrakineticBaseUrl },
+        { tenantId: req.params.tenantId, userId: req.params.userId, operatorId: ctx.operatorId, operatorSessionId: ctx.operatorSessionId, operatorRoles: ctx.roles, operatorGrantedScopes: ctx.scopes, correlationId: ctx.correlationId },
+      );
+      res.status(200).json(result);
+    } catch (err) {
+      if (err instanceof UnknownIdentityError) { res.status(404).json({ error: "IDENTITY_NOT_FOUND", message: err.message }); return; }
+      if (err instanceof UnexpectedManagementApiResponseError) { res.status(502).json({ error: "MANAGEMENT_API_UPSTREAM_ERROR", message: err.message }); return; }
+      if (err instanceof DatabaseUnavailableError) { res.status(err.httpStatus).json({ error: err.code, message: err.message }); return; }
+      next(err);
+    }
+  });
+
+  function identityOperationErrorResponse(err: unknown, res: import("express").Response): boolean {
+    if (err instanceof MissingIdentityTargetError) { res.status(400).json({ error: "IDENTITY_TARGET_REQUIRED", message: err.message }); return true; }
+    if (err instanceof DatabaseUnavailableError) { res.status(err.httpStatus).json({ error: err.code, message: err.message }); return true; }
+    return false;
+  }
+
+  router.post("/tenants/:tenantId/identity-invitations", requireScope("identity.recovery", deps.auditSink), async (req, res, next) => {
+    const ctx = req.operatorContext;
+    try {
+      if (!ctx) { res.status(403).json({ error: "NOT_AUTHENTICATED" }); return; }
+      const body = (req.body ?? {}) as Record<string, unknown>;
+      if (typeof body.idempotencyKey !== "string" || body.idempotencyKey.trim() === "") { res.status(400).json({ error: "IDEMPOTENCY_KEY_REQUIRED" }); return; }
+      if (typeof body.reason !== "string" || body.reason.trim() === "") { res.status(400).json({ error: "REASON_REQUIRED" }); return; }
+      if (typeof body.email !== "string" || body.email.trim() === "") { res.status(400).json({ error: "EMAIL_REQUIRED" }); return; }
+
+      const signingKeys = await deps.getManagementSigningKeys();
+      const transportConfig = deps.loadTransportConfig();
+      const result = await requestIdentityInvitation(
+        { ledger: deps.ledger, signingKeys, transportConfig, infrakineticBaseUrl: deps.infrakineticBaseUrl },
+        {
+          idempotencyKey: body.idempotencyKey, operatorId: ctx.operatorId, operatorSessionId: ctx.operatorSessionId,
+          operatorRoles: ctx.roles, operatorGrantedScopes: ctx.scopes, tenantId: req.params.tenantId,
+          invitationRequestId: randomUUID(), email: body.email,
+          fullName: typeof body.fullName === "string" ? body.fullName : undefined,
+          roleKey: typeof body.roleKey === "string" ? body.roleKey : undefined,
+          reason: body.reason, correlationId: ctx.correlationId,
+        },
+      );
+      res.status(200).json({ operation: result.operation, replay: result.replay });
+    } catch (err) {
+      if (identityOperationErrorResponse(err, res)) return;
+      if (err instanceof UnexpectedManagementApiResponseError || err instanceof ManagementApiUnreachableError) { res.status(502).json({ error: "MANAGEMENT_API_UPSTREAM_ERROR", message: err.message }); return; }
+      if (err instanceof ManagementOperationError) { res.status(err.httpStatus).json({ error: err.code, message: err.message }); return; }
+      next(err);
+    }
+  });
+
+  const IDENTITY_INVITATION_ACTIONS = [
+    { segment: "resend", fn: requestIdentityInvitationResend },
+    { segment: "cancel", fn: requestIdentityInvitationCancel },
+  ] as const;
+
+  for (const { segment, fn } of IDENTITY_INVITATION_ACTIONS) {
+    router.post(`/tenants/:tenantId/identity-invitations/:invitationId/${segment}`, requireScope("identity.recovery", deps.auditSink), async (req, res, next) => {
+      const ctx = req.operatorContext;
+      try {
+        if (!ctx) { res.status(403).json({ error: "NOT_AUTHENTICATED" }); return; }
+        const body = (req.body ?? {}) as Record<string, unknown>;
+        if (typeof body.idempotencyKey !== "string" || body.idempotencyKey.trim() === "") { res.status(400).json({ error: "IDEMPOTENCY_KEY_REQUIRED" }); return; }
+        if (typeof body.reason !== "string" || body.reason.trim() === "") { res.status(400).json({ error: "REASON_REQUIRED" }); return; }
+
+        const signingKeys = await deps.getManagementSigningKeys();
+        const transportConfig = deps.loadTransportConfig();
+        const result = await fn(
+          { ledger: deps.ledger, signingKeys, transportConfig, infrakineticBaseUrl: deps.infrakineticBaseUrl },
+          {
+            idempotencyKey: body.idempotencyKey, operatorId: ctx.operatorId, operatorSessionId: ctx.operatorSessionId,
+            operatorRoles: ctx.roles, operatorGrantedScopes: ctx.scopes, tenantId: req.params.tenantId,
+            invitationId: req.params.invitationId, reason: body.reason, correlationId: ctx.correlationId,
+          },
+        );
+        res.status(200).json({ operation: result.operation, replay: result.replay });
+      } catch (err) {
+        if (identityOperationErrorResponse(err, res)) return;
+        if (err instanceof UnexpectedManagementApiResponseError || err instanceof ManagementApiUnreachableError) { res.status(502).json({ error: "MANAGEMENT_API_UPSTREAM_ERROR", message: err.message }); return; }
+        if (err instanceof ManagementOperationError) { res.status(err.httpStatus).json({ error: err.code, message: err.message }); return; }
+        next(err);
+      }
+    });
+  }
+
+  const IDENTITY_USER_ACTIONS = [
+    { segment: "recovery", scope: "identity.recovery", fn: requestIdentityRecovery },
+    { segment: "suspend", scope: "identity.disable", fn: requestIdentitySuspend },
+    { segment: "restore", scope: "identity.disable", fn: requestIdentityRestore },
+    { segment: "global-signout", scope: "identity.disable", fn: requestIdentityGlobalSignout },
+    { segment: "sessions/revoke", scope: "identity.disable", fn: requestIdentitySessionsRevoke },
+  ] as const;
+
+  for (const { segment, scope, fn } of IDENTITY_USER_ACTIONS) {
+    router.post(`/tenants/:tenantId/identities/:userId/${segment}`, requireScope(scope, deps.auditSink), async (req, res, next) => {
+      const ctx = req.operatorContext;
+      try {
+        if (!ctx) { res.status(403).json({ error: "NOT_AUTHENTICATED" }); return; }
+        const body = (req.body ?? {}) as Record<string, unknown>;
+        if (typeof body.idempotencyKey !== "string" || body.idempotencyKey.trim() === "") { res.status(400).json({ error: "IDEMPOTENCY_KEY_REQUIRED" }); return; }
+        if (typeof body.reason !== "string" || body.reason.trim() === "") { res.status(400).json({ error: "REASON_REQUIRED" }); return; }
+
+        const signingKeys = await deps.getManagementSigningKeys();
+        const transportConfig = deps.loadTransportConfig();
+        const result = await fn(
+          { ledger: deps.ledger, signingKeys, transportConfig, infrakineticBaseUrl: deps.infrakineticBaseUrl },
+          {
+            idempotencyKey: body.idempotencyKey, operatorId: ctx.operatorId, operatorSessionId: ctx.operatorSessionId,
+            operatorRoles: ctx.roles, operatorGrantedScopes: ctx.scopes, tenantId: req.params.tenantId,
+            userId: req.params.userId, reason: body.reason, correlationId: ctx.correlationId,
+          },
+        );
+        res.status(200).json({ operation: result.operation, replay: result.replay });
+      } catch (err) {
+        if (identityOperationErrorResponse(err, res)) return;
+        if (err instanceof UnexpectedManagementApiResponseError || err instanceof ManagementApiUnreachableError) { res.status(502).json({ error: "MANAGEMENT_API_UPSTREAM_ERROR", message: err.message }); return; }
+        if (err instanceof ManagementOperationError) { res.status(err.httpStatus).json({ error: err.code, message: err.message }); return; }
+        next(err);
+      }
+    });
+  }
 
   // Express 4 does not auto-forward rejected async promises. Async handlers
   // above explicitly call next(err), and this router-local typed boundary
