@@ -61,12 +61,6 @@ describe("GET /management/v1/session/step-up/start", () => {
 });
 
 describe("GET /management/v1/session/step-up/callback", () => {
-  async function startTransaction(agent: ReturnType<typeof request.agent>, token: string) {
-    const startRes = await agent.get("/management/v1/session/step-up/start").set("authorization", `Bearer ${token}`);
-    const location = startRes.headers.location as string;
-    return extractQueryParam(location, "state")!;
-  }
-
   it("subject match: exchanges the code, verifies the fresh re-auth is the SAME operator, and records step-up on that operator's session", async () => {
     const keyPair = await generateTestKeyPair();
     const provider = buildTestIdentityProvider(keyPair);
@@ -78,7 +72,7 @@ describe("GET /management/v1/session/step-up/callback", () => {
     let capturedNonce = "";
     const { app, sessionStore } = buildTestApp(provider, [op], {
       loadBrowserAuthConfig: () => FIXTURE_CONFIG,
-      fetchImpl: (async (...args: Parameters<typeof fetch>) => {
+      fetchImpl: (async () => {
         const idToken = await signTestToken(keyPair, { subject: op.cognitoSub, extraClaims: { nonce: capturedNonce } });
         return { ok: true, json: async () => ({ id_token: idToken }) } as Response;
       }) as typeof fetch,

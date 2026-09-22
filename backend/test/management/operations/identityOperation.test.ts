@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { generateKeyPairSync } from "node:crypto";
 import { exportJWK } from "jose";
 

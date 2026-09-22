@@ -11,6 +11,7 @@ import type { OperatorSessionStore } from "../../src/identity/sessionStore.js";
 import { createManagementRouter } from "../../src/routes/management/index.js";
 import { ManagementOperationLedger } from "../../src/management/operations/managementOperationLedger.js";
 import { CommissionedTenantsRepository } from "../../src/management/operations/commissionedTenants.js";
+import { ManagementApprovalStore } from "../../src/management/operations/managementApprovalStore.js";
 import { activeAdminOperator } from "../helpers/operators.js";
 import { buildTestIdentityProvider } from "../helpers/testProvider.js";
 import { buildMigratedPgMemClient } from "../helpers/pgMemDb.js";
@@ -21,6 +22,7 @@ import { generateTestKeyPair, signTestToken, type TestKeyPair } from "../helpers
 const unusedEngineStateDeps = {
   ledger: new ManagementOperationLedger(buildMigratedPgMemClient().client),
   commissionedTenants: new CommissionedTenantsRepository(buildMigratedPgMemClient().client),
+  approvals: new ManagementApprovalStore(buildMigratedPgMemClient().client),
   getManagementSigningKeys: () => Promise.reject(new Error("not used in this test")),
   loadTransportConfig: () => {
     throw new Error("not used in this test");
