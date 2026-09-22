@@ -60,6 +60,7 @@ import {
   listTenantIdentities,
   getIdentityDetail,
   getIdentityHistory,
+  listTenantInvitations,
   UnknownIdentityError,
 } from "../../management/operations/identityQuery.js";
 import {
@@ -1244,6 +1245,24 @@ export function createManagementRouter(deps: ManagementRouterDeps): Router {
     if (err instanceof DatabaseUnavailableError) { res.status(err.httpStatus).json({ error: err.code, message: err.message }); return true; }
     return false;
   }
+
+  router.get("/tenants/:tenantId/identity-invitations", requireScope("identity.read", deps.auditSink), async (req, res, next) => {
+    try {
+      const ctx = req.operatorContext;
+      if (!ctx) { res.status(403).json({ error: "NOT_AUTHENTICATED" }); return; }
+      const signingKeys = await deps.getManagementSigningKeys();
+      const transportConfig = deps.loadTransportConfig();
+      const result = await listTenantInvitations(
+        { signingKeys, transportConfig, infrakineticBaseUrl: deps.infrakineticBaseUrl },
+        { tenantId: req.params.tenantId, operatorId: ctx.operatorId, operatorSessionId: ctx.operatorSessionId, operatorRoles: ctx.roles, operatorGrantedScopes: ctx.scopes, correlationId: ctx.correlationId },
+      );
+      res.status(200).json(result);
+    } catch (err) {
+      if (err instanceof UnexpectedManagementApiResponseError) { res.status(502).json({ error: "MANAGEMENT_API_UPSTREAM_ERROR", message: err.message }); return; }
+      if (err instanceof DatabaseUnavailableError) { res.status(err.httpStatus).json({ error: err.code, message: err.message }); return; }
+      next(err);
+    }
+  });
 
   router.post("/tenants/:tenantId/identity-invitations", requireScope("identity.recovery", deps.auditSink), async (req, res, next) => {
     const ctx = req.operatorContext;

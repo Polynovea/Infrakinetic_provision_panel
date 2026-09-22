@@ -103,9 +103,21 @@ export interface IdentityAdminCommandReceipt {
   completedAt: string | null;
 }
 
+export interface IdentityInvitationSummary {
+  invitationId: string;
+  email: string;
+  displayName: string;
+  roleKey: string;
+  status: string;
+  expiresAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export type IdentityListResult = FreshnessEnvelope & { tenantId: string; identities: IdentitySummary[] };
 export type IdentityDetailResult = FreshnessEnvelope & { identity: IdentityDetail };
 export type IdentityHistoryResult = FreshnessEnvelope & { history: IdentityAdminCommandReceipt[] };
+export type IdentityInvitationListResult = FreshnessEnvelope & { tenantId: string; invitations: IdentityInvitationSummary[] };
 
 async function mintAndCall(
   deps: IdentityQueryDeps,
@@ -165,6 +177,16 @@ export async function getIdentityDetail(
   if (result.status === 404) throw new UnknownIdentityError(params.tenantId, params.userId);
   if (result.status !== 200) throw new UnexpectedManagementApiResponseError(result.status, path);
   return result.body as IdentityDetailResult;
+}
+
+export async function listTenantInvitations(
+  deps: IdentityQueryDeps,
+  params: IdentityQueryParams & { tenantId: string },
+): Promise<IdentityInvitationListResult> {
+  const path = `${MANAGEMENT_V1_PREFIX}/tenants/${encodeURIComponent(params.tenantId)}/identity-invitations`;
+  const result = await mintAndCall(deps, params, "identity.invitations.list", path, params.tenantId);
+  if (result.status !== 200) throw new UnexpectedManagementApiResponseError(result.status, path);
+  return result.body as IdentityInvitationListResult;
 }
 
 export async function getIdentityHistory(
