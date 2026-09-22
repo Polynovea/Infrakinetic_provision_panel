@@ -78,6 +78,7 @@ describe("db/migrationRunner", () => {
       "0009_retire_public_onboarding_service_operator.sql",
       "0010_retire_tenant_plan_write_scope.sql",
       "0011_step_up_transactions.sql",
+      "0012_management_approvals.sql",
     ]);
     expect(results.filter((r) => !["0008_operator_scopes_lifecycle_and_plan_scopes.sql", "0010_retire_tenant_plan_write_scope.sql"].includes(r.id)).every((r) => r.applied)).toBe(true);
     expect(results.find((r) => r.id === "0008_operator_scopes_lifecycle_and_plan_scopes.sql")?.applied).toBe(false);
@@ -183,6 +184,7 @@ describe("db/migrationRunner", () => {
       { id: "0009_retire_public_onboarding_service_operator.sql", applied: true },
       { id: "0010_retire_tenant_plan_write_scope.sql", applied: false },
       { id: "0011_step_up_transactions.sql", applied: true },
+      { id: "0012_management_approvals.sql", applied: true },
     ]);
   });
 
@@ -223,6 +225,7 @@ describe("db/migrationRunner", () => {
       { id: "0009_retire_public_onboarding_service_operator.sql", applied: true },
       { id: "0010_retire_tenant_plan_write_scope.sql", applied: false },
       { id: "0011_step_up_transactions.sql", applied: true },
+      { id: "0012_management_approvals.sql", applied: true },
     ]);
 
     // Idempotent from here on, same as every other migration.
@@ -236,5 +239,6 @@ describe("db/migrationRunner", () => {
     expect(tables).toContain("browser_sessions");
     expect(tables).toContain("oauth_login_transactions");
     expect(tables).toContain("step_up_transactions");
+    expect(tables).toContain("management_approvals");
   });
 });

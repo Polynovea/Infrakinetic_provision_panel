@@ -42,6 +42,9 @@ export function buildMigratedPgMemClient(): { db: ReturnType<typeof newDb>; clie
   const migration0011Path = fileURLToPath(
     new URL("../../migrations/0011_step_up_transactions.sql", import.meta.url),
   );
+  const migration0012Path = fileURLToPath(
+    new URL("../../migrations/0012_management_approvals.sql", import.meta.url),
+  );
   db.public.none(readFileSync(migration0001Path, "utf8"));
   db.public.none(readFileSync(migration0002Path, "utf8"));
   db.public.none(readFileSync(migration0003Path, "utf8"));
@@ -51,6 +54,7 @@ export function buildMigratedPgMemClient(): { db: ReturnType<typeof newDb>; clie
   db.public.none(readFileSync(migration0007Path, "utf8"));
   db.public.none(readFileSync(migration0009Path, "utf8"));
   db.public.none(readFileSync(migration0011Path, "utf8"));
+  db.public.none(readFileSync(migration0012Path, "utf8"));
 
   const { Pool } = db.adapters.createPg();
   const pool = new Pool();

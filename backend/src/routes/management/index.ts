@@ -73,6 +73,25 @@ import {
   requestIdentitySessionsRevoke,
   MissingIdentityTargetError,
 } from "../../management/operations/identityOperation.js";
+import {
+  requestIdentityR3Approval,
+  decideIdentityR3Approval,
+  executeIdentityR3Approval,
+  IDENTITY_R3_ACTIONS,
+  UnknownIdentityR3ActionError,
+  MissingIdentityApprovalTargetError,
+  type IdentityR3ActionKey,
+} from "../../management/operations/identityApprovalOperation.js";
+import type { ManagementApprovalStore } from "../../management/operations/managementApprovalStore.js";
+import {
+  ApprovalNotFoundError,
+  ApprovalExpiredError,
+  ApprovalNotPendingError,
+  SelfApprovalNotAllowedError,
+  ApprovalNotApprovedError,
+  ApprovalAlreadyExecutedError,
+  ApprovalPayloadMismatchError,
+} from "../../management/operations/managementApprovalStore.js";
 
 export interface ManagementRouterDeps {
   identityProvider: IdentityProvider;
@@ -97,6 +116,8 @@ export interface ManagementRouterDeps {
   // createBrowserAuthRouter's own loadConfig/fetchImpl.
   loadBrowserAuthConfig?: () => BrowserAuthConfig;
   fetchImpl?: typeof fetch;
+  // 1A.12.5 — the maker-checker approval substrate for R3 identity actions.
+  approvals: ManagementApprovalStore;
 }
 
 // 1A.2 route integration points (whoami/session/audit) prove the operator
@@ -1325,6 +1346,140 @@ export function createManagementRouter(deps: ManagementRouterDeps): Router {
       }
     });
   }
+
+  // ───────────────────────────────────────────────────────────────────────
+  // 1A.12.5 — R3 identity actions (force-reset, mfa-reset): request (maker,
+  // fresh step-up) -> decide (checker, != maker) -> execute (fresh step-up,
+  // approval consumed exactly once). §9.1's default 5-minute freshness
+  // applies at BOTH the request and execute steps — a maker-checker cycle
+  // can span far longer than 5 minutes, so execute's step-up is expected to
+  // usually be a SEPARATE, later step-up, not a reuse of the request one.
+  // ───────────────────────────────────────────────────────────────────────
+
+  function approvalErrorResponse(err: unknown, res: import("express").Response): boolean {
+    if (err instanceof ApprovalNotFoundError) { res.status(404).json({ error: "APPROVAL_NOT_FOUND", message: err.message }); return true; }
+    if (err instanceof ApprovalExpiredError) { res.status(409).json({ error: "APPROVAL_EXPIRED", message: err.message }); return true; }
+    if (err instanceof ApprovalNotPendingError) { res.status(409).json({ error: "APPROVAL_NOT_PENDING", message: err.message }); return true; }
+    if (err instanceof SelfApprovalNotAllowedError) { res.status(403).json({ error: "SELF_APPROVAL_NOT_ALLOWED", message: err.message }); return true; }
+    if (err instanceof ApprovalNotApprovedError) { res.status(409).json({ error: "APPROVAL_NOT_APPROVED", message: err.message }); return true; }
+    if (err instanceof ApprovalAlreadyExecutedError) { res.status(409).json({ error: "APPROVAL_ALREADY_EXECUTED", message: err.message }); return true; }
+    if (err instanceof ApprovalPayloadMismatchError) { res.status(409).json({ error: "APPROVAL_PAYLOAD_MISMATCH", message: err.message }); return true; }
+    if (err instanceof UnknownIdentityR3ActionError || err instanceof MissingIdentityApprovalTargetError) { res.status(400).json({ error: "IDENTITY_R3_REQUEST_INVALID", message: err.message }); return true; }
+    if (err instanceof DatabaseUnavailableError) { res.status(err.httpStatus).json({ error: err.code, message: err.message }); return true; }
+    return false;
+  }
+
+  const R3_ROUTE_SEGMENTS: Record<IdentityR3ActionKey, string> = { "force-reset": "force-reset", "mfa-reset": "mfa-reset" };
+
+  for (const actionKey of Object.keys(IDENTITY_R3_ACTIONS) as IdentityR3ActionKey[]) {
+    const { scope } = IDENTITY_R3_ACTIONS[actionKey];
+    router.post(
+      `/tenants/:tenantId/identities/:userId/${R3_ROUTE_SEGMENTS[actionKey]}/request`,
+      requireScope(scope, deps.auditSink),
+      requireStepUp(300, deps.sessionStore, deps.auditSink),
+      async (req, res, next) => {
+        const ctx = req.operatorContext;
+        try {
+          if (!ctx) { res.status(403).json({ error: "NOT_AUTHENTICATED" }); return; }
+          const body = (req.body ?? {}) as Record<string, unknown>;
+          if (typeof body.reason !== "string" || body.reason.trim() === "") { res.status(400).json({ error: "REASON_REQUIRED" }); return; }
+
+          const approval = await requestIdentityR3Approval(
+            { approvals: deps.approvals },
+            { actionKey, tenantId: req.params.tenantId, userId: req.params.userId, reason: body.reason, makerOperatorId: ctx.operatorId, correlationId: ctx.correlationId },
+          );
+          res.status(201).json({ approval });
+        } catch (err) {
+          if (approvalErrorResponse(err, res)) return;
+          next(err);
+        }
+      },
+    );
+  }
+
+  function requiredScopeForApproval(approval: { requestedAction: string }): string | undefined {
+    return Object.values(IDENTITY_R3_ACTIONS).find((entry) => entry.action === approval.requestedAction)?.scope;
+  }
+
+  const APPROVAL_DECISIONS = ["approve", "reject"] as const;
+  for (const segment of APPROVAL_DECISIONS) {
+    router.post(`/approvals/:approvalId/${segment}`, async (req, res, next) => {
+      const ctx = req.operatorContext;
+      try {
+        if (!ctx) { res.status(403).json({ error: "NOT_AUTHENTICATED" }); return; }
+
+        const approvalStore = deps.approvals;
+        const current = await approvalStore.getApproval(req.params.approvalId);
+        const requiredScope = requiredScopeForApproval(current);
+        if (!requiredScope || !ctx.scopes.includes(requiredScope as never)) {
+          res.status(403).json({ error: "SCOPE_REQUIRED", message: `Deciding this approval requires scope '${requiredScope}'.` });
+          return;
+        }
+
+        const decided = await decideIdentityR3Approval(
+          { approvals: deps.approvals },
+          { approvalId: req.params.approvalId, checkerOperatorId: ctx.operatorId, decision: segment === "approve" ? "approved" : "rejected" },
+        );
+        res.status(200).json({ approval: decided });
+      } catch (err) {
+        if (approvalErrorResponse(err, res)) return;
+        next(err);
+      }
+    });
+  }
+
+  // Execution is deliberately not restricted to the original maker — any
+  // operator holding the approval's required scope, with their OWN fresh
+  // step-up, may execute an already-approved request. The approval record
+  // itself (maker/checker/decidedAt) is the audit trail for who authorized
+  // what; this route only proves the executing operator is currently
+  // privileged and freshly re-authenticated.
+  router.post(
+    "/approvals/:approvalId/execute",
+    requireStepUp(300, deps.sessionStore, deps.auditSink),
+    async (req, res, next) => {
+      const ctx = req.operatorContext;
+      try {
+        if (!ctx) { res.status(403).json({ error: "NOT_AUTHENTICATED" }); return; }
+        const body = (req.body ?? {}) as Record<string, unknown>;
+        if (typeof body.idempotencyKey !== "string" || body.idempotencyKey.trim() === "") { res.status(400).json({ error: "IDEMPOTENCY_KEY_REQUIRED" }); return; }
+
+        const current = await deps.approvals.getApproval(req.params.approvalId);
+        const requiredScope = requiredScopeForApproval(current);
+        if (!requiredScope || !ctx.scopes.includes(requiredScope as never)) {
+          res.status(403).json({ error: "SCOPE_REQUIRED", message: `Executing this approval requires scope '${requiredScope}'.` });
+          return;
+        }
+
+        const signingKeys = await deps.getManagementSigningKeys();
+        const transportConfig = deps.loadTransportConfig();
+        const result = await executeIdentityR3Approval(
+          { approvals: deps.approvals, ledger: deps.ledger, signingKeys, transportConfig, infrakineticBaseUrl: deps.infrakineticBaseUrl },
+          {
+            approvalId: req.params.approvalId, idempotencyKey: body.idempotencyKey,
+            operatorId: ctx.operatorId, operatorSessionId: ctx.operatorSessionId,
+            operatorRoles: ctx.roles, operatorGrantedScopes: ctx.scopes, correlationId: ctx.correlationId,
+          },
+        );
+        res.status(200).json({ operation: result.operation, approval: result.approval, replay: result.replay });
+      } catch (err) {
+        if (approvalErrorResponse(err, res)) return;
+        if (err instanceof UnexpectedManagementApiResponseError || err instanceof ManagementApiUnreachableError) { res.status(502).json({ error: "MANAGEMENT_API_UPSTREAM_ERROR", message: err.message }); return; }
+        if (err instanceof ManagementOperationError) { res.status(err.httpStatus).json({ error: err.code, message: err.message }); return; }
+        next(err);
+      }
+    },
+  );
+
+  router.get("/approvals/:approvalId", requireScope("identity.read", deps.auditSink), async (req, res, next) => {
+    try {
+      const approval = await deps.approvals.getApproval(req.params.approvalId);
+      res.status(200).json({ approval });
+    } catch (err) {
+      if (approvalErrorResponse(err, res)) return;
+      next(err);
+    }
+  });
 
   // Express 4 does not auto-forward rejected async promises. Async handlers
   // above explicitly call next(err), and this router-local typed boundary
