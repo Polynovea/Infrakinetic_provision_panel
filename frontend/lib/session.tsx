@@ -26,6 +26,8 @@ interface SessionContextValue {
   operator: OperatorIdentity | null;
   devBypassAvailable: boolean;
   signIn: () => void;
+  /** 1A.12.4 — navigates the browser to the real forced-fresh-reauth step-up transaction, returning to `returnTo` (defaults to the current page) on success. */
+  stepUp: (returnTo?: string) => void;
   signOut: () => Promise<void>;
   setDevToken: (token: string) => Promise<boolean>;
   request: (path: string, init?: RequestInit) => Promise<Response>;
@@ -115,6 +117,11 @@ export function OperatorSessionProvider({ children }: { children: ReactNode }) {
     window.location.assign(`${GOVERNANCE_API_BASE_URL}/auth/login?returnTo=${encodeURIComponent(returnTo)}`);
   }, []);
 
+  const stepUp = useCallback((returnTo?: string) => {
+    const target = returnTo ?? `${window.location.pathname}${window.location.search}`;
+    window.location.assign(`${GOVERNANCE_API_BASE_URL}/management/v1/session/step-up/start?returnTo=${encodeURIComponent(target)}`);
+  }, []);
+
   const request = useCallback(
     async (path: string, init: RequestInit = {}) => {
       const headers = new Headers(init.headers);
@@ -166,8 +173,8 @@ export function OperatorSessionProvider({ children }: { children: ReactNode }) {
   );
 
   const value = useMemo<SessionContextValue>(
-    () => ({ status, operator, devBypassAvailable, signIn, signOut, setDevToken, request, refresh }),
-    [status, operator, devBypassAvailable, signIn, signOut, setDevToken, request, refresh],
+    () => ({ status, operator, devBypassAvailable, signIn, stepUp, signOut, setDevToken, request, refresh }),
+    [status, operator, devBypassAvailable, signIn, stepUp, signOut, setDevToken, request, refresh],
   );
 
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;

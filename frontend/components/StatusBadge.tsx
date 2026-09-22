@@ -20,6 +20,17 @@ const TONE_BY_VALUE: Record<string, "success" | "warning" | "danger" | "neutral"
   submitted: "neutral",
   accepted: "neutral",
   running: "neutral",
+  // 1A.12 identity administration.
+  invited: "warning",
+  inactive: "danger",
+  pending: "warning",
+  sent: "neutral",
+  approved: "success",
+  rejected: "danger",
+  expired: "danger",
+  confirmed: "success",
+  reset_required: "warning",
+  force_change_password: "warning",
 };
 
 const LABEL_BY_VALUE: Record<string, string> = {

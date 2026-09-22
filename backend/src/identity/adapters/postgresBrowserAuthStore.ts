@@ -4,7 +4,20 @@ import type {
   BrowserSessionRecord,
   NewBrowserSession,
   OAuthLoginTransactionRecord,
+  StepUpTransactionRecord,
 } from "../browserAuthStore.js";
+
+interface StepUpRow {
+  transaction_hash: string;
+  state_hash: string;
+  nonce: string;
+  code_verifier: string;
+  bound_operator_session_id: string;
+  bound_cognito_sub: string;
+  return_path: string;
+  created_at: string;
+  expires_at: string;
+}
 
 interface OAuthRow {
   transaction_hash: string;
@@ -138,5 +151,47 @@ export class PostgresBrowserAuthStore implements BrowserAuthStore {
        WHERE session_id = $1 AND revoked_at IS NULL`,
       [sessionId, reason],
     );
+  }
+
+  async createStepUpTransaction(record: StepUpTransactionRecord): Promise<void> {
+    await this.db.query(
+      `INSERT INTO governance.step_up_transactions
+       (transaction_hash, state_hash, nonce, code_verifier, bound_operator_session_id, bound_cognito_sub, return_path, created_at, expires_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+      [
+        record.transactionHash,
+        record.stateHash,
+        record.nonce,
+        record.codeVerifier,
+        record.boundOperatorSessionId,
+        record.boundCognitoSub,
+        record.returnPath,
+        record.createdAt,
+        record.expiresAt,
+      ],
+    );
+  }
+
+  async consumeStepUpTransactionByStateHash(stateHash: string): Promise<StepUpTransactionRecord | undefined> {
+    const result = await this.db.query<StepUpRow>(
+      `UPDATE governance.step_up_transactions
+       SET consumed_at = now()
+       WHERE state_hash = $1 AND consumed_at IS NULL AND expires_at > now()
+       RETURNING transaction_hash, state_hash, nonce, code_verifier, bound_operator_session_id, bound_cognito_sub, return_path, created_at, expires_at`,
+      [stateHash],
+    );
+    const row = result.rows[0];
+    if (!row) return undefined;
+    return {
+      transactionHash: row.transaction_hash,
+      stateHash: row.state_hash,
+      nonce: row.nonce,
+      codeVerifier: row.code_verifier,
+      boundOperatorSessionId: row.bound_operator_session_id,
+      boundCognitoSub: row.bound_cognito_sub,
+      returnPath: row.return_path,
+      createdAt: new Date(row.created_at).toISOString(),
+      expiresAt: new Date(row.expires_at).toISOString(),
+    };
   }
 }

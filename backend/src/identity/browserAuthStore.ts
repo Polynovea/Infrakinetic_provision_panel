@@ -8,6 +8,28 @@ export interface OAuthLoginTransactionRecord {
   expiresAt: string;
 }
 
+// Phase 1A.12.4 — a step-up transaction is deliberately NOT an
+// OAuthLoginTransactionRecord with extra fields: a login transaction's
+// success path creates a brand-new session; a step-up transaction's
+// success path must only ever annotate an EXISTING operator session
+// (recordStepUp) for the SAME Cognito subject it was minted for. Keeping
+// the types/storage separate makes "this can never mint a session" a
+// structural property, not a runtime check that could be bypassed by a
+// future refactor.
+export interface StepUpTransactionRecord {
+  transactionHash: string;
+  stateHash: string;
+  nonce: string;
+  codeVerifier: string;
+  /** The Governance operator session this step-up, if it succeeds, must annotate. */
+  boundOperatorSessionId: string;
+  /** The Cognito subject the callback's fresh re-auth MUST match — a mismatch fails closed. */
+  boundCognitoSub: string;
+  returnPath: string;
+  createdAt: string;
+  expiresAt: string;
+}
+
 export interface NewBrowserSession {
   sessionId: string;
   sessionTokenHash: string;
@@ -45,4 +67,8 @@ export interface BrowserAuthStore {
   createSession(record: NewBrowserSession): Promise<void>;
   findSessionByTokenHash(sessionTokenHash: string): Promise<BrowserSessionRecord | undefined>;
   revokeSession(sessionId: string, reason: string): Promise<void>;
+
+  // Phase 1A.12.4 — step-up transactions (see StepUpTransactionRecord above).
+  createStepUpTransaction(record: StepUpTransactionRecord): Promise<void>;
+  consumeStepUpTransactionByStateHash(stateHash: string): Promise<StepUpTransactionRecord | undefined>;
 }

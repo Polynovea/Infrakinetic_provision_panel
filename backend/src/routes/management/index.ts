@@ -7,6 +7,16 @@ import { ManagementAuthError, StepUpNotConfiguredError } from "../../identity/er
 import type { IdentityProvider } from "../../identity/identityProvider.js";
 import type { OperatorDirectory } from "../../identity/operatorDirectory.js";
 import type { OperatorSessionStore } from "../../identity/sessionStore.js";
+import type { BrowserAuthConfig } from "../../identity/browserAuthConfig.js";
+import { loadBrowserAuthConfig } from "../../identity/browserAuthConfig.js";
+import { browserCookieNames, parseCookies } from "../../identity/browserCookies.js";
+import {
+  pkceChallenge,
+  randomOpaqueSecret,
+  safeEqualText,
+  safeRelativeReturnPath,
+  sha256Base64Url,
+} from "../../identity/browserAuthCrypto.js";
 import { requireRole, requireScope, requireStepUp } from "../../middleware/authorize.js";
 import { requireBrowserCsrf } from "../../middleware/requireBrowserCsrf.js";
 import { requireManagementApiAuth } from "../../middleware/requireManagementApiAuth.js";
@@ -46,6 +56,43 @@ import {
 } from "../../management/operations/tenantEngineEntitlementQuery.js";
 import { listDrift } from "../../management/operations/reconciliationQuery.js";
 import { reconcileTenant } from "../../management/operations/reconciliationOperation.js";
+import {
+  listTenantIdentities,
+  getIdentityDetail,
+  getIdentityHistory,
+  listTenantInvitations,
+  UnknownIdentityError,
+} from "../../management/operations/identityQuery.js";
+import {
+  requestIdentityInvitation,
+  requestIdentityInvitationResend,
+  requestIdentityInvitationCancel,
+  requestIdentityRecovery,
+  requestIdentitySuspend,
+  requestIdentityRestore,
+  requestIdentityGlobalSignout,
+  requestIdentitySessionsRevoke,
+  MissingIdentityTargetError,
+} from "../../management/operations/identityOperation.js";
+import {
+  requestIdentityR3Approval,
+  decideIdentityR3Approval,
+  executeIdentityR3Approval,
+  IDENTITY_R3_ACTIONS,
+  UnknownIdentityR3ActionError,
+  MissingIdentityApprovalTargetError,
+  type IdentityR3ActionKey,
+} from "../../management/operations/identityApprovalOperation.js";
+import type { ManagementApprovalStore } from "../../management/operations/managementApprovalStore.js";
+import {
+  ApprovalNotFoundError,
+  ApprovalExpiredError,
+  ApprovalNotPendingError,
+  SelfApprovalNotAllowedError,
+  ApprovalNotApprovedError,
+  ApprovalAlreadyExecutedError,
+  ApprovalPayloadMismatchError,
+} from "../../management/operations/managementApprovalStore.js";
 
 export interface ManagementRouterDeps {
   identityProvider: IdentityProvider;
@@ -66,6 +113,12 @@ export interface ManagementRouterDeps {
   // commissioned_tenants), read/written by the commission/suspend/resume/
   // decommission routes below.
   commissionedTenants: CommissionedTenantsRepository;
+  // 1A.12.4 — real operator step-up. Injectable for tests, same pattern as
+  // createBrowserAuthRouter's own loadConfig/fetchImpl.
+  loadBrowserAuthConfig?: () => BrowserAuthConfig;
+  fetchImpl?: typeof fetch;
+  // 1A.12.5 — the maker-checker approval substrate for R3 identity actions.
+  approvals: ManagementApprovalStore;
 }
 
 // 1A.2 route integration points (whoami/session/audit) prove the operator
@@ -121,6 +174,213 @@ export function createManagementRouter(deps: ManagementRouterDeps): Router {
   // backed by a fresh Cognito MFA challenge before this route is enabled.
   router.post("/session/step-up", (_req, _res, next) => {
     next(new StepUpNotConfiguredError());
+  });
+
+  // ───────────────────────────────────────────────────────────────────────
+  // 1A.12.4 — real operator step-up. Browser-navigated (GET, redirect-
+  // based), NOT the JSON POST stub above: a step-up cannot be "asserted" by
+  // a fetch() call, only proven by the operator actually completing a
+  // second, forced-fresh Cognito authentication. Mirrors routes/auth/
+  // index.ts's login/callback OAuth mechanics exactly (PKCE + state + nonce
+  // + cookie-binding-when-present), with two deliberate differences:
+  //   - `prompt=login` on the authorize URL forces a fresh interactive
+  //     Cognito authentication rather than silently reusing an existing
+  //     Hosted UI SSO session (§9.1 — "not silent SSO reuse"). The exact
+  //     parameter is Cognito Hosted UI behavior that must be proven live
+  //     during 1A.12.8 certification, not merely assumed from docs.
+  //   - the callback's success path never mints a new session; it can only
+  //     recordStepUp() on the SAME operator session /start was called from,
+  //     and only after verifying the fresh re-auth's Cognito subject
+  //     matches that session's own cognito_sub. A subject mismatch fails
+  //     closed and the transaction is already consumed (single-use) by the
+  //     time that check runs, so it cannot be retried.
+  router.get("/session/step-up/start", async (req, res, next) => {
+    try {
+      const ctx = req.operatorContext;
+      if (!ctx) {
+        res.status(403).json({ error: "NOT_AUTHENTICATED" });
+        return;
+      }
+      const config = deps.loadBrowserAuthConfig ? deps.loadBrowserAuthConfig() : loadBrowserAuthConfig();
+      if (!deps.browserAuthStore) {
+        next(new StepUpNotConfiguredError());
+        return;
+      }
+      const names = browserCookieNames(config.secureCookies);
+      const transactionSecret = randomOpaqueSecret();
+      const state = randomOpaqueSecret();
+      const nonce = randomOpaqueSecret();
+      const codeVerifier = randomOpaqueSecret(48);
+      const now = new Date();
+      const expiresAt = new Date(now.getTime() + config.oauthTransactionTtlSeconds * 1000);
+      const stepUpRedirectUri = new URL("/management/v1/session/step-up/callback", new URL(config.redirectUri).origin).toString();
+
+      await deps.browserAuthStore.createStepUpTransaction({
+        transactionHash: sha256Base64Url(transactionSecret),
+        stateHash: sha256Base64Url(state),
+        nonce,
+        codeVerifier,
+        boundOperatorSessionId: ctx.operatorSessionId,
+        boundCognitoSub: ctx.cognitoSub,
+        returnPath: safeRelativeReturnPath(req.query.returnTo),
+        createdAt: now.toISOString(),
+        expiresAt: expiresAt.toISOString(),
+      });
+
+      res.cookie(names.stepUp, transactionSecret, {
+        httpOnly: true,
+        secure: config.secureCookies,
+        sameSite: "lax",
+        path: "/",
+        maxAge: config.oauthTransactionTtlSeconds * 1000,
+      });
+
+      const url = new URL(`${config.cognitoDomain}/login`);
+      url.searchParams.set("client_id", config.appClientId);
+      url.searchParams.set("response_type", "code");
+      url.searchParams.set("scope", "openid email");
+      url.searchParams.set("redirect_uri", stepUpRedirectUri);
+      url.searchParams.set("code_challenge_method", "S256");
+      url.searchParams.set("code_challenge", pkceChallenge(codeVerifier));
+      url.searchParams.set("state", state);
+      url.searchParams.set("nonce", nonce);
+      url.searchParams.set("prompt", "login");
+      res.redirect(302, url.toString());
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  router.get("/session/step-up/callback", async (req, res, next) => {
+    let config: BrowserAuthConfig;
+    try {
+      config = deps.loadBrowserAuthConfig ? deps.loadBrowserAuthConfig() : loadBrowserAuthConfig();
+    } catch (err) {
+      next(err);
+      return;
+    }
+    if (!deps.browserAuthStore) {
+      next(new StepUpNotConfiguredError());
+      return;
+    }
+    const fetchImpl = deps.fetchImpl ?? fetch;
+    const names = browserCookieNames(config.secureCookies);
+
+    function clearStepUpCookie() {
+      res.clearCookie(names.stepUp, { httpOnly: true, secure: config.secureCookies, sameSite: "lax", path: "/" });
+    }
+    function redirectStepUpFailure(code: string) {
+      const url = new URL(config.frontendOrigin);
+      url.searchParams.set("stepUp", code);
+      res.redirect(302, url.toString());
+    }
+
+    try {
+      const cookies = parseCookies(req.header("cookie"));
+      const transactionSecret = cookies[names.stepUp];
+      const code = typeof req.query.code === "string" ? req.query.code : undefined;
+      const state = typeof req.query.state === "string" ? req.query.state : undefined;
+
+      if (!code || !state || typeof req.query.error === "string") {
+        await deps.auditSink.record({
+          eventType: "authz.denied",
+          occurredAt: new Date().toISOString(),
+          operatorId: req.operatorContext?.operatorId,
+          operatorSessionId: req.operatorContext?.operatorSessionId,
+          reasonCode: typeof req.query.error === "string" ? "STEP_UP_OAUTH_PROVIDER_ERROR" : "STEP_UP_CALLBACK_PARAMS_MISSING",
+        });
+        clearStepUpCookie();
+        redirectStepUpFailure("failed");
+        return;
+      }
+
+      // Single-use: consuming by state hash immediately marks the
+      // transaction consumed, so a subject-mismatch failure below can never
+      // be retried against the same transaction.
+      const transaction = await deps.browserAuthStore.consumeStepUpTransactionByStateHash(sha256Base64Url(state));
+      clearStepUpCookie();
+      if (!transaction) {
+        await deps.auditSink.record({ eventType: "authz.denied", occurredAt: new Date().toISOString(), reasonCode: "STEP_UP_STATE_INVALID" });
+        redirectStepUpFailure("failed");
+        return;
+      }
+
+      const cookieBindingVerified = Boolean(transactionSecret) && safeEqualText(sha256Base64Url(transactionSecret ?? ""), transaction.transactionHash);
+      if (transactionSecret && !cookieBindingVerified) {
+        await deps.auditSink.record({ eventType: "authz.denied", occurredAt: new Date().toISOString(), reasonCode: "STEP_UP_COOKIE_BINDING_MISMATCH" });
+        redirectStepUpFailure("failed");
+        return;
+      }
+
+      const basicAuth = Buffer.from(`${config.appClientId}:${config.appClientSecret}`, "utf8").toString("base64");
+      const stepUpRedirectUri = new URL("/management/v1/session/step-up/callback", new URL(config.redirectUri).origin).toString();
+      const tokenResponse = await fetchImpl(`${config.cognitoDomain}/oauth2/token`, {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded", authorization: `Basic ${basicAuth}` },
+        body: new URLSearchParams({
+          grant_type: "authorization_code",
+          client_id: config.appClientId,
+          code,
+          redirect_uri: stepUpRedirectUri,
+          code_verifier: transaction.codeVerifier,
+        }).toString(),
+      });
+      if (!tokenResponse.ok) {
+        await deps.auditSink.record({
+          eventType: "authz.denied", occurredAt: new Date().toISOString(),
+          operatorSessionId: transaction.boundOperatorSessionId, reasonCode: "STEP_UP_TOKEN_EXCHANGE_FAILED",
+        });
+        redirectStepUpFailure("failed");
+        return;
+      }
+
+      const tokenBody = (await tokenResponse.json()) as { id_token?: string };
+      if (!tokenBody.id_token) {
+        await deps.auditSink.record({
+          eventType: "authz.denied", occurredAt: new Date().toISOString(),
+          operatorSessionId: transaction.boundOperatorSessionId, reasonCode: "STEP_UP_ID_TOKEN_MISSING",
+        });
+        redirectStepUpFailure("failed");
+        return;
+      }
+
+      const claims = await deps.identityProvider.verifyToken(tokenBody.id_token);
+      if (claims.rawClaims.nonce !== transaction.nonce) {
+        await deps.auditSink.record({
+          eventType: "authz.denied", occurredAt: new Date().toISOString(),
+          operatorSessionId: transaction.boundOperatorSessionId, reasonCode: "STEP_UP_NONCE_INVALID",
+        });
+        redirectStepUpFailure("failed");
+        return;
+      }
+
+      // The one check this whole flow exists for: the fresh re-auth MUST be
+      // the SAME subject as the session that started it. This is what
+      // prevents the callback from ever annotating a different operator's
+      // session with someone else's step-up proof.
+      if (claims.subject !== transaction.boundCognitoSub) {
+        await deps.auditSink.record({
+          eventType: "authz.denied", occurredAt: new Date().toISOString(),
+          operatorSessionId: transaction.boundOperatorSessionId, reasonCode: "STEP_UP_SUBJECT_MISMATCH",
+        });
+        redirectStepUpFailure("forbidden");
+        return;
+      }
+
+      const verifiedAt = new Date().toISOString();
+      await deps.sessionStore.recordStepUp(transaction.boundOperatorSessionId, { verifiedAt, method: "cognito-fresh-reauth" });
+      await deps.auditSink.record({
+        eventType: "session.step_up_recorded",
+        occurredAt: verifiedAt,
+        operatorSessionId: transaction.boundOperatorSessionId,
+        reasonCode: "STEP_UP_VERIFIED",
+        detail: { cookieBindingVerified },
+      });
+
+      res.redirect(302, `${config.frontendOrigin}${transaction.returnPath}`);
+    } catch (err) {
+      next(err);
+    }
   });
 
   router.get("/audit/self-test", requireScope("audit.read", deps.auditSink), (req, res) => {
@@ -915,6 +1175,353 @@ export function createManagementRouter(deps: ManagementRouterDeps): Router {
       }
     },
   );
+
+  // ───────────────────────────────────────────────────────────────────────
+  // 1A.12 — identity administration. Reads (R0, no ledger, same reasoning
+  // as /tenants above) plus the routine (R2) invitation/recovery/access-
+  // lifecycle commands. R3 actions (force-reset, mfa.reset) are a separate
+  // vertical (identityApprovalOperation.ts, 1A.12.5) requiring step-up and
+  // maker-checker approval — not wired here.
+  // ───────────────────────────────────────────────────────────────────────
+
+  router.get("/tenants/:tenantId/identities", requireScope("identity.read", deps.auditSink), async (req, res, next) => {
+    try {
+      const ctx = req.operatorContext;
+      if (!ctx) { res.status(403).json({ error: "NOT_AUTHENTICATED" }); return; }
+      const signingKeys = await deps.getManagementSigningKeys();
+      const transportConfig = deps.loadTransportConfig();
+      const result = await listTenantIdentities(
+        { signingKeys, transportConfig, infrakineticBaseUrl: deps.infrakineticBaseUrl },
+        { tenantId: req.params.tenantId, operatorId: ctx.operatorId, operatorSessionId: ctx.operatorSessionId, operatorRoles: ctx.roles, operatorGrantedScopes: ctx.scopes, correlationId: ctx.correlationId },
+      );
+      res.status(200).json(result);
+    } catch (err) {
+      if (err instanceof UnexpectedManagementApiResponseError) { res.status(502).json({ error: "MANAGEMENT_API_UPSTREAM_ERROR", message: err.message }); return; }
+      if (err instanceof DatabaseUnavailableError) { res.status(err.httpStatus).json({ error: err.code, message: err.message }); return; }
+      next(err);
+    }
+  });
+
+  router.get("/tenants/:tenantId/identities/:userId", requireScope("identity.read", deps.auditSink), async (req, res, next) => {
+    try {
+      const ctx = req.operatorContext;
+      if (!ctx) { res.status(403).json({ error: "NOT_AUTHENTICATED" }); return; }
+      const signingKeys = await deps.getManagementSigningKeys();
+      const transportConfig = deps.loadTransportConfig();
+      const result = await getIdentityDetail(
+        { signingKeys, transportConfig, infrakineticBaseUrl: deps.infrakineticBaseUrl },
+        { tenantId: req.params.tenantId, userId: req.params.userId, operatorId: ctx.operatorId, operatorSessionId: ctx.operatorSessionId, operatorRoles: ctx.roles, operatorGrantedScopes: ctx.scopes, correlationId: ctx.correlationId },
+      );
+      res.status(200).json(result);
+    } catch (err) {
+      if (err instanceof UnknownIdentityError) { res.status(404).json({ error: "IDENTITY_NOT_FOUND", message: err.message }); return; }
+      if (err instanceof UnexpectedManagementApiResponseError) { res.status(502).json({ error: "MANAGEMENT_API_UPSTREAM_ERROR", message: err.message }); return; }
+      if (err instanceof DatabaseUnavailableError) { res.status(err.httpStatus).json({ error: err.code, message: err.message }); return; }
+      next(err);
+    }
+  });
+
+  router.get("/tenants/:tenantId/identities/:userId/history", requireScope("identity.read", deps.auditSink), async (req, res, next) => {
+    try {
+      const ctx = req.operatorContext;
+      if (!ctx) { res.status(403).json({ error: "NOT_AUTHENTICATED" }); return; }
+      const signingKeys = await deps.getManagementSigningKeys();
+      const transportConfig = deps.loadTransportConfig();
+      const result = await getIdentityHistory(
+        { signingKeys, transportConfig, infrakineticBaseUrl: deps.infrakineticBaseUrl },
+        { tenantId: req.params.tenantId, userId: req.params.userId, operatorId: ctx.operatorId, operatorSessionId: ctx.operatorSessionId, operatorRoles: ctx.roles, operatorGrantedScopes: ctx.scopes, correlationId: ctx.correlationId },
+      );
+      res.status(200).json(result);
+    } catch (err) {
+      if (err instanceof UnknownIdentityError) { res.status(404).json({ error: "IDENTITY_NOT_FOUND", message: err.message }); return; }
+      if (err instanceof UnexpectedManagementApiResponseError) { res.status(502).json({ error: "MANAGEMENT_API_UPSTREAM_ERROR", message: err.message }); return; }
+      if (err instanceof DatabaseUnavailableError) { res.status(err.httpStatus).json({ error: err.code, message: err.message }); return; }
+      next(err);
+    }
+  });
+
+  function identityOperationErrorResponse(err: unknown, res: import("express").Response): boolean {
+    if (err instanceof MissingIdentityTargetError) { res.status(400).json({ error: "IDENTITY_TARGET_REQUIRED", message: err.message }); return true; }
+    if (err instanceof DatabaseUnavailableError) { res.status(err.httpStatus).json({ error: err.code, message: err.message }); return true; }
+    return false;
+  }
+
+  router.get("/tenants/:tenantId/identity-invitations", requireScope("identity.read", deps.auditSink), async (req, res, next) => {
+    try {
+      const ctx = req.operatorContext;
+      if (!ctx) { res.status(403).json({ error: "NOT_AUTHENTICATED" }); return; }
+      const signingKeys = await deps.getManagementSigningKeys();
+      const transportConfig = deps.loadTransportConfig();
+      const result = await listTenantInvitations(
+        { signingKeys, transportConfig, infrakineticBaseUrl: deps.infrakineticBaseUrl },
+        { tenantId: req.params.tenantId, operatorId: ctx.operatorId, operatorSessionId: ctx.operatorSessionId, operatorRoles: ctx.roles, operatorGrantedScopes: ctx.scopes, correlationId: ctx.correlationId },
+      );
+      res.status(200).json(result);
+    } catch (err) {
+      if (err instanceof UnexpectedManagementApiResponseError) { res.status(502).json({ error: "MANAGEMENT_API_UPSTREAM_ERROR", message: err.message }); return; }
+      if (err instanceof DatabaseUnavailableError) { res.status(err.httpStatus).json({ error: err.code, message: err.message }); return; }
+      next(err);
+    }
+  });
+
+  router.post("/tenants/:tenantId/identity-invitations", requireScope("identity.recovery", deps.auditSink), async (req, res, next) => {
+    const ctx = req.operatorContext;
+    try {
+      if (!ctx) { res.status(403).json({ error: "NOT_AUTHENTICATED" }); return; }
+      const body = (req.body ?? {}) as Record<string, unknown>;
+      if (typeof body.idempotencyKey !== "string" || body.idempotencyKey.trim() === "") { res.status(400).json({ error: "IDEMPOTENCY_KEY_REQUIRED" }); return; }
+      if (typeof body.reason !== "string" || body.reason.trim() === "") { res.status(400).json({ error: "REASON_REQUIRED" }); return; }
+      if (typeof body.email !== "string" || body.email.trim() === "") { res.status(400).json({ error: "EMAIL_REQUIRED" }); return; }
+
+      const signingKeys = await deps.getManagementSigningKeys();
+      const transportConfig = deps.loadTransportConfig();
+      const result = await requestIdentityInvitation(
+        { ledger: deps.ledger, signingKeys, transportConfig, infrakineticBaseUrl: deps.infrakineticBaseUrl },
+        {
+          idempotencyKey: body.idempotencyKey, operatorId: ctx.operatorId, operatorSessionId: ctx.operatorSessionId,
+          operatorRoles: ctx.roles, operatorGrantedScopes: ctx.scopes, tenantId: req.params.tenantId,
+          invitationRequestId: randomUUID(), email: body.email,
+          fullName: typeof body.fullName === "string" ? body.fullName : undefined,
+          roleKey: typeof body.roleKey === "string" ? body.roleKey : undefined,
+          reason: body.reason, correlationId: ctx.correlationId,
+        },
+      );
+      res.status(200).json({ operation: result.operation, replay: result.replay });
+    } catch (err) {
+      if (identityOperationErrorResponse(err, res)) return;
+      if (err instanceof UnexpectedManagementApiResponseError || err instanceof ManagementApiUnreachableError) { res.status(502).json({ error: "MANAGEMENT_API_UPSTREAM_ERROR", message: err.message }); return; }
+      if (err instanceof ManagementOperationError) { res.status(err.httpStatus).json({ error: err.code, message: err.message }); return; }
+      next(err);
+    }
+  });
+
+  const IDENTITY_INVITATION_ACTIONS = [
+    { segment: "resend", fn: requestIdentityInvitationResend },
+    { segment: "cancel", fn: requestIdentityInvitationCancel },
+  ] as const;
+
+  for (const { segment, fn } of IDENTITY_INVITATION_ACTIONS) {
+    router.post(`/tenants/:tenantId/identity-invitations/:invitationId/${segment}`, requireScope("identity.recovery", deps.auditSink), async (req, res, next) => {
+      const ctx = req.operatorContext;
+      try {
+        if (!ctx) { res.status(403).json({ error: "NOT_AUTHENTICATED" }); return; }
+        const body = (req.body ?? {}) as Record<string, unknown>;
+        if (typeof body.idempotencyKey !== "string" || body.idempotencyKey.trim() === "") { res.status(400).json({ error: "IDEMPOTENCY_KEY_REQUIRED" }); return; }
+        if (typeof body.reason !== "string" || body.reason.trim() === "") { res.status(400).json({ error: "REASON_REQUIRED" }); return; }
+
+        const signingKeys = await deps.getManagementSigningKeys();
+        const transportConfig = deps.loadTransportConfig();
+        const result = await fn(
+          { ledger: deps.ledger, signingKeys, transportConfig, infrakineticBaseUrl: deps.infrakineticBaseUrl },
+          {
+            idempotencyKey: body.idempotencyKey, operatorId: ctx.operatorId, operatorSessionId: ctx.operatorSessionId,
+            operatorRoles: ctx.roles, operatorGrantedScopes: ctx.scopes, tenantId: req.params.tenantId,
+            invitationId: req.params.invitationId, reason: body.reason, correlationId: ctx.correlationId,
+          },
+        );
+        res.status(200).json({ operation: result.operation, replay: result.replay });
+      } catch (err) {
+        if (identityOperationErrorResponse(err, res)) return;
+        if (err instanceof UnexpectedManagementApiResponseError || err instanceof ManagementApiUnreachableError) { res.status(502).json({ error: "MANAGEMENT_API_UPSTREAM_ERROR", message: err.message }); return; }
+        if (err instanceof ManagementOperationError) { res.status(err.httpStatus).json({ error: err.code, message: err.message }); return; }
+        next(err);
+      }
+    });
+  }
+
+  const IDENTITY_USER_ACTIONS = [
+    { segment: "recovery", scope: "identity.recovery", fn: requestIdentityRecovery },
+    { segment: "suspend", scope: "identity.disable", fn: requestIdentitySuspend },
+    { segment: "restore", scope: "identity.disable", fn: requestIdentityRestore },
+    { segment: "global-signout", scope: "identity.disable", fn: requestIdentityGlobalSignout },
+    { segment: "sessions/revoke", scope: "identity.disable", fn: requestIdentitySessionsRevoke },
+  ] as const;
+
+  for (const { segment, scope, fn } of IDENTITY_USER_ACTIONS) {
+    router.post(`/tenants/:tenantId/identities/:userId/${segment}`, requireScope(scope, deps.auditSink), async (req, res, next) => {
+      const ctx = req.operatorContext;
+      try {
+        if (!ctx) { res.status(403).json({ error: "NOT_AUTHENTICATED" }); return; }
+        const body = (req.body ?? {}) as Record<string, unknown>;
+        if (typeof body.idempotencyKey !== "string" || body.idempotencyKey.trim() === "") { res.status(400).json({ error: "IDEMPOTENCY_KEY_REQUIRED" }); return; }
+        if (typeof body.reason !== "string" || body.reason.trim() === "") { res.status(400).json({ error: "REASON_REQUIRED" }); return; }
+
+        const signingKeys = await deps.getManagementSigningKeys();
+        const transportConfig = deps.loadTransportConfig();
+        const result = await fn(
+          { ledger: deps.ledger, signingKeys, transportConfig, infrakineticBaseUrl: deps.infrakineticBaseUrl },
+          {
+            idempotencyKey: body.idempotencyKey, operatorId: ctx.operatorId, operatorSessionId: ctx.operatorSessionId,
+            operatorRoles: ctx.roles, operatorGrantedScopes: ctx.scopes, tenantId: req.params.tenantId,
+            userId: req.params.userId, reason: body.reason, correlationId: ctx.correlationId,
+          },
+        );
+        res.status(200).json({ operation: result.operation, replay: result.replay });
+      } catch (err) {
+        if (identityOperationErrorResponse(err, res)) return;
+        if (err instanceof UnexpectedManagementApiResponseError || err instanceof ManagementApiUnreachableError) { res.status(502).json({ error: "MANAGEMENT_API_UPSTREAM_ERROR", message: err.message }); return; }
+        if (err instanceof ManagementOperationError) { res.status(err.httpStatus).json({ error: err.code, message: err.message }); return; }
+        next(err);
+      }
+    });
+  }
+
+  // ───────────────────────────────────────────────────────────────────────
+  // 1A.12.5 — R3 identity actions (force-reset, mfa-reset): request (maker,
+  // fresh step-up) -> decide (checker, != maker) -> execute (fresh step-up,
+  // approval consumed exactly once). §9.1's default 5-minute freshness
+  // applies at BOTH the request and execute steps — a maker-checker cycle
+  // can span far longer than 5 minutes, so execute's step-up is expected to
+  // usually be a SEPARATE, later step-up, not a reuse of the request one.
+  // ───────────────────────────────────────────────────────────────────────
+
+  function approvalErrorResponse(err: unknown, res: import("express").Response): boolean {
+    if (err instanceof ApprovalNotFoundError) { res.status(404).json({ error: "APPROVAL_NOT_FOUND", message: err.message }); return true; }
+    if (err instanceof ApprovalExpiredError) { res.status(409).json({ error: "APPROVAL_EXPIRED", message: err.message }); return true; }
+    if (err instanceof ApprovalNotPendingError) { res.status(409).json({ error: "APPROVAL_NOT_PENDING", message: err.message }); return true; }
+    if (err instanceof SelfApprovalNotAllowedError) { res.status(403).json({ error: "SELF_APPROVAL_NOT_ALLOWED", message: err.message }); return true; }
+    if (err instanceof ApprovalNotApprovedError) { res.status(409).json({ error: "APPROVAL_NOT_APPROVED", message: err.message }); return true; }
+    if (err instanceof ApprovalAlreadyExecutedError) { res.status(409).json({ error: "APPROVAL_ALREADY_EXECUTED", message: err.message }); return true; }
+    if (err instanceof ApprovalPayloadMismatchError) { res.status(409).json({ error: "APPROVAL_PAYLOAD_MISMATCH", message: err.message }); return true; }
+    if (err instanceof UnknownIdentityR3ActionError || err instanceof MissingIdentityApprovalTargetError) { res.status(400).json({ error: "IDENTITY_R3_REQUEST_INVALID", message: err.message }); return true; }
+    if (err instanceof DatabaseUnavailableError) { res.status(err.httpStatus).json({ error: err.code, message: err.message }); return true; }
+    return false;
+  }
+
+  const R3_ROUTE_SEGMENTS: Record<IdentityR3ActionKey, string> = { "force-reset": "force-reset", "mfa-reset": "mfa-reset" };
+
+  for (const actionKey of Object.keys(IDENTITY_R3_ACTIONS) as IdentityR3ActionKey[]) {
+    const { scope } = IDENTITY_R3_ACTIONS[actionKey];
+    router.post(
+      `/tenants/:tenantId/identities/:userId/${R3_ROUTE_SEGMENTS[actionKey]}/request`,
+      requireScope(scope, deps.auditSink),
+      requireStepUp(300, deps.sessionStore, deps.auditSink),
+      async (req, res, next) => {
+        const ctx = req.operatorContext;
+        try {
+          if (!ctx) { res.status(403).json({ error: "NOT_AUTHENTICATED" }); return; }
+          const body = (req.body ?? {}) as Record<string, unknown>;
+          if (typeof body.reason !== "string" || body.reason.trim() === "") { res.status(400).json({ error: "REASON_REQUIRED" }); return; }
+
+          const approval = await requestIdentityR3Approval(
+            { approvals: deps.approvals },
+            { actionKey, tenantId: req.params.tenantId, userId: req.params.userId, reason: body.reason, makerOperatorId: ctx.operatorId, correlationId: ctx.correlationId },
+          );
+          res.status(201).json({ approval });
+        } catch (err) {
+          if (approvalErrorResponse(err, res)) return;
+          next(err);
+        }
+      },
+    );
+  }
+
+  function requiredScopeForApproval(approval: { requestedAction: string }): string | undefined {
+    return Object.values(IDENTITY_R3_ACTIONS).find((entry) => entry.action === approval.requestedAction)?.scope;
+  }
+
+  const APPROVAL_DECISIONS = ["approve", "reject"] as const;
+  for (const segment of APPROVAL_DECISIONS) {
+    router.post(`/approvals/:approvalId/${segment}`, async (req, res, next) => {
+      const ctx = req.operatorContext;
+      try {
+        if (!ctx) { res.status(403).json({ error: "NOT_AUTHENTICATED" }); return; }
+
+        const approvalStore = deps.approvals;
+        const current = await approvalStore.getApproval(req.params.approvalId);
+        const requiredScope = requiredScopeForApproval(current);
+        if (!requiredScope || !ctx.scopes.includes(requiredScope as never)) {
+          res.status(403).json({ error: "SCOPE_REQUIRED", message: `Deciding this approval requires scope '${requiredScope}'.` });
+          return;
+        }
+
+        const decided = await decideIdentityR3Approval(
+          { approvals: deps.approvals },
+          { approvalId: req.params.approvalId, checkerOperatorId: ctx.operatorId, decision: segment === "approve" ? "approved" : "rejected" },
+        );
+        res.status(200).json({ approval: decided });
+      } catch (err) {
+        if (approvalErrorResponse(err, res)) return;
+        next(err);
+      }
+    });
+  }
+
+  // Execution is deliberately not restricted to the original maker — any
+  // operator holding the approval's required scope, with their OWN fresh
+  // step-up, may execute an already-approved request. The approval record
+  // itself (maker/checker/decidedAt) is the audit trail for who authorized
+  // what; this route only proves the executing operator is currently
+  // privileged and freshly re-authenticated.
+  router.post(
+    "/approvals/:approvalId/execute",
+    requireStepUp(300, deps.sessionStore, deps.auditSink),
+    async (req, res, next) => {
+      const ctx = req.operatorContext;
+      try {
+        if (!ctx) { res.status(403).json({ error: "NOT_AUTHENTICATED" }); return; }
+        const body = (req.body ?? {}) as Record<string, unknown>;
+        if (typeof body.idempotencyKey !== "string" || body.idempotencyKey.trim() === "") { res.status(400).json({ error: "IDEMPOTENCY_KEY_REQUIRED" }); return; }
+
+        const current = await deps.approvals.getApproval(req.params.approvalId);
+        const requiredScope = requiredScopeForApproval(current);
+        if (!requiredScope || !ctx.scopes.includes(requiredScope as never)) {
+          res.status(403).json({ error: "SCOPE_REQUIRED", message: `Executing this approval requires scope '${requiredScope}'.` });
+          return;
+        }
+
+        const signingKeys = await deps.getManagementSigningKeys();
+        const transportConfig = deps.loadTransportConfig();
+        const result = await executeIdentityR3Approval(
+          { approvals: deps.approvals, ledger: deps.ledger, signingKeys, transportConfig, infrakineticBaseUrl: deps.infrakineticBaseUrl },
+          {
+            approvalId: req.params.approvalId, idempotencyKey: body.idempotencyKey,
+            operatorId: ctx.operatorId, operatorSessionId: ctx.operatorSessionId,
+            operatorRoles: ctx.roles, operatorGrantedScopes: ctx.scopes, correlationId: ctx.correlationId,
+          },
+        );
+        res.status(200).json({ operation: result.operation, approval: result.approval, replay: result.replay });
+      } catch (err) {
+        if (approvalErrorResponse(err, res)) return;
+        if (err instanceof UnexpectedManagementApiResponseError || err instanceof ManagementApiUnreachableError) { res.status(502).json({ error: "MANAGEMENT_API_UPSTREAM_ERROR", message: err.message }); return; }
+        if (err instanceof ManagementOperationError) { res.status(err.httpStatus).json({ error: err.code, message: err.message }); return; }
+        next(err);
+      }
+    },
+  );
+
+  router.get("/approvals", requireScope("identity.read", deps.auditSink), async (req, res, next) => {
+    try {
+      const status = typeof req.query.status === "string" && req.query.status.trim() !== "" ? req.query.status : undefined;
+      if (status !== undefined && !["pending", "approved", "rejected", "expired"].includes(status)) {
+        res.status(400).json({ error: "INVALID_STATUS" });
+        return;
+      }
+      const tenantId = typeof req.query.tenantId === "string" && req.query.tenantId.trim() !== "" ? req.query.tenantId : undefined;
+      const rawLimit = req.query.limit;
+      let limit: number | undefined;
+      if (typeof rawLimit === "string" && rawLimit.trim() !== "") {
+        const parsed = Number(rawLimit);
+        if (!Number.isInteger(parsed) || parsed < 1) { res.status(400).json({ error: "INVALID_LIMIT" }); return; }
+        limit = parsed;
+      }
+      const approvals = await deps.approvals.listApprovals({ status: status as never, targetTenantId: tenantId, limit });
+      res.status(200).json({ approvals });
+    } catch (err) {
+      if (err instanceof DatabaseUnavailableError) { res.status(err.httpStatus).json({ error: err.code, message: err.message }); return; }
+      next(err);
+    }
+  });
+
+  router.get("/approvals/:approvalId", requireScope("identity.read", deps.auditSink), async (req, res, next) => {
+    try {
+      const approval = await deps.approvals.getApproval(req.params.approvalId);
+      res.status(200).json({ approval });
+    } catch (err) {
+      if (approvalErrorResponse(err, res)) return;
+      next(err);
+    }
+  });
 
   // Express 4 does not auto-forward rejected async promises. Async handlers
   // above explicitly call next(err), and this router-local typed boundary
