@@ -117,6 +117,37 @@ describe("identityOperation — suspend full success round trip", () => {
     expect(calls[0].body?.reason).toBe("support ticket #42");
   });
 
+  it("preserves an owner-reported partially_completed lifecycle outcome instead of upgrading it to completed", async () => {
+    const { client } = buildMigratedPgMemClient();
+    await seedOperator(client);
+    const ledger = new ManagementOperationLedger(client);
+    const signingKeys = await buildFixtureSigningKeys();
+    const path = `/management/v1/tenants/${TENANT_ID}/identities/${USER_ID}/suspend`;
+    const { fetchImpl } = buildFakeInfrakinetic({
+      [path]: {
+        status: 200,
+        body: {
+          commandStatus: "partially_completed",
+          appAccountStatus: "inactive",
+          providerEnabled: true,
+          convergence: "partial",
+          failureStages: ["provider-disable-or-global-signout"],
+        },
+      },
+    });
+    const deps: IdentityOperationDeps = { ledger, signingKeys, transportConfig: TRANSPORT_CONFIG, infrakineticBaseUrl: "https://infrakinetic.test.invalid", fetchImpl };
+
+    const result = await requestIdentitySuspend(deps, {
+      idempotencyKey: "idem-suspend-partial", operatorId: OPERATOR_ID, operatorSessionId: SESSION_ID,
+      operatorRoles: ["identity_operator"], operatorGrantedScopes: ["identity.disable"],
+      tenantId: TENANT_ID, userId: USER_ID, reason: "support ticket #partial",
+    });
+
+    expect(result.operation.status).toBe("partially_completed");
+    expect(result.operation.result).toMatchObject({ commandStatus: "partially_completed", convergence: "partial" });
+    expect(result.operation.partialFailureState).toMatchObject({ stage: "owner-reported-partial" });
+  });
+
   it("same idempotencyKey replayed -> zero new Infrakinetic calls", async () => {
     const { client } = buildMigratedPgMemClient();
     await seedOperator(client);
