@@ -178,6 +178,20 @@ async function executeIdentityCommand(
     return { operation: failed, replay: false };
   }
 
+  const ownerCommandStatus =
+    result.body && typeof result.body === "object" && "commandStatus" in result.body
+      ? (result.body as { commandStatus?: unknown }).commandStatus
+      : undefined;
+  if (ownerCommandStatus === "partially_completed") {
+    const partial = await deps.ledger.transitionOperation(submitted.operationId, {
+      toStatus: "partially_completed",
+      afterStateSafeSnapshot: buildSafeSnapshot(result.body),
+      result: result.body,
+      partialFailureState: { stage: "owner-reported-partial", body: redactSecretShapedFields(result.body) },
+    });
+    return { operation: partial, replay: false };
+  }
+
   // result.body is already Infrakinetic's own sanitized safeResult — see
   // identityAdministration.js's header, which guarantees no
   // password/reset-code/token/MFA-secret ever appears here. buildSafeSnapshot
