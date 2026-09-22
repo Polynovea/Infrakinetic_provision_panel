@@ -55,7 +55,7 @@ describe("POST /management/v1/approvals/:approvalId/approve — self-approval", 
   it("the maker cannot approve their own request, even with the right scope", async () => {
     const keyPair = await generateTestKeyPair();
     const provider = buildTestIdentityProvider(keyPair);
-    const op = activeAdminOperator({ roles: ["security_operator"], scopes: ["identity.recovery"] });
+    const op = activeAdminOperator({ roles: ["security_operator"], scopes: ["identity.recovery", "identity.read"] });
     // governance.management_approvals.maker_operator_id has a real FK onto
     // governance.operators — the in-memory auth-layer operator fixture is
     // separate from this pg-mem client, so the same operator row must exist
@@ -92,5 +92,11 @@ describe("POST /management/v1/approvals/:approvalId/approve — self-approval", 
 
     expect(approveRes.status).toBe(403);
     expect(approveRes.body.error).toBe("SELF_APPROVAL_NOT_ALLOWED");
+
+    const listRes = await request(app)
+      .get(`/management/v1/approvals?status=pending&tenantId=${TENANT_ID}`)
+      .set("authorization", `Bearer ${token}`);
+    expect(listRes.status).toBe(200);
+    expect(listRes.body.approvals.map((a: { approvalId: string }) => a.approvalId)).toContain(approvalId);
   });
 });

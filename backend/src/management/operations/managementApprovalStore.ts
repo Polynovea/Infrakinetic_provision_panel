@@ -188,6 +188,31 @@ export class ManagementApprovalStore {
     return mapRow(row);
   }
 
+  // Discovery for the checker side of the flow — without this, a checker
+  // has no way to find a pending approval to decide on except being told
+  // the approvalId out of band. Bounded and newest-first, same shape as
+  // ManagementOperationLedger.listOperations.
+  async listApprovals(params: { status?: ApprovalStatus; targetTenantId?: string; limit?: number } = {}): Promise<ApprovalRecord[]> {
+    const limit = Math.min(Math.max(Math.trunc(params.limit ?? 20), 1), 100);
+    const conditions: string[] = [];
+    const values: unknown[] = [];
+    if (params.status !== undefined) {
+      values.push(params.status);
+      conditions.push(`status = $${values.length}`);
+    }
+    if (params.targetTenantId !== undefined) {
+      values.push(params.targetTenantId);
+      conditions.push(`target_tenant_id = $${values.length}`);
+    }
+    const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+    values.push(limit);
+    const result = await this.db.query<ApprovalRow>(
+      `SELECT * FROM governance.management_approvals ${whereClause} ORDER BY requested_at DESC LIMIT $${values.length}`,
+      values,
+    );
+    return result.rows.map(mapRow);
+  }
+
   async decideApproval(params: DecideApprovalParams): Promise<ApprovalRecord> {
     const current = await this.getApproval(params.approvalId);
     if (isPastExpiry(current)) throw new ApprovalExpiredError(params.approvalId);

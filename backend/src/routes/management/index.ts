@@ -1471,6 +1471,29 @@ export function createManagementRouter(deps: ManagementRouterDeps): Router {
     },
   );
 
+  router.get("/approvals", requireScope("identity.read", deps.auditSink), async (req, res, next) => {
+    try {
+      const status = typeof req.query.status === "string" && req.query.status.trim() !== "" ? req.query.status : undefined;
+      if (status !== undefined && !["pending", "approved", "rejected", "expired"].includes(status)) {
+        res.status(400).json({ error: "INVALID_STATUS" });
+        return;
+      }
+      const tenantId = typeof req.query.tenantId === "string" && req.query.tenantId.trim() !== "" ? req.query.tenantId : undefined;
+      const rawLimit = req.query.limit;
+      let limit: number | undefined;
+      if (typeof rawLimit === "string" && rawLimit.trim() !== "") {
+        const parsed = Number(rawLimit);
+        if (!Number.isInteger(parsed) || parsed < 1) { res.status(400).json({ error: "INVALID_LIMIT" }); return; }
+        limit = parsed;
+      }
+      const approvals = await deps.approvals.listApprovals({ status: status as never, targetTenantId: tenantId, limit });
+      res.status(200).json({ approvals });
+    } catch (err) {
+      if (err instanceof DatabaseUnavailableError) { res.status(err.httpStatus).json({ error: err.code, message: err.message }); return; }
+      next(err);
+    }
+  });
+
   router.get("/approvals/:approvalId", requireScope("identity.read", deps.auditSink), async (req, res, next) => {
     try {
       const approval = await deps.approvals.getApproval(req.params.approvalId);
