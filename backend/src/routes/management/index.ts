@@ -1474,11 +1474,32 @@ export function createManagementRouter(deps: ManagementRouterDeps): Router {
     }
   });
 
-  // R2 — immediate replace, any of api_key_id/api_key_secret/webhook_secret.
-  // secretValue passes straight through this route into the signed
-  // Infrakinetic command body; it is never written into req-scoped state,
+  // secretKind is "webhook_secret" | "api_key_pair" (audit fix 2026-09-23 —
+  // see credentialOperation.ts's header). Material fields differ per kind:
+  // webhook_secret carries secretValue, api_key_pair carries apiKeyId +
+  // apiKeySecret together. None of these are written into req-scoped state,
   // the ledger payload, or any response this route returns (see
   // credentialOperation.ts's header for the defense-in-depth chain).
+  function requireCredentialSecretMaterial(body: Record<string, unknown>, res: import("express").Response): boolean {
+    if (body.secretKind === "webhook_secret") {
+      if (typeof body.secretValue !== "string" || body.secretValue.trim() === "") { res.status(400).json({ error: "SECRET_VALUE_REQUIRED" }); return false; }
+      return true;
+    }
+    if (body.secretKind === "api_key_pair") {
+      if (typeof body.apiKeyId !== "string" || body.apiKeyId.trim() === "" || typeof body.apiKeySecret !== "string" || body.apiKeySecret.trim() === "") {
+        res.status(400).json({ error: "API_KEY_PAIR_REQUIRED", message: "apiKeyId and apiKeySecret are both required." });
+        return false;
+      }
+      return true;
+    }
+    res.status(400).json({ error: "INVALID_SECRET_KIND", message: "secretKind must be one of webhook_secret, api_key_pair." });
+    return false;
+  }
+
+  // R2 — immediate replace. Establish-only: Infrakinetic fails closed
+  // (CREDENTIAL_ALREADY_ESTABLISHED, 409) when the targeted kind already has
+  // live material — existing material may only be mutated via rotate (R3)
+  // below.
   router.post("/tenants/:tenantId/credentials/:credentialId/replace", requireScope("credentials.submit", deps.auditSink), async (req, res, next) => {
     const ctx = req.operatorContext;
     try {
@@ -1487,7 +1508,7 @@ export function createManagementRouter(deps: ManagementRouterDeps): Router {
       if (typeof body.idempotencyKey !== "string" || body.idempotencyKey.trim() === "") { res.status(400).json({ error: "IDEMPOTENCY_KEY_REQUIRED" }); return; }
       if (typeof body.reason !== "string" || body.reason.trim() === "") { res.status(400).json({ error: "REASON_REQUIRED" }); return; }
       if (typeof body.secretKind !== "string" || body.secretKind.trim() === "") { res.status(400).json({ error: "SECRET_KIND_REQUIRED" }); return; }
-      if (typeof body.secretValue !== "string" || body.secretValue.trim() === "") { res.status(400).json({ error: "SECRET_VALUE_REQUIRED" }); return; }
+      if (!requireCredentialSecretMaterial(body, res)) return;
 
       const signingKeys = await deps.getManagementSigningKeys();
       const transportConfig = deps.loadTransportConfig();
@@ -1496,7 +1517,10 @@ export function createManagementRouter(deps: ManagementRouterDeps): Router {
         {
           idempotencyKey: body.idempotencyKey, operatorId: ctx.operatorId, operatorSessionId: ctx.operatorSessionId,
           operatorRoles: ctx.roles, operatorGrantedScopes: ctx.scopes, tenantId: req.params.tenantId,
-          credentialId: req.params.credentialId, secretKind: body.secretKind, secretValue: body.secretValue,
+          credentialId: req.params.credentialId, secretKind: body.secretKind,
+          secretValue: typeof body.secretValue === "string" ? body.secretValue : undefined,
+          apiKeyId: typeof body.apiKeyId === "string" ? body.apiKeyId : undefined,
+          apiKeySecret: typeof body.apiKeySecret === "string" ? body.apiKeySecret : undefined,
           reason: body.reason, correlationId: ctx.correlationId,
         },
       );
@@ -1669,7 +1693,10 @@ export function createManagementRouter(deps: ManagementRouterDeps): Router {
         const result = isCredentialR3Approval(current)
           ? await executeCredentialR3Approval(approvalDeps, {
               ...executeParams,
+              secretKind: body.secretKind === "webhook_secret" || body.secretKind === "api_key_pair" ? body.secretKind : undefined,
               secretValue: typeof body.secretValue === "string" ? body.secretValue : undefined,
+              apiKeyId: typeof body.apiKeyId === "string" ? body.apiKeyId : undefined,
+              apiKeySecret: typeof body.apiKeySecret === "string" ? body.apiKeySecret : undefined,
               overlapHours: typeof body.overlapHours === "number" ? body.overlapHours : undefined,
               webhookEndpointId: typeof body.webhookEndpointId === "string" ? body.webhookEndpointId : undefined,
             })

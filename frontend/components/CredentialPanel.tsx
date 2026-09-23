@@ -70,12 +70,18 @@ interface ApprovalRecord {
   expiresAt: string;
 }
 
-const SECRET_KINDS = ["api_key_id", "api_key_secret", "webhook_secret"] as const;
-type SecretKind = (typeof SECRET_KINDS)[number];
+// Closure-remediation audit (2026-09-23) — replace (R2) may only establish
+// previously absent credential material; api_key_id/api_key_secret are
+// collapsed into one atomically-submitted "api_key_pair" kind (a provider
+// rejects a mismatched pair, so both halves are always sent together). See
+// credentialAdministration.js's header on the Infrakinetic side.
+const REPLACEABLE_KINDS = ["webhook_secret", "api_key_pair"] as const;
+type ReplaceableKind = (typeof REPLACEABLE_KINDS)[number];
+const KIND_LABEL: Record<ReplaceableKind, string> = { webhook_secret: "Webhook secret", api_key_pair: "API key pair (id + secret)" };
 type R3ActionKey = "rotate" | "revoke";
 
 const R3_ACTION_LABEL: Record<R3ActionKey, string> = {
-  rotate: "Rotate webhook secret",
+  rotate: "Rotate a secret",
   revoke: "Revoke credential",
 };
 
@@ -122,8 +128,10 @@ export function CredentialPanel({
   const [testError, setTestError] = useState<string | null>(null);
 
   const [showReplace, setShowReplace] = useState(false);
-  const [replaceKind, setReplaceKind] = useState<SecretKind>("api_key_secret");
+  const [replaceKind, setReplaceKind] = useState<ReplaceableKind>("webhook_secret");
   const [replaceValue, setReplaceValue] = useState("");
+  const [replaceApiKeyId, setReplaceApiKeyId] = useState("");
+  const [replaceApiKeySecret, setReplaceApiKeySecret] = useState("");
   const [replaceReason, setReplaceReason] = useState("");
   const [replaceBusy, setReplaceBusy] = useState(false);
   const [replaceError, setReplaceError] = useState<string | null>(null);
@@ -136,7 +144,22 @@ export function CredentialPanel({
   const [decisionBusy, setDecisionBusy] = useState<string | null>(null);
   const [executeBusy, setExecuteBusy] = useState<string | null>(null);
   const [approvalActionError, setApprovalActionError] = useState<string | null>(null);
-  const [rotateExecuteValue, setRotateExecuteValue] = useState<Record<string, string>>({});
+  // Rotate needs the executing operator to choose WHICH kind is being
+  // rotated (never bound into the approval itself — see
+  // credentialApprovalOperation.ts's header) plus that kind's material.
+  interface RotateExecuteState {
+    secretKind: ReplaceableKind;
+    secretValue: string;
+    apiKeyId: string;
+    apiKeySecret: string;
+  }
+  const [rotateExecuteState, setRotateExecuteState] = useState<Record<string, RotateExecuteState>>({});
+  function rotateExecuteFor(approvalId: string): RotateExecuteState {
+    return rotateExecuteState[approvalId] ?? { secretKind: "webhook_secret", secretValue: "", apiKeyId: "", apiKeySecret: "" };
+  }
+  function updateRotateExecute(approvalId: string, patch: Partial<RotateExecuteState>) {
+    setRotateExecuteState((prev) => ({ ...prev, [approvalId]: { ...rotateExecuteFor(approvalId), ...patch } }));
+  }
 
   const load = useCallback(() => {
     setError(null);
@@ -207,8 +230,16 @@ export function CredentialPanel({
   }
 
   async function submitReplace() {
-    if (replaceValue.trim() === "" || replaceReason.trim() === "") {
-      setReplaceError("A new value and a reason are required.");
+    if (replaceReason.trim() === "") {
+      setReplaceError("A reason is required.");
+      return;
+    }
+    const material =
+      replaceKind === "webhook_secret"
+        ? { secretValue: replaceValue }
+        : { apiKeyId: replaceApiKeyId, apiKeySecret: replaceApiKeySecret };
+    if (Object.values(material).some((v) => v.trim() === "")) {
+      setReplaceError(replaceKind === "webhook_secret" ? "A new value is required." : "Both the API key id and secret are required.");
       return;
     }
     setReplaceBusy(true);
@@ -217,15 +248,21 @@ export function CredentialPanel({
       const res = await request(`/management/v1/tenants/${encodeURIComponent(tenantId)}/credentials/${encodeURIComponent(credentialId)}/replace`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ secretKind: replaceKind, secretValue: replaceValue, reason: replaceReason, idempotencyKey: crypto.randomUUID() }),
+        body: JSON.stringify({ secretKind: replaceKind, ...material, reason: replaceReason, idempotencyKey: crypto.randomUUID() }),
       });
       const body = (await res.json()) as ApiErrorBody;
       if (!res.ok) {
-        setReplaceError(body.message ?? body.error ?? "The request failed.");
+        setReplaceError(
+          body.error === "CREDENTIAL_ALREADY_ESTABLISHED"
+            ? "This kind already has an active secret — use Rotate instead of Replace."
+            : body.message ?? body.error ?? "The request failed.",
+        );
         return;
       }
       setShowReplace(false);
       setReplaceValue("");
+      setReplaceApiKeyId("");
+      setReplaceApiKeySecret("");
       setReplaceReason("");
       refreshAll();
     } catch {
@@ -284,15 +321,22 @@ export function CredentialPanel({
     }
   }
 
-  // Rotate needs the actual new secret value at execute time (never at
-  // request time — see credentialApprovalOperation.ts's header). Revoke
-  // needs nothing extra.
+  // Rotate needs the executing operator to choose the secret kind and
+  // supply its material at execute time (never at request time — see
+  // credentialApprovalOperation.ts's header). Revoke needs nothing extra.
   async function executeApproval(approval: ApprovalRecord) {
     const isRotate = approval.requestedAction === "credential.rotate";
-    const secretValue = rotateExecuteValue[approval.approvalId] ?? "";
-    if (isRotate && secretValue.trim() === "") {
-      setApprovalActionError("Enter the new webhook secret value before executing this rotation.");
-      return;
+    const rotateState = rotateExecuteFor(approval.approvalId);
+    if (isRotate) {
+      const material = rotateState.secretKind === "webhook_secret" ? [rotateState.secretValue] : [rotateState.apiKeyId, rotateState.apiKeySecret];
+      if (material.some((v) => v.trim() === "")) {
+        setApprovalActionError(
+          rotateState.secretKind === "webhook_secret"
+            ? "Enter the new webhook secret value before executing this rotation."
+            : "Enter both the new API key id and secret before executing this rotation.",
+        );
+        return;
+      }
     }
     setExecuteBusy(approval.approvalId);
     setApprovalActionError(null);
@@ -300,7 +344,14 @@ export function CredentialPanel({
       const res = await request(`/management/v1/approvals/${approval.approvalId}/execute`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ idempotencyKey: crypto.randomUUID(), ...(isRotate ? { secretValue } : {}) }),
+        body: JSON.stringify({
+          idempotencyKey: crypto.randomUUID(),
+          ...(isRotate
+            ? rotateState.secretKind === "webhook_secret"
+              ? { secretKind: rotateState.secretKind, secretValue: rotateState.secretValue }
+              : { secretKind: rotateState.secretKind, apiKeyId: rotateState.apiKeyId, apiKeySecret: rotateState.apiKeySecret }
+            : {}),
+        }),
       });
       const body = (await res.json()) as ApiErrorBody;
       if (!res.ok) {
@@ -311,7 +362,7 @@ export function CredentialPanel({
         setApprovalActionError(body.message ?? body.error ?? "Execution failed.");
         return;
       }
-      setRotateExecuteValue((prev) => {
+      setRotateExecuteState((prev) => {
         const next = { ...prev };
         delete next[approval.approvalId];
         return next;
@@ -472,12 +523,41 @@ export function CredentialPanel({
                           {a.status === "approved" && ((isRotate && canRotate) || (!isRotate && canRevoke)) && (
                             <div style={{ display: "flex", flexDirection: "column", gap: "0.4rem" }}>
                               {isRotate && (
-                                <input
-                                  type="password"
-                                  placeholder="New webhook secret value"
-                                  value={rotateExecuteValue[a.approvalId] ?? ""}
-                                  onChange={(e) => setRotateExecuteValue((prev) => ({ ...prev, [a.approvalId]: e.target.value }))}
-                                />
+                                <>
+                                  <select
+                                    value={rotateExecuteFor(a.approvalId).secretKind}
+                                    onChange={(e) => updateRotateExecute(a.approvalId, { secretKind: e.target.value as ReplaceableKind })}
+                                  >
+                                    {REPLACEABLE_KINDS.map((k) => (
+                                      <option key={k} value={k}>
+                                        {KIND_LABEL[k]}
+                                      </option>
+                                    ))}
+                                  </select>
+                                  {rotateExecuteFor(a.approvalId).secretKind === "webhook_secret" ? (
+                                    <input
+                                      type="password"
+                                      placeholder="New webhook secret value"
+                                      value={rotateExecuteFor(a.approvalId).secretValue}
+                                      onChange={(e) => updateRotateExecute(a.approvalId, { secretValue: e.target.value })}
+                                    />
+                                  ) : (
+                                    <>
+                                      <input
+                                        type="password"
+                                        placeholder="New API key id"
+                                        value={rotateExecuteFor(a.approvalId).apiKeyId}
+                                        onChange={(e) => updateRotateExecute(a.approvalId, { apiKeyId: e.target.value })}
+                                      />
+                                      <input
+                                        type="password"
+                                        placeholder="New API key secret"
+                                        value={rotateExecuteFor(a.approvalId).apiKeySecret}
+                                        onChange={(e) => updateRotateExecute(a.approvalId, { apiKeySecret: e.target.value })}
+                                      />
+                                    </>
+                                  )}
+                                </>
                               )}
                               <button className="btn btn-primary" style={{ fontSize: "0.8rem", alignSelf: "flex-start" }} disabled={executeBusy === a.approvalId} onClick={() => executeApproval(a)}>
                                 {executeBusy === a.approvalId ? "Executing…" : "Execute"}
@@ -514,12 +594,15 @@ export function CredentialPanel({
 
       {showReplace && (
         <ConfirmDialog
-          title={`Replace a secret for ${displayName}?`}
+          title={`Establish a new secret for ${displayName}?`}
+          description="Replace only establishes credential material that isn't live yet — an already-active secret must be rotated instead, under the R3 approval flow below."
           busy={replaceBusy}
           confirmLabel="Replace"
           onCancel={() => {
             setShowReplace(false);
             setReplaceValue("");
+            setReplaceApiKeyId("");
+            setReplaceApiKeySecret("");
             setReplaceReason("");
             setReplaceError(null);
           }}
@@ -527,18 +610,31 @@ export function CredentialPanel({
         >
           <div className="field">
             <label>Secret kind</label>
-            <select value={replaceKind} onChange={(e) => setReplaceKind(e.target.value as SecretKind)}>
-              {SECRET_KINDS.map((k) => (
+            <select value={replaceKind} onChange={(e) => setReplaceKind(e.target.value as ReplaceableKind)}>
+              {REPLACEABLE_KINDS.map((k) => (
                 <option key={k} value={k}>
-                  {k}
+                  {KIND_LABEL[k]}
                 </option>
               ))}
             </select>
           </div>
-          <div className="field">
-            <label>New value</label>
-            <input type="password" value={replaceValue} onChange={(e) => setReplaceValue(e.target.value)} placeholder="Required" autoComplete="off" />
-          </div>
+          {replaceKind === "webhook_secret" ? (
+            <div className="field">
+              <label>New value</label>
+              <input type="password" value={replaceValue} onChange={(e) => setReplaceValue(e.target.value)} placeholder="Required" autoComplete="off" />
+            </div>
+          ) : (
+            <>
+              <div className="field">
+                <label>API key id</label>
+                <input type="password" value={replaceApiKeyId} onChange={(e) => setReplaceApiKeyId(e.target.value)} placeholder="Required" autoComplete="off" />
+              </div>
+              <div className="field">
+                <label>API key secret</label>
+                <input type="password" value={replaceApiKeySecret} onChange={(e) => setReplaceApiKeySecret(e.target.value)} placeholder="Required" autoComplete="off" />
+              </div>
+            </>
+          )}
           <div className="field">
             <label>Reason</label>
             <textarea value={replaceReason} onChange={(e) => setReplaceReason(e.target.value)} rows={2} placeholder="Required" />
@@ -552,7 +648,7 @@ export function CredentialPanel({
           title={`Request: ${R3_ACTION_LABEL[pendingR3]} for ${displayName}?`}
           description={
             pendingR3 === "rotate"
-              ? "This submits an approval request. A different operator must approve it before you (or anyone with the rotate scope) can execute it and supply the new secret value."
+              ? "This submits an approval request. A different operator must approve it before you (or anyone with the rotate scope) can execute it, choosing which secret (webhook secret or API key pair) to cut over and supplying its new value at that point."
               : "This submits an approval request. A different operator must approve it before it can be executed. Revoking disables every secret on this credential — there is no automatic replacement."
           }
           danger

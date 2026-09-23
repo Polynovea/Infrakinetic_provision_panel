@@ -216,8 +216,13 @@ export interface RequestCredentialReplaceParams {
   operatorGrantedScopes: readonly string[];
   tenantId: string;
   credentialId: string;
+  /** "webhook_secret" | "api_key_pair" — see credentialAdministration.js's header on the Infrakinetic side. Establish-only: Infrakinetic fails closed (CREDENTIAL_ALREADY_ESTABLISHED, 409) if this kind already has live material. */
   secretKind: string;
-  secretValue: string;
+  /** secretKind "webhook_secret" only. */
+  secretValue?: string;
+  /** secretKind "api_key_pair" only — both halves, supplied together (a provider rejects a mismatched pair). */
+  apiKeyId?: string;
+  apiKeySecret?: string;
   reason: string;
   correlationId?: string;
   causationId?: string;
@@ -237,16 +242,17 @@ export async function requestCredentialReplace(deps: CredentialOperationDeps, pa
     requestedScope: "credentials.submit",
     targetResourceType: "credential",
     targetResourceId: params.credentialId,
-    // secretValue is deliberately excluded from payload — payload is only
-    // ever hashed for idempotency (managementOperationLedger.ts never
-    // persists it verbatim), but "never hashed" is a weaker guarantee than
-    // "never in memory as part of a logged/snapshotted object" — keeping it
-    // out of payload means it can never accidentally end up in a future
-    // debug log of the hash input either.
+    // secretValue/apiKeyId/apiKeySecret are deliberately excluded from
+    // payload — payload is only ever hashed for idempotency
+    // (managementOperationLedger.ts never persists it verbatim), but "never
+    // hashed" is a weaker guarantee than "never in memory as part of a
+    // logged/snapshotted object" — keeping it out of payload means it can
+    // never accidentally end up in a future debug log of the hash input
+    // either.
     payload: { tenantId: params.tenantId, credentialId: params.credentialId, secretKind: params.secretKind },
     reason: params.reason,
     path: `${MANAGEMENT_V1_PREFIX}/tenants/${encodeURIComponent(params.tenantId)}/credentials/${encodeURIComponent(params.credentialId)}/replace`,
-    body: { secretKind: params.secretKind, secretValue: params.secretValue },
+    body: { secretKind: params.secretKind, secretValue: params.secretValue, apiKeyId: params.apiKeyId, apiKeySecret: params.apiKeySecret },
     correlationId: params.correlationId,
     causationId: params.causationId,
   });

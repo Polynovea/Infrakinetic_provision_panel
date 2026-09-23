@@ -140,7 +140,21 @@ describe("executeCredentialR3Approval", () => {
     ).rejects.toThrow(ApprovalNotApprovedError);
   });
 
-  it("rotate: refuses to execute without a secretValue even once approved", async () => {
+  it("rotate: refuses to execute without a secretKind even once approved", async () => {
+    const { deps } = await buildDeps();
+    const approval = await requestCredentialR3Approval(deps, {
+      actionKey: "rotate", tenantId: TENANT_ID, credentialId: CREDENTIAL_ID, reason: "scheduled rotation", makerOperatorId: MAKER_ID,
+    });
+    await decideCredentialR3Approval(deps, { approvalId: approval.approvalId, checkerOperatorId: CHECKER_ID, decision: "approved" });
+    await expect(
+      executeCredentialR3Approval(deps, {
+        approvalId: approval.approvalId, idempotencyKey: "idem-no-kind", operatorId: CHECKER_ID, operatorSessionId: SESSION_ID,
+        operatorRoles: ["security_operator"], operatorGrantedScopes: ["credentials.rotate"],
+      }),
+    ).rejects.toThrow(MissingCredentialApprovalTargetError);
+  });
+
+  it("rotate: secretKind webhook_secret refuses to execute without a secretValue even once approved", async () => {
     const { deps } = await buildDeps();
     const approval = await requestCredentialR3Approval(deps, {
       actionKey: "rotate", tenantId: TENANT_ID, credentialId: CREDENTIAL_ID, reason: "scheduled rotation", makerOperatorId: MAKER_ID,
@@ -150,14 +164,30 @@ describe("executeCredentialR3Approval", () => {
       executeCredentialR3Approval(deps, {
         approvalId: approval.approvalId, idempotencyKey: "idem-no-secret", operatorId: CHECKER_ID, operatorSessionId: SESSION_ID,
         operatorRoles: ["security_operator"], operatorGrantedScopes: ["credentials.rotate"],
+        secretKind: "webhook_secret",
       }),
     ).rejects.toThrow(MissingCredentialApprovalTargetError);
   });
 
-  it("rotate: full round trip sends the executor-supplied secretValue to Infrakinetic's rotate route and completes the ledger operation without persisting it", async () => {
+  it("rotate: secretKind api_key_pair refuses to execute without both apiKeyId and apiKeySecret even once approved", async () => {
+    const { deps } = await buildDeps();
+    const approval = await requestCredentialR3Approval(deps, {
+      actionKey: "rotate", tenantId: TENANT_ID, credentialId: CREDENTIAL_ID, reason: "scheduled key rotation", makerOperatorId: MAKER_ID,
+    });
+    await decideCredentialR3Approval(deps, { approvalId: approval.approvalId, checkerOperatorId: CHECKER_ID, decision: "approved" });
+    await expect(
+      executeCredentialR3Approval(deps, {
+        approvalId: approval.approvalId, idempotencyKey: "idem-no-pair", operatorId: CHECKER_ID, operatorSessionId: SESSION_ID,
+        operatorRoles: ["security_operator"], operatorGrantedScopes: ["credentials.rotate"],
+        secretKind: "api_key_pair", apiKeyId: "only_id",
+      }),
+    ).rejects.toThrow(MissingCredentialApprovalTargetError);
+  });
+
+  it("rotate: webhook_secret full round trip sends the executor-supplied secretValue to Infrakinetic's rotate route and completes the ledger operation without persisting it", async () => {
     const path = `/management/v1/tenants/${TENANT_ID}/credentials/${CREDENTIAL_ID}/rotate`;
     const { deps, calls } = await buildDeps({
-      [path]: { status: 200, body: { action: "rotate", secretKind: "webhook_secret", connectionStatus: "active", resultingSecret: { version: 2, status: "active", maskedHint: "****3c" }, overlapHours: 24 } },
+      [path]: { status: 200, body: { action: "rotate", secretKind: "webhook_secret", connectionStatus: "active", resultingSecrets: [{ version: 2, status: "active", maskedHint: "****3c" }], overlapHours: 24 } },
     });
     const approval = await requestCredentialR3Approval(deps, {
       actionKey: "rotate", tenantId: TENANT_ID, credentialId: CREDENTIAL_ID, reason: "scheduled rotation", makerOperatorId: MAKER_ID,
@@ -167,7 +197,7 @@ describe("executeCredentialR3Approval", () => {
     const result = await executeCredentialR3Approval(deps, {
       approvalId: approval.approvalId, idempotencyKey: "idem-exec-1", operatorId: CHECKER_ID, operatorSessionId: SESSION_ID,
       operatorRoles: ["security_operator"], operatorGrantedScopes: ["credentials.rotate"],
-      secretValue: RAW_SECRET, overlapHours: 24,
+      secretKind: "webhook_secret", secretValue: RAW_SECRET, overlapHours: 24,
     });
 
     expect(result.replay).toBe(false);
@@ -178,6 +208,45 @@ describe("executeCredentialR3Approval", () => {
     expect(calls[0].body?.secretValue).toBe(RAW_SECRET); // sent to Infrakinetic, as expected
     expect(JSON.stringify(result.operation)).not.toContain(RAW_SECRET);
     expect(JSON.stringify(result.approval)).not.toContain(RAW_SECRET);
+  });
+
+  it("rotate: api_key_pair full round trip sends both executor-supplied halves atomically and completes the ledger operation without persisting either", async () => {
+    const path = `/management/v1/tenants/${TENANT_ID}/credentials/${CREDENTIAL_ID}/rotate`;
+    const rawApiKeyId = "rzp_live_new_key_id";
+    const rawApiKeySecret = "rzp_live_new_key_secret";
+    const { deps, calls } = await buildDeps({
+      [path]: {
+        status: 200,
+        body: {
+          action: "rotate",
+          secretKind: "api_key_pair",
+          connectionStatus: "active",
+          resultingSecrets: [
+            { kind: "api_key_id", version: 2, status: "active", maskedHint: "****d_id" },
+            { kind: "api_key_secret", version: 2, status: "active", maskedHint: "****cret" },
+          ],
+        },
+      },
+    });
+    const approval = await requestCredentialR3Approval(deps, {
+      actionKey: "rotate", tenantId: TENANT_ID, credentialId: CREDENTIAL_ID, reason: "leaked API key pair — cutting over", makerOperatorId: MAKER_ID,
+    });
+    await decideCredentialR3Approval(deps, { approvalId: approval.approvalId, checkerOperatorId: CHECKER_ID, decision: "approved" });
+
+    const result = await executeCredentialR3Approval(deps, {
+      approvalId: approval.approvalId, idempotencyKey: "idem-exec-pair-1", operatorId: CHECKER_ID, operatorSessionId: SESSION_ID,
+      operatorRoles: ["security_operator"], operatorGrantedScopes: ["credentials.rotate"],
+      secretKind: "api_key_pair", apiKeyId: rawApiKeyId, apiKeySecret: rawApiKeySecret,
+    });
+
+    expect(result.replay).toBe(false);
+    expect(result.operation.status).toBe("completed");
+    expect(calls).toHaveLength(1);
+    expect(calls[0].body?.apiKeyId).toBe(rawApiKeyId);
+    expect(calls[0].body?.apiKeySecret).toBe(rawApiKeySecret);
+    expect(calls[0].body?.secretValue).toBeUndefined();
+    expect(JSON.stringify(result.operation)).not.toMatch(new RegExp(`${rawApiKeyId}|${rawApiKeySecret}`));
+    expect(JSON.stringify(result.approval)).not.toMatch(new RegExp(`${rawApiKeyId}|${rawApiKeySecret}`));
   });
 
   it("revoke: full round trip needs no secretValue at all", async () => {

@@ -29,13 +29,29 @@ import type { Scope } from "../../identity/roles.js";
 // Governance across a pending approval's lifetime (up to
 // APPROVAL_TTL_SECONDS = 24h) — Governance never persists a raw secret at
 // rest, even temporarily. So the approval hash covers only the ACTION
-// (rotate this credential's webhook_secret), never the value; the value is
-// supplied only at execute() time, by whichever operator with the required
-// scope + fresh step-up actually executes the already-approved request.
+// (rotate this credential), never the value; the value is supplied only at
+// execute() time, by whichever operator with the required scope + fresh
+// step-up actually executes the already-approved request.
+//
+// Closure-remediation audit (2026-09-23) — rotate now covers two secret
+// kinds (webhook_secret, with an overlap window; api_key_pair, an atomic
+// cutover of both provider key halves — see credentialAdministration.js's
+// header on the Infrakinetic side for why api_key_id/api_key_secret were
+// collapsed into one pseudo-kind). WHICH kind is being rotated is, like the
+// secret value itself, deferred to execute() time rather than bound into
+// the approval: ManagementApprovalStore has no column for structured
+// per-request metadata beyond the safe payload hash (see
+// managementApprovalStore.ts), and both kinds share the exact same risk
+// tier, scope (`credentials.rotate`), and step-up requirement, so nothing
+// is weakened by letting the executing operator — who must independently
+// hold that scope and a fresh step-up — pick the kind at execute time. This
+// is accepted architecture debt in the same shape the secret-value deferral
+// already was, not a new gap; §13 of the scoping doc records it explicitly
+// rather than silently relying on it.
 
 export const CREDENTIAL_R3_ACTIONS = {
-  rotate: { action: "credential.rotate", scope: "credentials.rotate" as Scope, segment: "rotate", secretKind: "webhook_secret" as const },
-  revoke: { action: "credential.revoke", scope: "credentials.revoke" as Scope, segment: "revoke", secretKind: null },
+  rotate: { action: "credential.rotate", scope: "credentials.rotate" as Scope, segment: "rotate" },
+  revoke: { action: "credential.revoke", scope: "credentials.revoke" as Scope, segment: "revoke" },
 } as const;
 
 export type CredentialR3ActionKey = keyof typeof CREDENTIAL_R3_ACTIONS;
@@ -59,13 +75,13 @@ export class MissingCredentialApprovalTargetError extends Error {
   }
 }
 
-function computeCredentialApprovalHash(requestedAction: string, tenantId: string, credentialId: string, secretKind: string | null): string {
+function computeCredentialApprovalHash(requestedAction: string, tenantId: string, credentialId: string): string {
   return computeSafePayloadHash({
     requestedAction,
     targetTenantId: tenantId,
     targetResourceType: "credential",
     targetResourceId: credentialId,
-    payload: { tenantId, credentialId, secretKind },
+    payload: { tenantId, credentialId },
   });
 }
 
@@ -106,7 +122,7 @@ export async function requestCredentialR3Approval(
     targetTenantId: params.tenantId,
     targetResourceType: "credential",
     targetResourceId: params.credentialId,
-    safePayloadHash: computeCredentialApprovalHash(entry.action, params.tenantId, params.credentialId, entry.secretKind),
+    safePayloadHash: computeCredentialApprovalHash(entry.action, params.tenantId, params.credentialId),
     riskClass: "R3",
     reason: params.reason,
     makerOperatorId: params.makerOperatorId,
@@ -140,8 +156,13 @@ export interface ExecuteCredentialR3ApprovalParams {
   operatorGrantedScopes: readonly string[];
   correlationId?: string;
   causationId?: string;
-  /** Rotate only — the actual new secret value. See this module's header for why it is supplied here, not at request time. Ignored for revoke. */
+  /** Rotate only — which kind is being rotated ("webhook_secret" | "api_key_pair"). See this module's header for why it is supplied here, not at request time. Ignored for revoke. */
+  secretKind?: "webhook_secret" | "api_key_pair";
+  /** Rotate + secretKind "webhook_secret" only — the actual new secret value. */
   secretValue?: string;
+  /** Rotate + secretKind "api_key_pair" only — both halves, supplied together. */
+  apiKeyId?: string;
+  apiKeySecret?: string;
   overlapHours?: number;
   webhookEndpointId?: string;
 }
@@ -161,14 +182,22 @@ export async function executeCredentialR3Approval(
   if (!entry) throw new UnknownCredentialR3ActionError(approval.requestedAction);
   if (!approval.targetTenantId) throw new MissingCredentialApprovalTargetError("tenantId");
 
-  if (approval.requestedAction === CREDENTIAL_R3_ACTIONS.rotate.action && (!params.secretValue || params.secretValue.trim() === "")) {
-    throw new MissingCredentialApprovalTargetError("secretValue");
+  if (approval.requestedAction === CREDENTIAL_R3_ACTIONS.rotate.action) {
+    if (params.secretKind !== "webhook_secret" && params.secretKind !== "api_key_pair") {
+      throw new MissingCredentialApprovalTargetError("secretKind");
+    }
+    if (params.secretKind === "webhook_secret" && (!params.secretValue || params.secretValue.trim() === "")) {
+      throw new MissingCredentialApprovalTargetError("secretValue");
+    }
+    if (params.secretKind === "api_key_pair" && (!params.apiKeyId || params.apiKeyId.trim() === "" || !params.apiKeySecret || params.apiKeySecret.trim() === "")) {
+      throw new MissingCredentialApprovalTargetError("apiKeyId/apiKeySecret");
+    }
   }
 
   // Single-use gate FIRST — same discipline as identityApprovalOperation.ts:
   // whatever happens to the mutation call below, this approval can never
   // authorize a second attempt.
-  const expectedHash = computeCredentialApprovalHash(approval.requestedAction, approval.targetTenantId, approval.targetResourceId, entry.secretKind);
+  const expectedHash = computeCredentialApprovalHash(approval.requestedAction, approval.targetTenantId, approval.targetResourceId);
   const executedApproval = await deps.approvals.markExecuted(params.approvalId, expectedHash);
 
   const correlationId = params.correlationId ?? randomUUID();
@@ -185,9 +214,15 @@ export async function executeCredentialR3Approval(
     targetResourceId: credentialId,
     reason: approval.reason,
     riskClass: "R3",
-    // secretValue deliberately excluded from payload, same reasoning as
-    // credentialOperation.ts's requestCredentialReplace.
-    payload: { tenantId, credentialId, secretKind: entry.secretKind, approvalId: approval.approvalId },
+    // secretValue/apiKeyId/apiKeySecret deliberately excluded from payload,
+    // same reasoning as credentialOperation.ts's requestCredentialReplace.
+    // secretKind is a label, not material — safe to record.
+    payload: {
+      tenantId,
+      credentialId,
+      secretKind: approval.requestedAction === CREDENTIAL_R3_ACTIONS.rotate.action ? params.secretKind ?? null : null,
+      approvalId: approval.approvalId,
+    },
     contractVersion: MANAGEMENT_COMMAND_CONTRACT,
     correlationId,
     causationId: params.causationId,
@@ -215,7 +250,13 @@ export async function executeCredentialR3Approval(
   const path = `${MANAGEMENT_V1_PREFIX}/tenants/${encodeURIComponent(tenantId)}/credentials/${encodeURIComponent(credentialId)}/${entry.segment}`;
   const body: Record<string, unknown> = { reason: approval.reason, idempotencyKey: params.idempotencyKey, commandId };
   if (approval.requestedAction === CREDENTIAL_R3_ACTIONS.rotate.action) {
-    body.secretValue = params.secretValue;
+    body.secretKind = params.secretKind;
+    if (params.secretKind === "api_key_pair") {
+      body.apiKeyId = params.apiKeyId;
+      body.apiKeySecret = params.apiKeySecret;
+    } else {
+      body.secretValue = params.secretValue;
+    }
     if (params.overlapHours !== undefined) body.overlapHours = params.overlapHours;
     if (params.webhookEndpointId !== undefined) body.webhookEndpointId = params.webhookEndpointId;
   }
