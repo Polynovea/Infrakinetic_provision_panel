@@ -93,6 +93,25 @@ import {
   ApprovalAlreadyExecutedError,
   ApprovalPayloadMismatchError,
 } from "../../management/operations/managementApprovalStore.js";
+import {
+  listTenantCredentials,
+  getCredentialDetail,
+  getCredentialHistory,
+  UnknownCredentialError,
+} from "../../management/operations/credentialQuery.js";
+import {
+  requestCredentialReplace,
+  requestCredentialTest,
+  MissingCredentialTargetError,
+} from "../../management/operations/credentialOperation.js";
+import {
+  requestCredentialR3Approval,
+  executeCredentialR3Approval,
+  CREDENTIAL_R3_ACTIONS,
+  UnknownCredentialR3ActionError,
+  MissingCredentialApprovalTargetError,
+  type CredentialR3ActionKey,
+} from "../../management/operations/credentialApprovalOperation.js";
 
 export interface ManagementRouterDeps {
   identityProvider: IdentityProvider;
@@ -1367,6 +1386,130 @@ export function createManagementRouter(deps: ManagementRouterDeps): Router {
   }
 
   // ───────────────────────────────────────────────────────────────────────
+  // 1A.13 — credential administration (Payments domain only, §7.4 of the
+  // scoping doc). Reads (R0, no ledger, same reasoning as identity reads
+  // above), test (R0/R1, no ledger — see credentialOperation.ts's header),
+  // and replace (R2, ledger-backed). R3 actions (rotate, revoke) are a
+  // separate vertical (credentialApprovalOperation.ts) requiring step-up and
+  // maker-checker approval — wired into the shared R3 approval section below.
+  // ───────────────────────────────────────────────────────────────────────
+
+  router.get("/tenants/:tenantId/credentials", requireScope("credentials.metadata.read", deps.auditSink), async (req, res, next) => {
+    try {
+      const ctx = req.operatorContext;
+      if (!ctx) { res.status(403).json({ error: "NOT_AUTHENTICATED" }); return; }
+      const signingKeys = await deps.getManagementSigningKeys();
+      const transportConfig = deps.loadTransportConfig();
+      const result = await listTenantCredentials(
+        { signingKeys, transportConfig, infrakineticBaseUrl: deps.infrakineticBaseUrl },
+        { tenantId: req.params.tenantId, operatorId: ctx.operatorId, operatorSessionId: ctx.operatorSessionId, operatorRoles: ctx.roles, operatorGrantedScopes: ctx.scopes, correlationId: ctx.correlationId },
+      );
+      res.status(200).json(result);
+    } catch (err) {
+      if (err instanceof UnexpectedManagementApiResponseError) { res.status(502).json({ error: "MANAGEMENT_API_UPSTREAM_ERROR", message: err.message }); return; }
+      if (err instanceof DatabaseUnavailableError) { res.status(err.httpStatus).json({ error: err.code, message: err.message }); return; }
+      next(err);
+    }
+  });
+
+  router.get("/tenants/:tenantId/credentials/:credentialId", requireScope("credentials.metadata.read", deps.auditSink), async (req, res, next) => {
+    try {
+      const ctx = req.operatorContext;
+      if (!ctx) { res.status(403).json({ error: "NOT_AUTHENTICATED" }); return; }
+      const signingKeys = await deps.getManagementSigningKeys();
+      const transportConfig = deps.loadTransportConfig();
+      const result = await getCredentialDetail(
+        { signingKeys, transportConfig, infrakineticBaseUrl: deps.infrakineticBaseUrl },
+        { tenantId: req.params.tenantId, credentialId: req.params.credentialId, operatorId: ctx.operatorId, operatorSessionId: ctx.operatorSessionId, operatorRoles: ctx.roles, operatorGrantedScopes: ctx.scopes, correlationId: ctx.correlationId },
+      );
+      res.status(200).json(result);
+    } catch (err) {
+      if (err instanceof UnknownCredentialError) { res.status(404).json({ error: "CREDENTIAL_NOT_FOUND", message: err.message }); return; }
+      if (err instanceof UnexpectedManagementApiResponseError) { res.status(502).json({ error: "MANAGEMENT_API_UPSTREAM_ERROR", message: err.message }); return; }
+      if (err instanceof DatabaseUnavailableError) { res.status(err.httpStatus).json({ error: err.code, message: err.message }); return; }
+      next(err);
+    }
+  });
+
+  router.get("/tenants/:tenantId/credentials/:credentialId/history", requireScope("credentials.metadata.read", deps.auditSink), async (req, res, next) => {
+    try {
+      const ctx = req.operatorContext;
+      if (!ctx) { res.status(403).json({ error: "NOT_AUTHENTICATED" }); return; }
+      const signingKeys = await deps.getManagementSigningKeys();
+      const transportConfig = deps.loadTransportConfig();
+      const result = await getCredentialHistory(
+        { signingKeys, transportConfig, infrakineticBaseUrl: deps.infrakineticBaseUrl },
+        { tenantId: req.params.tenantId, credentialId: req.params.credentialId, operatorId: ctx.operatorId, operatorSessionId: ctx.operatorSessionId, operatorRoles: ctx.roles, operatorGrantedScopes: ctx.scopes, correlationId: ctx.correlationId },
+      );
+      res.status(200).json(result);
+    } catch (err) {
+      if (err instanceof UnknownCredentialError) { res.status(404).json({ error: "CREDENTIAL_NOT_FOUND", message: err.message }); return; }
+      if (err instanceof UnexpectedManagementApiResponseError) { res.status(502).json({ error: "MANAGEMENT_API_UPSTREAM_ERROR", message: err.message }); return; }
+      if (err instanceof DatabaseUnavailableError) { res.status(err.httpStatus).json({ error: err.code, message: err.message }); return; }
+      next(err);
+    }
+  });
+
+  function credentialOperationErrorResponse(err: unknown, res: import("express").Response): boolean {
+    if (err instanceof MissingCredentialTargetError) { res.status(400).json({ error: "CREDENTIAL_TARGET_REQUIRED", message: err.message }); return true; }
+    if (err instanceof DatabaseUnavailableError) { res.status(err.httpStatus).json({ error: err.code, message: err.message }); return true; }
+    return false;
+  }
+
+  router.post("/tenants/:tenantId/credentials/:credentialId/test", requireScope("credentials.metadata.read", deps.auditSink), async (req, res, next) => {
+    const ctx = req.operatorContext;
+    try {
+      if (!ctx) { res.status(403).json({ error: "NOT_AUTHENTICATED" }); return; }
+      const signingKeys = await deps.getManagementSigningKeys();
+      const transportConfig = deps.loadTransportConfig();
+      const result = await requestCredentialTest(
+        { signingKeys, transportConfig, infrakineticBaseUrl: deps.infrakineticBaseUrl },
+        { tenantId: req.params.tenantId, credentialId: req.params.credentialId, operatorId: ctx.operatorId, operatorSessionId: ctx.operatorSessionId, operatorRoles: ctx.roles, operatorGrantedScopes: ctx.scopes, correlationId: ctx.correlationId },
+      );
+      res.status(200).json(result);
+    } catch (err) {
+      if (credentialOperationErrorResponse(err, res)) return;
+      if (err instanceof UnexpectedManagementApiResponseError) { res.status(502).json({ error: "MANAGEMENT_API_UPSTREAM_ERROR", message: err.message }); return; }
+      next(err);
+    }
+  });
+
+  // R2 — immediate replace, any of api_key_id/api_key_secret/webhook_secret.
+  // secretValue passes straight through this route into the signed
+  // Infrakinetic command body; it is never written into req-scoped state,
+  // the ledger payload, or any response this route returns (see
+  // credentialOperation.ts's header for the defense-in-depth chain).
+  router.post("/tenants/:tenantId/credentials/:credentialId/replace", requireScope("credentials.submit", deps.auditSink), async (req, res, next) => {
+    const ctx = req.operatorContext;
+    try {
+      if (!ctx) { res.status(403).json({ error: "NOT_AUTHENTICATED" }); return; }
+      const body = (req.body ?? {}) as Record<string, unknown>;
+      if (typeof body.idempotencyKey !== "string" || body.idempotencyKey.trim() === "") { res.status(400).json({ error: "IDEMPOTENCY_KEY_REQUIRED" }); return; }
+      if (typeof body.reason !== "string" || body.reason.trim() === "") { res.status(400).json({ error: "REASON_REQUIRED" }); return; }
+      if (typeof body.secretKind !== "string" || body.secretKind.trim() === "") { res.status(400).json({ error: "SECRET_KIND_REQUIRED" }); return; }
+      if (typeof body.secretValue !== "string" || body.secretValue.trim() === "") { res.status(400).json({ error: "SECRET_VALUE_REQUIRED" }); return; }
+
+      const signingKeys = await deps.getManagementSigningKeys();
+      const transportConfig = deps.loadTransportConfig();
+      const result = await requestCredentialReplace(
+        { ledger: deps.ledger, signingKeys, transportConfig, infrakineticBaseUrl: deps.infrakineticBaseUrl },
+        {
+          idempotencyKey: body.idempotencyKey, operatorId: ctx.operatorId, operatorSessionId: ctx.operatorSessionId,
+          operatorRoles: ctx.roles, operatorGrantedScopes: ctx.scopes, tenantId: req.params.tenantId,
+          credentialId: req.params.credentialId, secretKind: body.secretKind, secretValue: body.secretValue,
+          reason: body.reason, correlationId: ctx.correlationId,
+        },
+      );
+      res.status(200).json({ operation: result.operation, replay: result.replay });
+    } catch (err) {
+      if (credentialOperationErrorResponse(err, res)) return;
+      if (err instanceof UnexpectedManagementApiResponseError || err instanceof ManagementApiUnreachableError) { res.status(502).json({ error: "MANAGEMENT_API_UPSTREAM_ERROR", message: err.message }); return; }
+      if (err instanceof ManagementOperationError) { res.status(err.httpStatus).json({ error: err.code, message: err.message }); return; }
+      next(err);
+    }
+  });
+
+  // ───────────────────────────────────────────────────────────────────────
   // 1A.12.5 — R3 identity actions (force-reset, mfa-reset): request (maker,
   // fresh step-up) -> decide (checker, != maker) -> execute (fresh step-up,
   // approval consumed exactly once). §9.1's default 5-minute freshness
@@ -1384,6 +1527,7 @@ export function createManagementRouter(deps: ManagementRouterDeps): Router {
     if (err instanceof ApprovalAlreadyExecutedError) { res.status(409).json({ error: "APPROVAL_ALREADY_EXECUTED", message: err.message }); return true; }
     if (err instanceof ApprovalPayloadMismatchError) { res.status(409).json({ error: "APPROVAL_PAYLOAD_MISMATCH", message: err.message }); return true; }
     if (err instanceof UnknownIdentityR3ActionError || err instanceof MissingIdentityApprovalTargetError) { res.status(400).json({ error: "IDENTITY_R3_REQUEST_INVALID", message: err.message }); return true; }
+    if (err instanceof UnknownCredentialR3ActionError || err instanceof MissingCredentialApprovalTargetError) { res.status(400).json({ error: "CREDENTIAL_R3_REQUEST_INVALID", message: err.message }); return true; }
     if (err instanceof DatabaseUnavailableError) { res.status(err.httpStatus).json({ error: err.code, message: err.message }); return true; }
     return false;
   }
@@ -1416,8 +1560,48 @@ export function createManagementRouter(deps: ManagementRouterDeps): Router {
     );
   }
 
+  // 1A.13 — R3 credential actions (rotate, revoke): same three-phase flow as
+  // identity's R3 actions above, over /credentials/:credentialId instead of
+  // /identities/:userId. Note the request body carries only `reason` here —
+  // rotate's actual new secretValue is supplied later, at execute() time
+  // only (see credentialApprovalOperation.ts's header for why).
+  const CREDENTIAL_R3_ROUTE_SEGMENTS: Record<CredentialR3ActionKey, string> = { rotate: "rotate", revoke: "revoke" };
+
+  for (const actionKey of Object.keys(CREDENTIAL_R3_ACTIONS) as CredentialR3ActionKey[]) {
+    const { scope } = CREDENTIAL_R3_ACTIONS[actionKey];
+    router.post(
+      `/tenants/:tenantId/credentials/:credentialId/${CREDENTIAL_R3_ROUTE_SEGMENTS[actionKey]}/request`,
+      requireScope(scope, deps.auditSink),
+      requireStepUp(300, deps.sessionStore, deps.auditSink),
+      async (req, res, next) => {
+        const ctx = req.operatorContext;
+        try {
+          if (!ctx) { res.status(403).json({ error: "NOT_AUTHENTICATED" }); return; }
+          const body = (req.body ?? {}) as Record<string, unknown>;
+          if (typeof body.reason !== "string" || body.reason.trim() === "") { res.status(400).json({ error: "REASON_REQUIRED" }); return; }
+
+          const approval = await requestCredentialR3Approval(
+            { approvals: deps.approvals },
+            { actionKey, tenantId: req.params.tenantId, credentialId: req.params.credentialId, reason: body.reason, makerOperatorId: ctx.operatorId, correlationId: ctx.correlationId },
+          );
+          res.status(201).json({ approval });
+        } catch (err) {
+          if (approvalErrorResponse(err, res)) return;
+          next(err);
+        }
+      },
+    );
+  }
+
   function requiredScopeForApproval(approval: { requestedAction: string }): string | undefined {
-    return Object.values(IDENTITY_R3_ACTIONS).find((entry) => entry.action === approval.requestedAction)?.scope;
+    return (
+      Object.values(IDENTITY_R3_ACTIONS).find((entry) => entry.action === approval.requestedAction)?.scope ??
+      Object.values(CREDENTIAL_R3_ACTIONS).find((entry) => entry.action === approval.requestedAction)?.scope
+    );
+  }
+
+  function isCredentialR3Approval(approval: { requestedAction: string }): boolean {
+    return Object.values(CREDENTIAL_R3_ACTIONS).some((entry) => entry.action === approval.requestedAction);
   }
 
   const APPROVAL_DECISIONS = ["approve", "reject"] as const;
@@ -1472,14 +1656,24 @@ export function createManagementRouter(deps: ManagementRouterDeps): Router {
 
         const signingKeys = await deps.getManagementSigningKeys();
         const transportConfig = deps.loadTransportConfig();
-        const result = await executeIdentityR3Approval(
-          { approvals: deps.approvals, ledger: deps.ledger, signingKeys, transportConfig, infrakineticBaseUrl: deps.infrakineticBaseUrl },
-          {
-            approvalId: req.params.approvalId, idempotencyKey: body.idempotencyKey,
-            operatorId: ctx.operatorId, operatorSessionId: ctx.operatorSessionId,
-            operatorRoles: ctx.roles, operatorGrantedScopes: ctx.scopes, correlationId: ctx.correlationId,
-          },
-        );
+        const approvalDeps = { approvals: deps.approvals, ledger: deps.ledger, signingKeys, transportConfig, infrakineticBaseUrl: deps.infrakineticBaseUrl };
+        const executeParams = {
+          approvalId: req.params.approvalId, idempotencyKey: body.idempotencyKey,
+          operatorId: ctx.operatorId, operatorSessionId: ctx.operatorSessionId,
+          operatorRoles: ctx.roles, operatorGrantedScopes: ctx.scopes, correlationId: ctx.correlationId,
+        };
+        // Dispatch by domain: identity's R3 actions (force-reset, mfa-reset)
+        // are parameterless, credential's rotate needs the actual new
+        // secretValue supplied here (see credentialApprovalOperation.ts's
+        // header for why it is never captured earlier, at request time).
+        const result = isCredentialR3Approval(current)
+          ? await executeCredentialR3Approval(approvalDeps, {
+              ...executeParams,
+              secretValue: typeof body.secretValue === "string" ? body.secretValue : undefined,
+              overlapHours: typeof body.overlapHours === "number" ? body.overlapHours : undefined,
+              webhookEndpointId: typeof body.webhookEndpointId === "string" ? body.webhookEndpointId : undefined,
+            })
+          : await executeIdentityR3Approval(approvalDeps, executeParams);
         res.status(200).json({ operation: result.operation, approval: result.approval, replay: result.replay });
       } catch (err) {
         if (approvalErrorResponse(err, res)) return;
