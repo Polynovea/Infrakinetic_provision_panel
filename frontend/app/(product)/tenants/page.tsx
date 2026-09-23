@@ -11,6 +11,7 @@ import { ConfirmDialog } from "../../../components/ConfirmDialog";
 import { EmptyState, ErrorState } from "../../../components/States";
 import { SkeletonTableRows } from "../../../components/Skeleton";
 import { IdentityPanel } from "../../../components/IdentityPanel";
+import { CredentialPanel } from "../../../components/CredentialPanel";
 
 interface TenantRegistryUser {
   id: string;
@@ -88,6 +89,17 @@ interface IdentityInvitationSummary {
   status: string;
   expiresAt: string | null;
   createdAt: string;
+}
+
+// 1A.13 — credential administration (Payments domain only, §7.4 of the
+// scoping doc). Mirrors credentialQuery.ts's CredentialSummary shape.
+interface CredentialSummary {
+  credentialId: string;
+  provider: string;
+  environment: string;
+  displayName: string;
+  status: string;
+  secrets: { kind: string; status: string }[];
 }
 
 // 1A.10.5 — reconciliation repair result (POST .../reconciliation/tenants/:tenantId/recheck).
@@ -440,6 +452,11 @@ function TenantDetailDrawer({
   const [showTechnical, setShowTechnical] = useState(false);
   const [selectedUser, setSelectedUser] = useState<TenantRegistryUser | null>(null);
 
+  const [credentials, setCredentials] = useState<CredentialSummary[] | null>(null);
+  const [credentialsError, setCredentialsError] = useState<string | null>(null);
+  const [credentialsRefreshKey, setCredentialsRefreshKey] = useState(0);
+  const [selectedCredential, setSelectedCredential] = useState<CredentialSummary | null>(null);
+
   const [invitations, setInvitations] = useState<IdentityInvitationSummary[] | null>(null);
   const [invitationsError, setInvitationsError] = useState<string | null>(null);
   const [invitationsRefreshKey, setInvitationsRefreshKey] = useState(0);
@@ -512,6 +529,29 @@ function TenantDetailDrawer({
       cancelled = true;
     };
   }, [request, tenant.id, invitationsRefreshKey]);
+
+  const canReadCredentials = operatorScopes.includes("credentials.metadata.read");
+
+  useEffect(() => {
+    if (!canReadCredentials) return;
+    let cancelled = false;
+    setCredentials(null);
+    setCredentialsError(null);
+    request(`/management/v1/tenants/${encodeURIComponent(tenant.id)}/credentials`)
+      .then(async (res) => {
+        const body = await res.json();
+        if (cancelled) return;
+        if (!res.ok) {
+          setCredentialsError("Could not load this tenant's credentials.");
+          return;
+        }
+        setCredentials(body.credentials);
+      })
+      .catch(() => !cancelled && setCredentialsError("Could not load this tenant's credentials."));
+    return () => {
+      cancelled = true;
+    };
+  }, [request, tenant.id, credentialsRefreshKey, canReadCredentials]);
 
   async function submitInvite() {
     if (inviteEmail.trim() === "" || inviteReason.trim() === "") {
@@ -857,6 +897,67 @@ function TenantDetailDrawer({
             onMutated();
             setInvitationsRefreshKey((k) => k + 1);
           }}
+        />
+      )}
+
+      {canReadCredentials && !isPlatformTenant && (
+        <>
+          <h3 className="text-subhead" style={{ margin: "1.5rem 0 0.6rem" }}>
+            Credentials
+          </h3>
+          {credentialsError && <ErrorState label={credentialsError} />}
+          {!credentialsError && credentials === null && (
+            <div style={{ overflowX: "auto" }}>
+              <table className="data-table">
+                <tbody>
+                  <SkeletonTableRows columns={4} rows={2} />
+                </tbody>
+              </table>
+            </div>
+          )}
+          {!credentialsError && credentials !== null && credentials.length === 0 && (
+            <EmptyState label="No Payments credentials found for this tenant." icon="key" />
+          )}
+          {!credentialsError && credentials !== null && credentials.length > 0 && (
+            <div style={{ overflowX: "auto" }}>
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Provider</th>
+                    <th>Environment</th>
+                    <th>Status</th>
+                    <th>Secrets</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {credentials.map((c) => (
+                    <tr key={c.credentialId} onClick={() => setSelectedCredential(c)} style={{ cursor: "pointer" }}>
+                      <td>{c.displayName || c.provider}</td>
+                      <td>{c.environment}</td>
+                      <td>
+                        <StatusBadge value={c.status} />
+                      </td>
+                      <td>{c.secrets.map((s) => s.kind).join(", ") || "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </>
+      )}
+
+      {canReadCredentials && selectedCredential && (
+        <CredentialPanel
+          tenantId={tenant.id}
+          credentialId={selectedCredential.credentialId}
+          displayName={selectedCredential.displayName || selectedCredential.provider}
+          request={request}
+          stepUp={stepUp}
+          operatorId={operatorId}
+          operatorScopes={operatorScopes}
+          onClose={() => setSelectedCredential(null)}
+          onMutated={() => setCredentialsRefreshKey((k) => k + 1)}
         />
       )}
 
