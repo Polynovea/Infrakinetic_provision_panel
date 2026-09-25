@@ -35,7 +35,7 @@ function formatDate(iso: string): string {
 }
 
 export default function PlatformPage() {
-  const { request } = useOperatorSession();
+  const { request, stepUp } = useOperatorSession();
   const [engines, setEngines] = useState<EngineCatalogEntry[] | null>(null);
   const [observedAt, setObservedAt] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -117,6 +117,7 @@ export default function PlatformPage() {
         <EngineDetailDrawer
           engine={selected}
           request={request}
+          stepUp={stepUp}
           onClose={() => setSelected(null)}
           onChanged={loadEngines}
         />
@@ -128,11 +129,13 @@ export default function PlatformPage() {
 function EngineDetailDrawer({
   engine,
   request,
+  stepUp,
   onClose,
   onChanged,
 }: {
   engine: EngineCatalogEntry;
   request: (path: string, init?: RequestInit) => Promise<Response>;
+  stepUp: (returnTo?: string) => void;
   onClose: () => void;
   /** Re-fetches the engine catalog from the server — called after any
    * completed change or recovery, so the list and this drawer always show
@@ -170,7 +173,8 @@ function EngineDetailDrawer({
       });
       const body = await res.json();
       if (!res.ok) {
-        setError(body.message ?? "That change could not be completed.");
+        // Disabling an engine is R4 and needs a fresh sign-in confirmation.
+        setError(body.error === "STEP_UP_REQUIRED" ? "STEP_UP_REQUIRED" : body.message ?? "That change could not be completed.");
         return;
       }
       const op = body.operation as OperationView;
@@ -269,12 +273,21 @@ function EngineDetailDrawer({
         </div>
       )}
 
-      {error && (
+      {error === "STEP_UP_REQUIRED" ? (
         <div className="card" style={{ marginTop: "1rem" }}>
-          <p style={{ color: "var(--danger-fg)", margin: 0 }} role="alert">
-            {error}
-          </p>
+          <p style={{ margin: "0 0 0.5rem", fontSize: "0.85rem" }}>Disabling an engine requires a fresh sign-in confirmation.</p>
+          <button className="btn btn-primary" onClick={() => stepUp("/engine-state")}>
+            Step up now
+          </button>
         </div>
+      ) : (
+        error && (
+          <div className="card" style={{ marginTop: "1rem" }}>
+            <p style={{ color: "var(--danger-fg)", margin: 0 }} role="alert">
+              {error}
+            </p>
+          </div>
+        )
       )}
 
       {operation && (

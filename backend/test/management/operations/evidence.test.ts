@@ -25,6 +25,30 @@ describe("management/operations/evidence", () => {
     expect(out.jwtLooking).toBe("[redacted]");
   });
 
+  // Audit remediation L3.
+  it("keeps exact known-safe credential metadata keys, while look-alikes and nested material stay redacted", () => {
+    const out = redactSecretShapedFields({
+      credentialId: "cred-1",
+      secretKind: "api_key_pair",
+      resultingSecrets: [{ kind: "api_key_secret", version: 2, status: "active", maskedHint: "****cret", secret: "raw" }],
+      secretValue: "raw-material",
+      credential_pem: "x",
+    }) as Record<string, unknown>;
+    expect(out.credentialId).toBe("cred-1");
+    expect(out.secretKind).toBe("api_key_pair");
+    expect(out.resultingSecrets).toEqual([{ kind: "api_key_secret", version: 2, status: "active", maskedHint: "****cret", secret: "[redacted]" }]);
+    expect(out.secretValue).toBe("[redacted]");
+    expect(out.credential_pem).toBe("[redacted]");
+  });
+
+  it("drops contact PII (1A.8 boundary): email/phone keys, and email-shaped values under any key", () => {
+    const out = redactSecretShapedFields({ email: "a@b.example", phone: "+911234", contact: "someone@tenant.example", name: "A" }) as Record<string, unknown>;
+    expect(out.email).toBe("[redacted]");
+    expect(out.phone).toBe("[redacted]");
+    expect(out.contact).toBe("[redacted]");
+    expect(out.name).toBe("A");
+  });
+
   it("redacts nested secret fields", () => {
     const out = redactSecretShapedFields({ user: { name: "A", secret: "x" } }) as { user: { secret: string; name: string } };
     expect(out.user.secret).toBe("[redacted]");

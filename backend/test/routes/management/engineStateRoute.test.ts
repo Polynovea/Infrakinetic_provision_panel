@@ -61,14 +61,47 @@ describe("PUT /management/v1/engine-state/:engineKey — Governance's own operat
 
   function appWithAdmin(overrides: { scopes?: Scope[] } = {}) {
     const op = activeAdminOperator({ scopes: overrides.scopes ?? ["engines.read", "engines.platform_state.write"] });
-    const { app: server } = buildTestApp(provider, [op], {
+    const { app: server, sessionStore } = buildTestApp(provider, [op], {
       ledger,
       getManagementSigningKeys: () => Promise.resolve(signingKeys),
       loadTransportConfig: () => TRANSPORT_CONFIG,
       infrakineticBaseUrl: "http://127.0.0.1:0",
     });
-    return { server, op };
+    return { server, op, sessionStore };
   }
+
+  // Audit remediation M7 — the R4 route now requires a fresh step-up.
+  async function steppedUpAdmin() {
+    const { server, op, sessionStore } = appWithAdmin();
+    const token = await signTestToken(keyPair, { subject: op.cognitoSub });
+    const jti = JSON.parse(Buffer.from(token.split(".")[1], "base64url").toString()).jti as string;
+    await sessionStore.recordStepUp(jti, { verifiedAt: new Date().toISOString(), method: "cognito-fresh-reauth" });
+    return { server, token };
+  }
+
+  it("R4: an operator WITH the scope but WITHOUT a fresh step-up -> 403 STEP_UP_REQUIRED, nothing reaches orchestration", async () => {
+    const { server, op } = appWithAdmin();
+    const token = await signTestToken(keyPair, { subject: op.cognitoSub });
+    const res = await request(server)
+      .put("/management/v1/engine-state/module_ai")
+      .set("authorization", `Bearer ${token}`)
+      .send({ idempotencyKey: "k1", desiredState: "disabled", reason: "incident", recoveryIntent: "re-enable after fix" });
+    expect(res.status).toBe(403);
+    expect(res.body.error).toBe("STEP_UP_REQUIRED");
+    const ops = await client.query("SELECT * FROM governance.management_operations");
+    expect(ops.rows).toHaveLength(0);
+  });
+
+  it("R2 recovery (desiredState 'operational') is NOT step-up gated — incident recovery stays fast", async () => {
+    const { server, op } = appWithAdmin();
+    const token = await signTestToken(keyPair, { subject: op.cognitoSub });
+    const res = await request(server)
+      .put("/management/v1/engine-state/module_ai")
+      .set("authorization", `Bearer ${token}`)
+      .send({ idempotencyKey: "k-r2", desiredState: "operational", reason: "recovering from incident" });
+    // Past the gate: reaches orchestration and hits the unreachable fake.
+    expect(res.status).toBe(502);
+  });
 
   it("valid operator missing engines.platform_state.write scope -> 403 before any orchestration runs", async () => {
     const op = activeAdminOperator({ scopes: ["engines.read"] }); // missing engines.platform_state.write
@@ -88,8 +121,7 @@ describe("PUT /management/v1/engine-state/:engineKey — Governance's own operat
   });
 
   it("missing idempotencyKey -> 400, before any orchestration runs", async () => {
-    const { server, op } = appWithAdmin();
-    const token = await signTestToken(keyPair, { subject: op.cognitoSub });
+    const { server, token } = await steppedUpAdmin();
     const res = await request(server)
       .put("/management/v1/engine-state/module_ai")
       .set("authorization", `Bearer ${token}`)
@@ -99,8 +131,7 @@ describe("PUT /management/v1/engine-state/:engineKey — Governance's own operat
   });
 
   it("missing reason -> 400", async () => {
-    const { server, op } = appWithAdmin();
-    const token = await signTestToken(keyPair, { subject: op.cognitoSub });
+    const { server, token } = await steppedUpAdmin();
     const res = await request(server)
       .put("/management/v1/engine-state/module_ai")
       .set("authorization", `Bearer ${token}`)
@@ -110,8 +141,7 @@ describe("PUT /management/v1/engine-state/:engineKey — Governance's own operat
   });
 
   it("invalid desired state -> 400", async () => {
-    const { server, op } = appWithAdmin();
-    const token = await signTestToken(keyPair, { subject: op.cognitoSub });
+    const { server, token } = await steppedUpAdmin();
     const res = await request(server)
       .put("/management/v1/engine-state/module_ai")
       .set("authorization", `Bearer ${token}`)
@@ -145,8 +175,7 @@ describe("PUT /management/v1/engine-state/:engineKey — Governance's own operat
   });
 
   it("a valid request that reaches orchestration but hits an unreachable Infrakinetic during Step 1's resolve-read surfaces as a clean 502, no ledger entry", async () => {
-    const { server, op } = appWithAdmin();
-    const token = await signTestToken(keyPair, { subject: op.cognitoSub });
+    const { server, token } = await steppedUpAdmin();
     const res = await request(server)
       .put("/management/v1/engine-state/module_ai")
       .set("authorization", `Bearer ${token}`)

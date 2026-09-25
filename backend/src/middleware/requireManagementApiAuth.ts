@@ -5,7 +5,7 @@ import type { NextFunction, Request, RequestHandler, Response } from "express";
 import type { AuditSink } from "../identity/auditSink.js";
 import { sha256Base64Url } from "../identity/browserAuthCrypto.js";
 import type { BrowserAuthStore } from "../identity/browserAuthStore.js";
-import { parseCookies, SESSION_COOKIE_CANDIDATES } from "../identity/browserCookies.js";
+import { parseCookies, sessionCookieCandidates } from "../identity/browserCookies.js";
 import {
   ManagementAuthError,
   MissingTokenError,
@@ -39,7 +39,7 @@ function extractBearerToken(req: Request): string | undefined {
 
 function extractBrowserSessionToken(req: Request): string | undefined {
   const cookies = parseCookies(req.header("cookie"));
-  for (const name of SESSION_COOKIE_CANDIDATES) {
+  for (const name of sessionCookieCandidates(process.env.NODE_ENV === "production")) {
     const value = cookies[name];
     if (value) return value;
   }

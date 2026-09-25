@@ -1,5 +1,5 @@
 import type { DbClient } from "../../db/dbClient.js";
-import type { OperatorDirectory } from "../operatorDirectory.js";
+import { PENDING_MFA_DISABLED_REASON, type OperatorDirectory } from "../operatorDirectory.js";
 import { isRole, isScope, type Role, type Scope } from "../roles.js";
 import type { OperatorRecord, OperatorStatus } from "../types.js";
 
@@ -72,12 +72,17 @@ export class PostgresOperatorDirectory implements OperatorDirectory {
     return record;
   }
 
-  async activatePendingOperator(operatorId: string): Promise<void> {
-    await this.db.query(
+  // Audit remediation M2 — the precondition is enforced in the UPDATE itself
+  // (not just by the caller), so a for-cause disable can never be undone by
+  // the disabled operator logging in, even if a caller's check regresses.
+  async activatePendingOperator(operatorId: string): Promise<boolean> {
+    const result = await this.db.query<{ operator_id: string }>(
       `UPDATE governance.operators
        SET status = 'active', mfa_enrolled = true, disabled_at = NULL, disabled_reason = NULL, updated_at = now()
-       WHERE operator_id = $1`,
-      [operatorId],
+       WHERE operator_id = $1 AND status = 'disabled' AND mfa_enrolled = false AND disabled_reason = $2
+       RETURNING operator_id`,
+      [operatorId, PENDING_MFA_DISABLED_REASON],
     );
+    return result.rows.length === 1;
   }
 }

@@ -359,6 +359,33 @@ describe("management/operations/tenantLifecycleOperation", () => {
       expect(mutationCall?.body).not.toHaveProperty("status");
     });
 
+    // Audit remediation M4 — a partially-commissioned tenant (projection
+    // still 'provisioning') suspended at the owner: provisioning -> suspended
+    // is not a valid projection transition. The owner mutation is durable,
+    // so the ledger must still record completed truth — never strand in
+    // 'running' with a 500 — and the projection is left visibly stale.
+    it("owner suspend succeeds but the projection cannot follow -> ledger still completed, projectionSync 'stale'", async () => {
+      const tenantId = "bb000000-0000-4bbb-8bbb-000000000008";
+      const created = await commissionedTenants.createForCommissionRequest({
+        commissionRequestId: "dddddddd-0000-4ddd-8ddd-000000000008", desiredName: "Partial", desiredPlan: "pro", accountType: "live", responsibleOperatorId: OPERATOR_ID,
+      });
+      await commissionedTenants.transitionLifecycleState(created.projectionId, { toState: "approved" });
+      await commissionedTenants.transitionLifecycleState(created.projectionId, { toState: "provisioning", tenantId });
+      const { fetchImpl } = buildFakeInfrakinetic({ tenantState: { previous: "active", resulting: "suspended" } });
+
+      const result = await requestTenantSuspend(baseDeps(fetchImpl), {
+        idempotencyKey: "suspend-partial-commission", operatorId: OPERATOR_ID, operatorSessionId: SESSION_ID,
+        operatorRoles: ROLES, operatorGrantedScopes: SCOPES, tenantId, reason: "abuse",
+      });
+
+      expect(result.operation.status).toBe("completed");
+      expect(result.operation.result).toEqual(expect.objectContaining({
+        resultingPlatformAccessState: "suspended",
+        projectionSync: expect.objectContaining({ status: "stale" }),
+      }));
+      expect((await commissionedTenants.getByProjectionId(created.projectionId)).lifecycleState).toBe("provisioning");
+    });
+
     it("rejects an empty tenantId before minting anything", async () => {
       const { fetchImpl, calls } = buildFakeInfrakinetic();
       await expect(requestTenantSuspend(baseDeps(fetchImpl), {

@@ -111,7 +111,9 @@ describe("identityOperation — suspend full success round trip", () => {
 
     expect(result.replay).toBe(false);
     expect(result.operation.status).toBe("completed");
-    expect(result.operation.result).toEqual({ email: "person@tenant.example", appAccountStatus: "inactive", sessionsRevoked: 2 });
+    // Audit remediation L3 — the 1A.8 PII boundary: the tenant user's email never lands in the ledger.
+    expect(result.operation.result).toEqual({ email: "[redacted]", appAccountStatus: "inactive", sessionsRevoked: 2 });
+    expect(JSON.stringify(result.operation)).not.toContain("person@tenant.example");
     expect(calls).toHaveLength(1);
     expect(calls[0].method).toBe("POST");
     expect(calls[0].body?.reason).toBe("support ticket #42");
@@ -214,6 +216,6 @@ describe("identityOperation — recovery initiate never leaks a code", () => {
     });
 
     expect(result.operation.status).toBe("completed");
-    expect(result.operation.result).toEqual({ email: "person@tenant.example", initiatedAt: "2026-09-22T00:00:00Z" });
+    expect(result.operation.result).toEqual({ email: "[redacted]", initiatedAt: "2026-09-22T00:00:00Z" });
   });
 });

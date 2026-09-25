@@ -14,7 +14,7 @@ import {
 import type { BrowserAuthStore } from "../../identity/browserAuthStore.js";
 import { browserCookieNames, parseCookies } from "../../identity/browserCookies.js";
 import type { IdentityProvider } from "../../identity/identityProvider.js";
-import type { OperatorDirectory } from "../../identity/operatorDirectory.js";
+import { isPendingFirstMfaLogin, type OperatorDirectory } from "../../identity/operatorDirectory.js";
 import { ROLE_SCOPE_CEILING } from "../../identity/roles.js";
 
 export interface BrowserAuthRouterDeps {
@@ -212,18 +212,24 @@ export function createBrowserAuthRouter(deps: BrowserAuthRouterDeps): Router {
       let operator = await deps.operatorDirectory.findByCognitoSub(claims.subject);
       let selfActivatedPendingMfa = false;
       // An operator bootstrapped pending their first MFA'd login lands as
-      // status='disabled', mfaEnrolled=false (bootstrapOperatorDb.ts) — never
-      // the shape a for-cause disable produces (that always starts from an
-      // operator who already had mfaEnrolled=true). On a pool with
-      // MfaConfiguration=ON, MFA is mandatory for every sign-in and Cognito
-      // enforces it itself; reaching this line at all means the ID token we
-      // just verified could not have been issued without it. So this exact
-      // login IS the MFA proof — no human/CLI step is needed to activate the
-      // operator, here or for any future one.
-      if (operator && operator.status === "disabled" && !operator.mfaEnrolled) {
-        await deps.operatorDirectory.activatePendingOperator(operator.operatorId);
-        operator = { ...operator, status: "active", mfaEnrolled: true, disabledAt: undefined, disabledReason: undefined };
-        selfActivatedPendingMfa = true;
+      // status='disabled', mfaEnrolled=false with bootstrapOperatorDb.ts's
+      // exact PENDING_MFA_DISABLED_REASON. On a pool with MfaConfiguration=ON,
+      // MFA is mandatory for every sign-in and Cognito enforces it itself;
+      // reaching this line at all means the ID token we just verified could
+      // not have been issued without it. So this exact login IS the MFA proof.
+      //
+      // Audit remediation M2: "disabled + mfaEnrolled=false" alone is NOT
+      // that shape — an operator disabled for cause before ever completing a
+      // first login looks the same, and used to reactivate simply by logging
+      // in. Eligibility now requires the bootstrap marker, and the directory
+      // re-checks it atomically. (Cognito user-pool ID tokens carry no `amr`
+      // claim, so this still relies on the pool's MfaConfiguration=ON.)
+      if (operator && isPendingFirstMfaLogin(operator)) {
+        const activated = await deps.operatorDirectory.activatePendingOperator(operator.operatorId);
+        if (activated) {
+          operator = { ...operator, status: "active", mfaEnrolled: true, disabledAt: undefined, disabledReason: undefined };
+          selfActivatedPendingMfa = true;
+        }
       }
 
       if (!operator || operator.status !== "active" || !operator.mfaEnrolled || !operatorPrivilegeIsConsistent(operator.roles, operator.scopes)) {

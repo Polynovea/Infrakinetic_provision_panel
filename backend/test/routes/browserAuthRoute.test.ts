@@ -214,6 +214,56 @@ describe("backend-owned Cognito browser auth", () => {
     expect(stillDisabled?.status).toBe("disabled");
   });
 
+  // Audit remediation M2 — the dangerous shape: disabled for cause BEFORE
+  // ever completing a first login, so mfaEnrolled is still false. Only the
+  // bootstrap's own pending-MFA marker makes an operator self-activatable.
+  it("does NOT self-activate an operator disabled for cause before their first login (mfaEnrolled still false)", async () => {
+    const operator = pendingMfaOperator({ disabledReason: "Offboarded before first login" });
+    const directory = new InMemoryOperatorDirectory([operator]);
+    const store = new InMemoryBrowserAuthStore();
+    let expectedNonce = "";
+    const identityProvider: IdentityProvider = {
+      async verifyToken(): Promise<VerifiedTokenClaims> {
+        return {
+          subject: operator.cognitoSub,
+          tokenId: "ffffffff-ffff-4fff-8fff-ffffffffffff",
+          issuedAt: new Date(Date.now() - 1_000),
+          expiresAt: new Date(Date.now() + 3_600_000),
+          rawClaims: { nonce: expectedNonce },
+        };
+      },
+    };
+    const fetchImpl = vi.fn<(url: string, init?: RequestInit) => Promise<Response>>(async () =>
+      new Response(JSON.stringify({ id_token: "signed-id-token" }), { status: 200, headers: { "content-type": "application/json" } }),
+    );
+    const app = express();
+    app.use(
+      "/auth",
+      createBrowserAuthRouter({
+        identityProvider,
+        operatorDirectory: directory,
+        browserAuthStore: store,
+        auditSink: new InMemoryAuditSink(),
+        loadConfig: () => config,
+        fetchImpl: fetchImpl as typeof fetch,
+      }),
+    );
+
+    const login = await request(app).get("/auth/login");
+    const authorizeUrl = new URL(login.headers.location);
+    expectedNonce = authorizeUrl.searchParams.get("nonce") ?? "";
+    const oauthCookie = cookieValue(login.headers["set-cookie"], "governance_oauth");
+
+    const callback = await request(app)
+      .get(`/auth/callback?code=authorization-code&state=${encodeURIComponent(authorizeUrl.searchParams.get("state") ?? "")}`)
+      .set("Cookie", `governance_oauth=${oauthCookie}`);
+
+    expect(callback.headers.location).toContain("auth=forbidden");
+    const stillDisabled = await directory.findByCognitoSub(operator.cognitoSub);
+    expect(stillDisabled?.status).toBe("disabled");
+    expect(stillDisabled?.disabledReason).toBe("Offboarded before first login");
+  });
+
   it("rejects a mismatched OAuth state before token exchange", async () => {
     const operator = activeAdminOperator();
     const store = new InMemoryBrowserAuthStore();

@@ -41,6 +41,7 @@ import { fileURLToPath } from "node:url";
 
 import { PgDbClient } from "../src/db/pgDbClient.js";
 import { ROLE_SCOPE_CEILING, isRole, isScope, type Role, type Scope } from "../src/identity/roles.js";
+import { PENDING_MFA_DISABLED_REASON } from "../src/identity/operatorDirectory.js";
 
 const backendRoot = join(fileURLToPath(import.meta.url), "..", "..");
 const AUDIT_PATH = join(backendRoot, "config", "operator_bootstrap_audit.jsonl");
@@ -163,7 +164,9 @@ async function main(): Promise<void> {
   // (see --mark-mfa-verified above). This is a real, enforced pending state,
   // not a cosmetic one: requireManagementApiAuth rejects non-active operators.
   const initialStatus = "disabled";
-  const disabledReason = "Pending real TOTP MFA enrollment (bootstrap-created, not yet verified)";
+  // Must stay the exact marker routes/auth/index.ts checks before allowing a
+  // first-login self-activation (audit remediation M2).
+  const disabledReason = PENDING_MFA_DISABLED_REASON;
 
   console.log("About to create:");
   console.log(JSON.stringify({ operatorId, cognitoSub: args.cognitoSub, email: args.email, displayName: args.displayName, role, scopes: requestedScopes, initialStatus, disabledReason }, null, 2));

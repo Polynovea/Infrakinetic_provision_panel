@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { callInfrakineticManagementApi } from "../../src/management/managementApiClient.js";
+import { callInfrakineticManagementApi, isNeverDispatchedNetworkError } from "../../src/management/managementApiClient.js";
 
 describe("management/managementApiClient", () => {
   it("attaches the assertion as a Bearer token and calls the exact URL/method", async () => {
@@ -35,5 +35,28 @@ describe("management/managementApiClient", () => {
     });
     const serializedCall = JSON.stringify(fetchImpl.mock.calls[0]);
     expect(serializedCall).not.toMatch(/BEGIN (RSA )?PRIVATE KEY/);
+  });
+
+  // Audit remediation L2 — a hung owner call must not park an operation in
+  // 'running' forever, and its timeout must classify as outcome-ambiguous.
+  it("aborts a hung call at the deadline, and the timeout is NOT classified as never-dispatched", async () => {
+    const hangingFetch = ((_url: string, init?: RequestInit) =>
+      new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(init.signal?.reason));
+      })) as unknown as typeof fetch;
+
+    const err = await callInfrakineticManagementApi({
+      baseUrl: "https://infrakinetic.test.invalid",
+      path: "/management/v1/tenants/commission",
+      assertion: "signed.jwt.value",
+      method: "POST",
+      body: {},
+      fetchImpl: hangingFetch,
+      timeoutMs: 20,
+    }).catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).name).toBe("TimeoutError");
+    expect(isNeverDispatchedNetworkError(err)).toBe(false);
   });
 });

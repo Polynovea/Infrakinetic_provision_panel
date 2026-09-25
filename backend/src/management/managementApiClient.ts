@@ -23,7 +23,19 @@ export interface ManagementApiCallParams {
   body?: unknown;
   correlationId?: string;
   fetchImpl?: typeof fetch;
+  /** Overall deadline for the call; defaults to MANAGEMENT_API_TIMEOUT_MS. */
+  timeoutMs?: number;
 }
+
+// Audit remediation L2 — the outbound call had no deadline, so a hung owner
+// call parked its operation in 'running' indefinitely. 30s comfortably
+// covers the slowest owner command (commission: provisioning + Cognito +
+// email enqueue) while staying well inside the assertion's 120s TTL. A
+// timeout fires AFTER dispatch, so isNeverDispatchedNetworkError() below
+// does not match it: callers record it as outcome-ambiguous
+// (partially_completed) and reconciliation resolves it from the owner
+// receipt — never as a plain, retryable failure.
+export const MANAGEMENT_API_TIMEOUT_MS = 30_000;
 
 export interface ManagementApiCallResult {
   status: number;
@@ -65,7 +77,9 @@ export async function callInfrakineticManagementApi(params: ManagementApiCallPar
     requestBody = JSON.stringify(params.body);
   }
 
-  const response = await doFetch(url, { method, headers, body: requestBody });
+  // One signal covers both the request and reading the response body.
+  const signal = AbortSignal.timeout(params.timeoutMs ?? MANAGEMENT_API_TIMEOUT_MS);
+  const response = await doFetch(url, { method, headers, body: requestBody, signal });
   const body = await response.json().catch(() => undefined);
   return { status: response.status, body };
 }

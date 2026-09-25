@@ -45,12 +45,21 @@ interface DriftDesiredProvisionedMismatch {
   provisioned: string;
 }
 
+// Audit remediation M3 — desired lifecycle vs freshly observed owner state.
+interface DriftLifecycleMismatch {
+  tenantId: string;
+  projectionLifecycleState: string;
+  observedPlatformAccessState: string;
+}
+
 interface ListDriftResult {
   observedAt: string;
   projectionMissing: DriftProjectionMissing[];
   stuckOperations: DriftStuckOperation[];
   staleObservations: DriftStaleObservation[];
   desiredProvisionedMismatch: DriftDesiredProvisionedMismatch[];
+  /** Absent from an older backend build; treated as empty. */
+  lifecycleMismatch?: DriftLifecycleMismatch[];
   registryUnavailable?: { message: string };
 }
 
@@ -105,7 +114,11 @@ export default function ReconciliationPage() {
   }
 
   const totalDrift = drift
-    ? drift.projectionMissing.length + drift.stuckOperations.length + drift.staleObservations.length + drift.desiredProvisionedMismatch.length
+    ? drift.projectionMissing.length +
+      drift.stuckOperations.length +
+      drift.staleObservations.length +
+      drift.desiredProvisionedMismatch.length +
+      (drift.lifecycleMismatch?.length ?? 0)
     : null;
 
   return (
@@ -183,8 +196,8 @@ export default function ReconciliationPage() {
                 Stuck operations ({drift.stuckOperations.length})
               </h3>
               <p className="overlay-note" style={{ margin: "0 0 0.6rem" }}>
-                Operations sitting at partially_completed, classified by cause. Tenant-scoped operations are resolved via the tenant&rsquo;s
-                &ldquo;Recheck&rdquo; action.
+                Operations left partially_completed, or stranded in submitted/accepted/running long past their start, classified by cause.
+                They are resolved from the owner&rsquo;s durable receipt via the tenant&rsquo;s &ldquo;Recheck&rdquo; action — never by resending.
               </p>
               <div className="card" style={{ padding: 0, overflowX: "auto" }}>
                 <table className="data-table">
@@ -233,6 +246,42 @@ export default function ReconciliationPage() {
                         <td style={{ fontFamily: "monospace", fontSize: "0.8rem" }}>{s.tenantId}</td>
                         <td>{formatDate(s.lastObservedAt)}</td>
                         <td>{formatAge(s.ageSeconds)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          )}
+
+          {(drift.lifecycleMismatch?.length ?? 0) > 0 && (
+            <section style={{ marginBottom: "1.5rem" }}>
+              <h3 className="text-subhead" style={{ marginBottom: "0.6rem" }}>
+                Lifecycle drift ({drift.lifecycleMismatch?.length})
+              </h3>
+              <p className="overlay-note" style={{ margin: "0 0 0.6rem" }}>
+                Governance&rsquo;s desired lifecycle disagrees with Infrakinetic&rsquo;s live access state. Surfaced only: owner truth is not
+                rewritten into desired state automatically — converge it with a lifecycle request or a commission repair.
+              </p>
+              <div className="card" style={{ padding: 0, overflowX: "auto" }}>
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>Tenant ID</th>
+                      <th>Desired (Governance)</th>
+                      <th>Observed (Infrakinetic)</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {drift.lifecycleMismatch?.map((m) => (
+                      <tr key={m.tenantId}>
+                        <td style={{ fontFamily: "monospace", fontSize: "0.8rem" }}>{m.tenantId}</td>
+                        <td>
+                          <StatusBadge value={m.projectionLifecycleState} />
+                        </td>
+                        <td>
+                          <StatusBadge value={m.observedPlatformAccessState} />
+                        </td>
                       </tr>
                     ))}
                   </tbody>

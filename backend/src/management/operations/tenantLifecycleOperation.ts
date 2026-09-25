@@ -411,16 +411,32 @@ async function requestTenantTransition(
     resultingPlatformAccessState: "active" | "suspended" | "decommissioned" | null;
   };
 
-  const projection = await deps.commissionedTenants.getByTenantId(params.tenantId);
-  if (projection && body.resultingPlatformAccessState) {
-    await projectionTransitionsFor(deps.commissionedTenants, projection.projectionId, action, submitted.operationId, body.resultingPlatformAccessState);
+  // Audit remediation M4 — master plan §64 (1A.10) "owner truth wins": the
+  // owner mutation is durable at this point, so the ledger must record the
+  // completed truth even when the Governance projection cannot follow (e.g.
+  // suspending a tenant whose projection is still 'provisioning' after a
+  // partial commission — provisioning -> suspended is not a valid projection
+  // transition). A projection failure used to throw here and strand the
+  // operation in 'running' with a 500. Now the projection outcome is
+  // recorded on the operation and a stale projection is left for
+  // reconciliation to repair from a fresh owner read — never by replaying
+  // the mutation.
+  let projectionSync: { status: "synced" | "not_found" | "stale"; message?: string } = { status: "not_found" };
+  try {
+    const projection = await deps.commissionedTenants.getByTenantId(params.tenantId);
+    if (projection && body.resultingPlatformAccessState) {
+      await projectionTransitionsFor(deps.commissionedTenants, projection.projectionId, action, submitted.operationId, body.resultingPlatformAccessState);
+      projectionSync = { status: "synced" };
+    }
+  } catch (err) {
+    projectionSync = { status: "stale", message: err instanceof Error ? err.message : String(err) };
   }
 
   const completed = await deps.ledger.transitionOperation(submitted.operationId, {
     toStatus: "completed",
     beforeStateSafeSnapshot: buildSafeSnapshot({ platformAccessState: body.previousPlatformAccessState }),
     afterStateSafeSnapshot: buildSafeSnapshot({ platformAccessState: body.resultingPlatformAccessState }),
-    result: body,
+    result: { ...body, projectionSync },
   });
   return { operation: completed, replay: false };
 }

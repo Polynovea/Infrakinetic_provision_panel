@@ -57,6 +57,121 @@ describe("POST /management/v1/tenants/:tenantId/credentials/:credentialId/rotate
   });
 });
 
+// Audit remediation H1 — the maker commits to the exact material at request
+// time; the response carries only the checker-visible safe diff.
+describe("POST .../rotate/request — material is bound at request time", () => {
+  async function steppedUpApp() {
+    const keyPair = await generateTestKeyPair();
+    const provider = buildTestIdentityProvider(keyPair);
+    const op = activeAdminOperator({ roles: ["security_operator"], scopes: ["credentials.rotate", "identity.read"] });
+    const client = buildMigratedPgMemClient().client;
+    await client.query(
+      `INSERT INTO governance.operators (operator_id, cognito_sub, email, display_name, status, mfa_enrolled, created_at, updated_at)
+       VALUES ($1, $2, $3, 'Test Operator', 'active', true, now(), now())`,
+      [op.operatorId, op.cognitoSub, op.email],
+    );
+    const { app, sessionStore } = buildTestApp(provider, [op], {
+      ledger: new ManagementOperationLedger(client),
+      commissionedTenants: new CommissionedTenantsRepository(client),
+      approvals: new ManagementApprovalStore(client),
+    });
+    const token = await signTestToken(keyPair, { subject: op.cognitoSub });
+    const jti = JSON.parse(Buffer.from(token.split(".")[1], "base64url").toString()).jti as string;
+    await sessionStore.recordStepUp(jti, { verifiedAt: new Date().toISOString(), method: "cognito-fresh-reauth" });
+    return { app, token };
+  }
+
+  it("400s a rotate request that does not commit to a kind and its material", async () => {
+    const { app, token } = await steppedUpApp();
+    const noKind = await request(app)
+      .post(`/management/v1/tenants/${TENANT_ID}/credentials/${CREDENTIAL_ID}/rotate/request`)
+      .set("authorization", `Bearer ${token}`)
+      .send({ reason: "scheduled rotation" });
+    expect(noKind.status).toBe(400);
+    expect(noKind.body.error).toBe("INVALID_SECRET_KIND");
+
+    const noSecret = await request(app)
+      .post(`/management/v1/tenants/${TENANT_ID}/credentials/${CREDENTIAL_ID}/rotate/request`)
+      .set("authorization", `Bearer ${token}`)
+      .send({ reason: "scheduled rotation", secretKind: "api_key_pair", apiKeyId: "rzp_live_MerchantKeyId01" });
+    expect(noSecret.status).toBe(400);
+    expect(noSecret.body.error).toBe("API_KEY_PAIR_REQUIRED");
+  });
+
+  it("201s with a safe diff and never echoes the submitted material", async () => {
+    const { app, token } = await steppedUpApp();
+    const res = await request(app)
+      .post(`/management/v1/tenants/${TENANT_ID}/credentials/${CREDENTIAL_ID}/rotate/request`)
+      .set("authorization", `Bearer ${token}`)
+      .send({ reason: "cutover", secretKind: "api_key_pair", apiKeyId: "rzp_live_MerchantKeyId01", apiKeySecret: "merchant_key_secret_value_9f8e7d" });
+    expect(res.status).toBe(201);
+    expect(res.body.approval.safeRequestSummary).toMatchObject({ secretKind: "api_key_pair", apiKeyIdHint: "rzp_live…Id01" });
+    expect(JSON.stringify(res.body)).not.toMatch(/merchant_key_secret_value_9f8e7d|rzp_live_MerchantKeyId01/);
+  });
+});
+
+// Audit remediation L7 — a live provider test decrypts and uses the tenant's
+// secrets; a read-only viewer must not be able to trigger it.
+describe("POST /management/v1/tenants/:tenantId/credentials/:credentialId/test", () => {
+  it("a platform_viewer holding only credentials.metadata.read -> 403 SCOPE_REQUIRED", async () => {
+    const keyPair = await generateTestKeyPair();
+    const provider = buildTestIdentityProvider(keyPair);
+    const viewer = activeAdminOperator({ roles: ["platform_viewer"], scopes: ["credentials.metadata.read"] });
+    const { app } = buildTestApp(provider, [viewer]);
+    const token = await signTestToken(keyPair, { subject: viewer.cognitoSub });
+
+    const res = await request(app).post(`/management/v1/tenants/${TENANT_ID}/credentials/${CREDENTIAL_ID}/test`).set("authorization", `Bearer ${token}`);
+
+    expect(res.status).toBe(403);
+    expect(res.body.error).toBe("SCOPE_REQUIRED");
+  });
+});
+
+// Audit remediation M8 — a DIFFERENT, correctly-scoped checker still cannot
+// approve without their own fresh step-up.
+describe("POST /management/v1/approvals/:approvalId/approve — checker step-up", () => {
+  it("a scoped checker without a fresh step-up -> 403 STEP_UP_REQUIRED and the approval stays pending", async () => {
+    const keyPair = await generateTestKeyPair();
+    const provider = buildTestIdentityProvider(keyPair);
+    const maker = activeAdminOperator({ roles: ["security_operator"], scopes: ["credentials.revoke", "identity.read"] });
+    const checker = activeAdminOperator({
+      operatorId: "77777777-7777-4777-8777-777777777777", cognitoSub: "fixture-sub-checker", email: "checker@example.invalid",
+      roles: ["security_operator"], scopes: ["credentials.revoke", "identity.read"],
+    });
+    const client = buildMigratedPgMemClient().client;
+    for (const op of [maker, checker]) {
+      await client.query(
+        `INSERT INTO governance.operators (operator_id, cognito_sub, email, display_name, status, mfa_enrolled, created_at, updated_at)
+         VALUES ($1, $2, $3, 'Test Operator', 'active', true, now(), now())`,
+        [op.operatorId, op.cognitoSub, op.email],
+      );
+    }
+    const approvals = new ManagementApprovalStore(client);
+    const { app, sessionStore } = buildTestApp(provider, [maker, checker], {
+      ledger: new ManagementOperationLedger(client),
+      commissionedTenants: new CommissionedTenantsRepository(client),
+      approvals,
+    });
+    const makerToken = await signTestToken(keyPair, { subject: maker.cognitoSub });
+    const makerJti = JSON.parse(Buffer.from(makerToken.split(".")[1], "base64url").toString()).jti as string;
+    await sessionStore.recordStepUp(makerJti, { verifiedAt: new Date().toISOString(), method: "cognito-fresh-reauth" });
+    const requested = await request(app)
+      .post(`/management/v1/tenants/${TENANT_ID}/credentials/${CREDENTIAL_ID}/revoke/request`)
+      .set("authorization", `Bearer ${makerToken}`)
+      .send({ reason: "credential leaked" });
+    expect(requested.status).toBe(201);
+
+    const checkerToken = await signTestToken(keyPair, { subject: checker.cognitoSub });
+    const res = await request(app)
+      .post(`/management/v1/approvals/${requested.body.approval.approvalId}/approve`)
+      .set("authorization", `Bearer ${checkerToken}`);
+
+    expect(res.status).toBe(403);
+    expect(res.body.error).toBe("STEP_UP_REQUIRED");
+    expect((await approvals.getApproval(requested.body.approval.approvalId)).status).toBe("pending");
+  });
+});
+
 describe("POST /management/v1/approvals/:approvalId/approve — credential self-approval", () => {
   it("the maker cannot approve their own revoke request, even with the right scope", async () => {
     const keyPair = await generateTestKeyPair();

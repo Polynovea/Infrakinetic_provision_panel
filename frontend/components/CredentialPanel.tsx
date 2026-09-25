@@ -16,7 +16,9 @@ import { ErrorState } from "./States";
 //
 // Never renders a secret value, ciphertext, or key material — the only
 // place a secret value ever appears is as something THIS OPERATOR TYPES IN
-// (replace's new value, or rotate's new value at execute time), which is
+// (replace's new value, or rotate's new value — entered by the maker at
+// request time and re-entered at execute time, because Governance binds only
+// a digest of it into the approval and never stores it), which is
 // sent straight to the API and never echoed back, logged, or kept in state
 // after submission. `type="password"` on every secret-value input is
 // deliberate, matching §27 of the master plan ("plaintext secret must never
@@ -68,6 +70,14 @@ interface ApprovalRecord {
   checkerOperatorId?: string;
   requestedAt: string;
   expiresAt: string;
+  // Checker-visible safe diff (audit remediation H1). Rotate only.
+  safeRequestSummary?: {
+    secretKind?: string;
+    overlapHours?: number | null;
+    webhookEndpointId?: string | null;
+    apiKeyIdHint?: string | null;
+    materialFingerprint?: string;
+  };
 }
 
 // Closure-remediation audit (2026-09-23) — replace (R2) may only establish
@@ -140,22 +150,33 @@ export function CredentialPanel({
   const [r3Reason, setR3Reason] = useState("");
   const [r3Busy, setR3Busy] = useState(false);
   const [r3Error, setR3Error] = useState<string | null>(null);
+  // Rotate request (maker): kind, window and the new material are all bound
+  // into the approval — see credentialApprovalOperation.ts's header.
+  const [rotateKind, setRotateKind] = useState<ReplaceableKind>("webhook_secret");
+  const [rotateValue, setRotateValue] = useState("");
+  const [rotateApiKeyId, setRotateApiKeyId] = useState("");
+  const [rotateApiKeySecret, setRotateApiKeySecret] = useState("");
+  const [rotateOverlapHours, setRotateOverlapHours] = useState("24");
 
   const [decisionBusy, setDecisionBusy] = useState<string | null>(null);
   const [executeBusy, setExecuteBusy] = useState<string | null>(null);
   const [approvalActionError, setApprovalActionError] = useState<string | null>(null);
-  // Rotate needs the executing operator to choose WHICH kind is being
-  // rotated (never bound into the approval itself — see
-  // credentialApprovalOperation.ts's header) plus that kind's material.
+  // Rotate execute: the kind is fixed by the approval; the executor re-enters
+  // the approved material, which must match what the checker approved.
   interface RotateExecuteState {
-    secretKind: ReplaceableKind;
     secretValue: string;
     apiKeyId: string;
     apiKeySecret: string;
   }
   const [rotateExecuteState, setRotateExecuteState] = useState<Record<string, RotateExecuteState>>({});
   function rotateExecuteFor(approvalId: string): RotateExecuteState {
-    return rotateExecuteState[approvalId] ?? { secretKind: "webhook_secret", secretValue: "", apiKeyId: "", apiKeySecret: "" };
+    return rotateExecuteState[approvalId] ?? { secretValue: "", apiKeyId: "", apiKeySecret: "" };
+  }
+  function clearRotateRequest() {
+    setRotateValue("");
+    setRotateApiKeyId("");
+    setRotateApiKeySecret("");
+    setRotateOverlapHours("24");
   }
   function updateRotateExecute(approvalId: string, patch: Partial<RotateExecuteState>) {
     setRotateExecuteState((prev) => ({ ...prev, [approvalId]: { ...rotateExecuteFor(approvalId), ...patch } }));
@@ -277,12 +298,27 @@ export function CredentialPanel({
       setR3Error("A reason is required.");
       return;
     }
+    let rotateBody: Record<string, unknown> = {};
+    if (actionKey === "rotate") {
+      const material =
+        rotateKind === "webhook_secret" ? { secretValue: rotateValue } : { apiKeyId: rotateApiKeyId, apiKeySecret: rotateApiKeySecret };
+      if (Object.values(material).some((v) => v.trim() === "")) {
+        setR3Error(rotateKind === "webhook_secret" ? "The new webhook secret value is required." : "Both the new API key id and secret are required.");
+        return;
+      }
+      const overlap = Number(rotateOverlapHours);
+      if (rotateKind === "webhook_secret" && (!Number.isInteger(overlap) || overlap < 1 || overlap > 72)) {
+        setR3Error("Overlap must be a whole number of hours between 1 and 72.");
+        return;
+      }
+      rotateBody = { secretKind: rotateKind, ...material, ...(rotateKind === "webhook_secret" ? { overlapHours: overlap } : {}) };
+    }
     setR3Busy(true);
     setR3Error(null);
     try {
       const res = await request(
         `/management/v1/tenants/${encodeURIComponent(tenantId)}/credentials/${encodeURIComponent(credentialId)}/${actionKey}/request`,
-        { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ reason: r3Reason }) },
+        { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ reason: r3Reason, ...rotateBody }) },
       );
       const body = (await res.json()) as ApiErrorBody;
       if (!res.ok) {
@@ -295,6 +331,7 @@ export function CredentialPanel({
       }
       setPendingR3(null);
       setR3Reason("");
+      clearRotateRequest();
       loadApprovals();
     } catch {
       setR3Error("The request failed.");
@@ -310,7 +347,8 @@ export function CredentialPanel({
       const res = await request(`/management/v1/approvals/${approvalId}/${decision}`, { method: "POST" });
       const body = (await res.json()) as ApiErrorBody;
       if (!res.ok) {
-        setApprovalActionError(body.message ?? body.error ?? "The decision failed.");
+        // The checker's decision needs its own fresh step-up.
+        setApprovalActionError(body.error === "STEP_UP_REQUIRED" ? "STEP_UP_REQUIRED" : body.message ?? body.error ?? "The decision failed.");
         return;
       }
       loadApprovals();
@@ -321,19 +359,23 @@ export function CredentialPanel({
     }
   }
 
-  // Rotate needs the executing operator to choose the secret kind and
-  // supply its material at execute time (never at request time — see
-  // credentialApprovalOperation.ts's header). Revoke needs nothing extra.
+  // Rotate: the executor re-enters the exact material the checker approved
+  // (the kind is fixed by the approval). Revoke needs nothing extra.
   async function executeApproval(approval: ApprovalRecord) {
     const isRotate = approval.requestedAction === "credential.rotate";
     const rotateState = rotateExecuteFor(approval.approvalId);
+    const approvedKind = approval.safeRequestSummary?.secretKind;
     if (isRotate) {
-      const material = rotateState.secretKind === "webhook_secret" ? [rotateState.secretValue] : [rotateState.apiKeyId, rotateState.apiKeySecret];
+      if (approvedKind !== "webhook_secret" && approvedKind !== "api_key_pair") {
+        setApprovalActionError("This rotation was requested before approvals bound their material — submit a new rotate request.");
+        return;
+      }
+      const material = approvedKind === "webhook_secret" ? [rotateState.secretValue] : [rotateState.apiKeyId, rotateState.apiKeySecret];
       if (material.some((v) => v.trim() === "")) {
         setApprovalActionError(
-          rotateState.secretKind === "webhook_secret"
-            ? "Enter the new webhook secret value before executing this rotation."
-            : "Enter both the new API key id and secret before executing this rotation.",
+          approvedKind === "webhook_secret"
+            ? "Re-enter the approved webhook secret value before executing this rotation."
+            : "Re-enter the approved API key id and secret before executing this rotation.",
         );
         return;
       }
@@ -347,9 +389,9 @@ export function CredentialPanel({
         body: JSON.stringify({
           idempotencyKey: crypto.randomUUID(),
           ...(isRotate
-            ? rotateState.secretKind === "webhook_secret"
-              ? { secretKind: rotateState.secretKind, secretValue: rotateState.secretValue }
-              : { secretKind: rotateState.secretKind, apiKeyId: rotateState.apiKeyId, apiKeySecret: rotateState.apiKeySecret }
+            ? approvedKind === "webhook_secret"
+              ? { secretValue: rotateState.secretValue }
+              : { apiKeyId: rotateState.apiKeyId, apiKeySecret: rotateState.apiKeySecret }
             : {}),
         }),
       });
@@ -357,6 +399,10 @@ export function CredentialPanel({
       if (!res.ok) {
         if (body.error === "STEP_UP_REQUIRED") {
           setApprovalActionError("STEP_UP_REQUIRED");
+          return;
+        }
+        if (body.error === "APPROVAL_PAYLOAD_MISMATCH") {
+          setApprovalActionError("The material entered does not match what was approved. Nothing was changed.");
           return;
         }
         setApprovalActionError(body.message ?? body.error ?? "Execution failed.");
@@ -448,9 +494,12 @@ export function CredentialPanel({
           </div>
 
           <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "1rem" }}>
-            <button className="btn" disabled={testBusy} onClick={runTest}>
-              {testBusy ? "Testing…" : "Test connection"}
-            </button>
+            {/* A live test decrypts and uses the tenant's secrets — same scope as submitting them. */}
+            {canSubmit && (
+              <button className="btn" disabled={testBusy} onClick={runTest}>
+                {testBusy ? "Testing…" : "Test connection"}
+              </button>
+            )}
             {canSubmit && (
               <button className="btn" onClick={() => setShowReplace(true)}>
                 Replace a secret
@@ -505,6 +554,30 @@ export function CredentialPanel({
                           <p className="overlay-note" style={{ margin: "0.3rem 0" }}>
                             {a.reason} — requested {formatDate(a.requestedAt)}
                           </p>
+                          {isRotate && a.safeRequestSummary && (
+                            <dl style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "0.15rem 0.6rem", fontSize: "0.8rem", margin: "0 0 0.4rem" }}>
+                              <dt style={{ color: "var(--text-muted)" }}>Kind</dt>
+                              <dd style={{ margin: 0 }}>
+                                {a.safeRequestSummary.secretKind && a.safeRequestSummary.secretKind in KIND_LABEL
+                                  ? KIND_LABEL[a.safeRequestSummary.secretKind as ReplaceableKind]
+                                  : a.safeRequestSummary.secretKind}
+                              </dd>
+                              {a.safeRequestSummary.apiKeyIdHint && (
+                                <>
+                                  <dt style={{ color: "var(--text-muted)" }}>New key id</dt>
+                                  <dd style={{ margin: 0 }}>{a.safeRequestSummary.apiKeyIdHint}</dd>
+                                </>
+                              )}
+                              {a.safeRequestSummary.overlapHours != null && (
+                                <>
+                                  <dt style={{ color: "var(--text-muted)" }}>Overlap</dt>
+                                  <dd style={{ margin: 0 }}>{a.safeRequestSummary.overlapHours}h</dd>
+                                </>
+                              )}
+                              <dt style={{ color: "var(--text-muted)" }}>Fingerprint</dt>
+                              <dd style={{ margin: 0, fontFamily: "monospace" }}>{a.safeRequestSummary.materialFingerprint ?? "—"}</dd>
+                            </dl>
+                          )}
                           {a.status === "pending" && !isMaker && (
                             <div style={{ display: "flex", gap: "0.4rem" }}>
                               <button className="btn btn-primary" style={{ fontSize: "0.8rem" }} disabled={decisionBusy === a.approvalId} onClick={() => decideApproval(a.approvalId, "approve")}>
@@ -524,20 +597,11 @@ export function CredentialPanel({
                             <div style={{ display: "flex", flexDirection: "column", gap: "0.4rem" }}>
                               {isRotate && (
                                 <>
-                                  <select
-                                    value={rotateExecuteFor(a.approvalId).secretKind}
-                                    onChange={(e) => updateRotateExecute(a.approvalId, { secretKind: e.target.value as ReplaceableKind })}
-                                  >
-                                    {REPLACEABLE_KINDS.map((k) => (
-                                      <option key={k} value={k}>
-                                        {KIND_LABEL[k]}
-                                      </option>
-                                    ))}
-                                  </select>
-                                  {rotateExecuteFor(a.approvalId).secretKind === "webhook_secret" ? (
+                                  {a.safeRequestSummary?.secretKind === "webhook_secret" ? (
                                     <input
                                       type="password"
-                                      placeholder="New webhook secret value"
+                                      autoComplete="off"
+                                      placeholder="Approved webhook secret value"
                                       value={rotateExecuteFor(a.approvalId).secretValue}
                                       onChange={(e) => updateRotateExecute(a.approvalId, { secretValue: e.target.value })}
                                     />
@@ -545,13 +609,15 @@ export function CredentialPanel({
                                     <>
                                       <input
                                         type="password"
-                                        placeholder="New API key id"
+                                        autoComplete="off"
+                                        placeholder="Approved API key id"
                                         value={rotateExecuteFor(a.approvalId).apiKeyId}
                                         onChange={(e) => updateRotateExecute(a.approvalId, { apiKeyId: e.target.value })}
                                       />
                                       <input
                                         type="password"
-                                        placeholder="New API key secret"
+                                        autoComplete="off"
+                                        placeholder="Approved API key secret"
                                         value={rotateExecuteFor(a.approvalId).apiKeySecret}
                                         onChange={(e) => updateRotateExecute(a.approvalId, { apiKeySecret: e.target.value })}
                                       />
@@ -648,7 +714,7 @@ export function CredentialPanel({
           title={`Request: ${R3_ACTION_LABEL[pendingR3]} for ${displayName}?`}
           description={
             pendingR3 === "rotate"
-              ? "This submits an approval request. A different operator must approve it before you (or anyone with the rotate scope) can execute it, choosing which secret (webhook secret or API key pair) to cut over and supplying its new value at that point."
+              ? "This submits an approval request bound to the exact new material below. The approver sees the kind, window, a masked key id and a fingerprint — never the secret. Governance does not store the material: you (or whoever executes) must re-enter the same values after approval, and anything different is refused."
               : "This submits an approval request. A different operator must approve it before it can be executed. Revoking disables every secret on this credential — there is no automatic replacement."
           }
           danger
@@ -658,9 +724,47 @@ export function CredentialPanel({
             setPendingR3(null);
             setR3Reason("");
             setR3Error(null);
+            clearRotateRequest();
           }}
           onConfirm={() => submitR3Request(pendingR3)}
         >
+          {pendingR3 === "rotate" && (
+            <>
+              <div className="field">
+                <label>Secret kind</label>
+                <select value={rotateKind} onChange={(e) => setRotateKind(e.target.value as ReplaceableKind)}>
+                  {REPLACEABLE_KINDS.map((k) => (
+                    <option key={k} value={k}>
+                      {KIND_LABEL[k]}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              {rotateKind === "webhook_secret" ? (
+                <>
+                  <div className="field">
+                    <label>New value</label>
+                    <input type="password" value={rotateValue} onChange={(e) => setRotateValue(e.target.value)} placeholder="Required" autoComplete="off" />
+                  </div>
+                  <div className="field">
+                    <label>Overlap (hours, 1–72)</label>
+                    <input type="number" min={1} max={72} value={rotateOverlapHours} onChange={(e) => setRotateOverlapHours(e.target.value)} />
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="field">
+                    <label>New API key id</label>
+                    <input type="password" value={rotateApiKeyId} onChange={(e) => setRotateApiKeyId(e.target.value)} placeholder="Required" autoComplete="off" />
+                  </div>
+                  <div className="field">
+                    <label>New API key secret</label>
+                    <input type="password" value={rotateApiKeySecret} onChange={(e) => setRotateApiKeySecret(e.target.value)} placeholder="Required" autoComplete="off" />
+                  </div>
+                </>
+              )}
+            </>
+          )}
           <div className="field">
             <label>Reason</label>
             <textarea value={r3Reason} onChange={(e) => setR3Reason(e.target.value)} rows={2} placeholder="Required" />
