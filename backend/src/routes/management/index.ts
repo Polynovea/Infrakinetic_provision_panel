@@ -900,6 +900,61 @@ export function createManagementRouter(deps: ManagementRouterDeps): Router {
   // operator resubmits the commission fields; they must match the stored
   // desired name/plan/account type/slug, so a repair can finish the approved
   // commission but never repurpose it.
+  // H3 follow-up (found in P1 production certification: commission 8bf62ad4…
+  // projection 'provisioning' vs owner 'decommissioned'). The owner's
+  // platform_access_state is authoritative for whether an existing tenant may
+  // be resumed, so repairability is decided from a FRESH owner registry read
+  // (never the cached reconciliation observation), and it fails closed when
+  // that read cannot be made. Deliberately does not touch the projection: the
+  // desired-vs-owner mismatch stays a surfaced reconciliation fact.
+  type OwnerRepairability =
+    | { repairable: true; ownerPlatformAccessState: string | null }
+    | { repairable: false; ownerPlatformAccessState: string | null; blockedReason: string };
+
+  async function ownerRepairability(
+    tenantId: string | undefined | null,
+    ctx: NonNullable<import("express").Request["operatorContext"]>,
+  ): Promise<OwnerRepairability> {
+    // No tenant yet (failure before tenant creation): nothing owner-side to
+    // contradict the repair; the owner's create path handles it.
+    if (!tenantId) return { repairable: true, ownerPlatformAccessState: null };
+    try {
+      const signingKeys = await deps.getManagementSigningKeys();
+      const transportConfig = deps.loadTransportConfig();
+      const { tenant } = await getTenantRegistryEntry(
+        { signingKeys, transportConfig, infrakineticBaseUrl: deps.infrakineticBaseUrl, fetchImpl: deps.fetchImpl },
+        {
+          identifier: tenantId,
+          operatorId: ctx.operatorId,
+          operatorSessionId: ctx.operatorSessionId,
+          operatorRoles: ctx.roles,
+          operatorGrantedScopes: ctx.scopes,
+          correlationId: ctx.correlationId,
+        },
+      );
+      const state = tenant.platform_access_state ?? null;
+      if (state !== "active") {
+        return {
+          repairable: false,
+          ownerPlatformAccessState: state,
+          blockedReason: state
+            ? `Infrakinetic reports this tenant as '${state}'; only an 'active' tenant can be resumed.`
+            : "Infrakinetic did not report this tenant's platform access state; repair is not offered.",
+        };
+      }
+      return { repairable: true, ownerPlatformAccessState: state };
+    } catch (err) {
+      if (err instanceof UnknownTenantError) {
+        return { repairable: false, ownerPlatformAccessState: null, blockedReason: "The commissioned tenant no longer exists at Infrakinetic." };
+      }
+      return {
+        repairable: false,
+        ownerPlatformAccessState: null,
+        blockedReason: "Infrakinetic's current state for this tenant could not be read; repair is not offered until it can be.",
+      };
+    }
+  }
+
   router.post(
     "/tenants/commission-requests/:commissionRequestId/repair",
     requireScope("tenants.commission", deps.auditSink),
@@ -934,6 +989,19 @@ export function createManagementRouter(deps: ManagementRouterDeps): Router {
           res.status(409).json({ error: "COMMISSION_REPAIR_MISMATCH", message: "Repair must resubmit the original commission's name, slug, plan and account type." });
           return;
         }
+        // Fresh authoritative owner check, repeated here — the GET/dialog
+        // state is never authorization. Runs before any ledger operation is
+        // created or anything is dispatched, so an owner-side rejection can
+        // never push the stale projection down the failed-response path.
+        const owner = await ownerRepairability(projection.tenantId, ctx);
+        if (!owner.repairable) {
+          res.status(409).json({
+            error: "COMMISSION_NOT_REPAIRABLE",
+            message: owner.blockedReason,
+            ownerPlatformAccessState: owner.ownerPlatformAccessState,
+          });
+          return;
+        }
 
         const signingKeys = await deps.getManagementSigningKeys();
         const transportConfig = deps.loadTransportConfig();
@@ -966,17 +1034,30 @@ export function createManagementRouter(deps: ManagementRouterDeps): Router {
     requireScope("tenants.commission", deps.auditSink),
     async (req, res, next) => {
       try {
+        const ctx = req.operatorContext;
+        if (!ctx) {
+          res.status(403).json({ error: "NOT_AUTHENTICATED" });
+          return;
+        }
         const projection = await deps.commissionedTenants.getByCommissionRequestId(req.params.commissionRequestId);
         if (!projection || projection.provenance !== "governance_commissioned") {
           res.status(404).json({ error: "COMMISSION_REQUEST_NOT_FOUND" });
           return;
         }
+        const inProvisioning = projection.lifecycleState === "provisioning";
+        const owner = inProvisioning ? await ownerRepairability(projection.tenantId, ctx) : undefined;
         res.status(200).json({
           commissionRequest: {
             commissionRequestId: req.params.commissionRequestId,
             tenantId: projection.tenantId ?? null,
             lifecycleState: projection.lifecycleState,
-            repairable: projection.lifecycleState === "provisioning",
+            repairable: inProvisioning && owner?.repairable === true,
+            ownerPlatformAccessState: owner?.ownerPlatformAccessState ?? null,
+            repairBlockedReason: !inProvisioning
+              ? `Only a commission still in 'provisioning' can be repaired; this one is '${projection.lifecycleState}'.`
+              : owner && !owner.repairable
+                ? owner.blockedReason
+                : null,
             desiredName: projection.desiredName,
             desiredSlug: projection.desiredSlug ?? null,
             desiredPlan: projection.desiredPlan,
