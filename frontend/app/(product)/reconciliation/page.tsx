@@ -21,6 +21,9 @@ interface CommissionRequestSummary {
   tenantId: string | null;
   lifecycleState: string;
   repairable: boolean;
+  /** H3 follow-up — fresh owner truth; absent from an older backend build. */
+  ownerPlatformAccessState?: string | null;
+  repairBlockedReason?: string | null;
   desiredName: string;
   desiredSlug: string | null;
   desiredPlan: string;
@@ -162,12 +165,24 @@ function RepairCommissionDialog({
               {summary.desiredPlan} ({summary.accountType})
             </dd>
             <dt style={{ color: "var(--text-muted)" }}>Governance lifecycle</dt>
-            <dd style={{ margin: 0 }}>
+            <dd style={{ margin: "0 0 0.4rem" }}>
               <StatusBadge value={summary.lifecycleState} />
             </dd>
+            {summary.tenantId && (
+              <>
+                <dt style={{ color: "var(--text-muted)" }}>Platform access (Infrakinetic, live)</dt>
+                <dd style={{ margin: 0 }}>
+                  {summary.ownerPlatformAccessState ? <StatusBadge value={summary.ownerPlatformAccessState} /> : "Unknown"}
+                </dd>
+              </>
+            )}
           </dl>
           {!repairable && (
-            <p className="overlay-note">Only a commission still in provisioning can be repaired; this one is {summary.lifecycleState}.</p>
+            <p className="overlay-note" style={{ color: "var(--warning-fg)" }}>
+              This commission can no longer be repaired.{" "}
+              {summary.repairBlockedReason ??
+                `Only a commission still in provisioning can be repaired; this one is ${summary.lifecycleState}.`}
+            </p>
           )}
           {repairable && (
             <>

@@ -64,18 +64,47 @@ describe("POST /management/v1/tenants/commission and /tenants/:tenantId/{suspend
     );
   });
 
-  function appWithAdmin(overrides: { scopes?: Scope[] } = {}) {
+  type OwnerState = "active" | "suspended" | "decommissioned" | "missing" | "unavailable";
+
+  // H3 follow-up — a fake Infrakinetic that answers ONLY the fresh owner
+  // registry read (GET /management/v1/tenants/:id). It is wired as the
+  // router's fetchImpl; commission dispatch (requestTenantCommission) does
+  // not use it and still targets the unreachable base URL, so any leaked
+  // dispatch would surface as a ledger operation.
+  function fakeOwner(state: OwnerState) {
+    const reads: string[] = [];
+    const fetchImpl = (async (input: string | URL) => {
+      const url = new URL(String(input));
+      reads.push(url.pathname);
+      if (state === "unavailable") throw new Error("owner unreachable");
+      const match = url.pathname.match(/^\/management\/v1\/tenants\/([^/]+)$/);
+      if (!match) return { status: 404, json: async () => ({ error: "NOT_FOUND" }) } as Response;
+      if (state === "missing") return { status: 404, json: async () => ({ error: "UNKNOWN_TENANT" }) } as Response;
+      return {
+        status: 200,
+        json: async () => ({
+          tenant: { id: decodeURIComponent(match[1]), name: "Acme", slug: "acme", tenant_kind: "customer", plan: "pro", status: "trial", platform_access_state: state },
+          observedAt: new Date().toISOString(), source: "infrakinetic-live", freshness: "live",
+        }),
+      } as Response;
+    }) as typeof fetch;
+    return { fetchImpl, reads };
+  }
+
+  function appWithAdmin(overrides: { scopes?: Scope[]; ownerState?: OwnerState } = {}) {
     const op = activeAdminOperator({
-      scopes: overrides.scopes ?? ["tenants.commission", "tenants.suspend", "tenants.resume", "tenants.decommission"],
+      scopes: overrides.scopes ?? ["tenants.read", "tenants.commission", "tenants.suspend", "tenants.resume", "tenants.decommission"],
     });
+    const owner = fakeOwner(overrides.ownerState ?? "active");
     const { app: server } = buildTestApp(provider, [op], {
       ledger,
       commissionedTenants,
       getManagementSigningKeys: () => Promise.resolve(signingKeys),
       loadTransportConfig: () => TRANSPORT_CONFIG,
       infrakineticBaseUrl: "http://127.0.0.1:0",
+      fetchImpl: owner.fetchImpl,
     });
-    return { server, op };
+    return { server, op, ownerReads: owner.reads };
   }
 
   describe("POST /tenants/commission", () => {
@@ -235,18 +264,23 @@ describe("POST /management/v1/tenants/commission and /tenants/:tenantId/{suspend
       sendInvite: true, initialAdmin: { name: "Ada", email: "ada@example.invalid" },
     };
 
-    async function projectionAt(state: "provisioning" | "active") {
+    const TENANT = "ffffffff-0000-4fff-8fff-000000000001";
+
+    async function projectionAt(state: "provisioning" | "active", opts: { withTenant?: boolean } = {}) {
       const created = await commissionedTenants.createForCommissionRequest({
         commissionRequestId: CRID, desiredName: "Acme", desiredSlug: "acme", desiredPlan: "pro", accountType: "live",
         responsibleOperatorId: activeAdminOperator().operatorId,
       });
       await commissionedTenants.transitionLifecycleState(created.projectionId, { toState: "approved" });
-      await commissionedTenants.transitionLifecycleState(created.projectionId, { toState: "provisioning", tenantId: "ffffffff-0000-4fff-8fff-000000000001" });
+      await commissionedTenants.transitionLifecycleState(created.projectionId, {
+        toState: "provisioning",
+        tenantId: opts.withTenant === false ? undefined : TENANT,
+      });
       if (state === "active") await commissionedTenants.transitionLifecycleState(created.projectionId, { toState: "active" });
     }
 
-    async function post(body: Record<string, unknown>, crid = CRID) {
-      const { server, op } = appWithAdmin();
+    async function post(body: Record<string, unknown>, crid = CRID, ownerState: OwnerState = "active") {
+      const { server, op } = appWithAdmin({ ownerState });
       const token = await signTestToken(keyPair, { subject: op.cognitoSub });
       return request(server).post(`/management/v1/tenants/commission-requests/${crid}/repair`).set("authorization", `Bearer ${token}`).send(body);
     }
@@ -301,7 +335,8 @@ describe("POST /management/v1/tenants/commission and /tenants/:tenantId/{suspend
       const res = await request(server).get(`/management/v1/tenants/commission-requests/${CRID}`).set("authorization", `Bearer ${token}`);
       expect(res.status).toBe(200);
       expect(res.body.commissionRequest).toEqual({
-        commissionRequestId: CRID, tenantId: "ffffffff-0000-4fff-8fff-000000000001", lifecycleState: "provisioning", repairable: true,
+        commissionRequestId: CRID, tenantId: TENANT, lifecycleState: "provisioning", repairable: true,
+        ownerPlatformAccessState: "active", repairBlockedReason: null,
         desiredName: "Acme", desiredSlug: "acme", desiredPlan: "pro", accountType: "live",
       });
       expect(JSON.stringify(res.body)).not.toMatch(/@/);
@@ -315,6 +350,67 @@ describe("POST /management/v1/tenants/commission and /tenants/:tenantId/{suspend
       expect(known.body.commissionRequest.repairable).toBe(false);
       const unknown = await request(server).get("/management/v1/tenants/commission-requests/00000000-0000-4000-8000-000000000000").set("authorization", `Bearer ${token}`);
       expect(unknown.status).toBe(404);
+    });
+
+    // H3 follow-up (P1 production finding: projection 'provisioning' vs owner
+    // 'decommissioned'). Repairability is decided from a FRESH owner read.
+    describe("authoritative owner state", () => {
+      async function getSummary(ownerState: OwnerState) {
+        const { server, op, ownerReads } = appWithAdmin({ ownerState });
+        const token = await signTestToken(keyPair, { subject: op.cognitoSub });
+        const res = await request(server).get(`/management/v1/tenants/commission-requests/${CRID}`).set("authorization", `Bearer ${token}`);
+        return { res, ownerReads };
+      }
+
+      it("projection provisioning + owner active → repairable, from a fresh owner read", async () => {
+        await projectionAt("provisioning");
+        const { res, ownerReads } = await getSummary("active");
+        expect(res.body.commissionRequest).toMatchObject({ repairable: true, ownerPlatformAccessState: "active" });
+        expect(ownerReads).toEqual([`/management/v1/tenants/${TENANT}`]);
+      });
+
+      it.each(["decommissioned", "suspended"] as const)("projection provisioning + owner %s → NOT repairable, with the reason", async (state) => {
+        await projectionAt("provisioning");
+        const { res } = await getSummary(state);
+        expect(res.body.commissionRequest).toMatchObject({ lifecycleState: "provisioning", repairable: false, ownerPlatformAccessState: state });
+        expect(res.body.commissionRequest.repairBlockedReason).toContain(state);
+      });
+
+      it.each(["unavailable", "missing"] as const)("owner state %s → fails closed (not repairable)", async (state) => {
+        await projectionAt("provisioning");
+        const { res } = await getSummary(state);
+        expect(res.status).toBe(200);
+        expect(res.body.commissionRequest.repairable).toBe(false);
+        expect(res.body.commissionRequest.repairBlockedReason).toEqual(expect.any(String));
+      });
+
+      it("the projection is never mutated to hide the mismatch", async () => {
+        await projectionAt("provisioning");
+        await getSummary("decommissioned");
+        expect((await commissionedTenants.getByCommissionRequestId(CRID))?.lifecycleState).toBe("provisioning");
+      });
+
+      it.each(["decommissioned", "suspended", "unavailable", "missing"] as const)(
+        "POST with owner %s → 409 COMMISSION_NOT_REPAIRABLE; no repair operation is created or dispatched",
+        async (state) => {
+          await projectionAt("provisioning");
+          const res = await post(BODY, CRID, state);
+          expect(res.status).toBe(409);
+          expect(res.body.error).toBe("COMMISSION_NOT_REPAIRABLE");
+          expect(await ledger.getByIdempotencyKey("repair-1")).toBeUndefined();
+          expect((await commissionedTenants.getByCommissionRequestId(CRID))?.lifecycleState).toBe("provisioning");
+        },
+      );
+
+      it("no tenant yet (failure before tenant creation) + provisioning → repair stays allowed, no owner read needed", async () => {
+        await projectionAt("provisioning", { withTenant: false });
+        const { res, ownerReads } = await getSummary("unavailable");
+        expect(res.body.commissionRequest).toMatchObject({ tenantId: null, repairable: true });
+        expect(ownerReads).toEqual([]);
+        const posted = await post(BODY, CRID, "unavailable");
+        expect(posted.body.error).not.toBe("COMMISSION_NOT_REPAIRABLE");
+        expect((await ledger.getByIdempotencyKey("repair-1"))?.targetResourceId).toBe(CRID);
+      });
     });
   });
 
