@@ -107,6 +107,14 @@ export class SessionRevokedError extends ManagementAuthError {
   }
 }
 
+export class BearerAuthDisabledError extends ManagementAuthError {
+  readonly code = "BEARER_AUTH_DISABLED";
+  readonly httpStatus = 401;
+  constructor() {
+    super("Raw operator bearer authentication is disabled in this environment; use the Governance browser session.");
+  }
+}
+
 export class InsufficientPrivilegeError extends ManagementAuthError {
   readonly code = "INSUFFICIENT_PRIVILEGE";
   readonly httpStatus = 403;

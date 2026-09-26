@@ -292,6 +292,30 @@ describe("POST /management/v1/tenants/commission and /tenants/:tenantId/{suspend
       const res = await request(server).post(`/management/v1/tenants/commission-requests/${CRID}/repair`).set("authorization", `Bearer ${token}`).send(BODY);
       expect(res.status).toBe(403);
     });
+
+    // H3 operator surface — the read the repair dialog prefills from.
+    it("GET returns the stored approved commission (no admin PII) and whether it is repairable", async () => {
+      await projectionAt("provisioning");
+      const { server, op } = appWithAdmin();
+      const token = await signTestToken(keyPair, { subject: op.cognitoSub });
+      const res = await request(server).get(`/management/v1/tenants/commission-requests/${CRID}`).set("authorization", `Bearer ${token}`);
+      expect(res.status).toBe(200);
+      expect(res.body.commissionRequest).toEqual({
+        commissionRequestId: CRID, tenantId: "ffffffff-0000-4fff-8fff-000000000001", lifecycleState: "provisioning", repairable: true,
+        desiredName: "Acme", desiredSlug: "acme", desiredPlan: "pro", accountType: "live",
+      });
+      expect(JSON.stringify(res.body)).not.toMatch(/@/);
+    });
+
+    it("GET reports a finished commission as not repairable, and 404s an unknown one", async () => {
+      await projectionAt("active");
+      const { server, op } = appWithAdmin();
+      const token = await signTestToken(keyPair, { subject: op.cognitoSub });
+      const known = await request(server).get(`/management/v1/tenants/commission-requests/${CRID}`).set("authorization", `Bearer ${token}`);
+      expect(known.body.commissionRequest.repairable).toBe(false);
+      const unknown = await request(server).get("/management/v1/tenants/commission-requests/00000000-0000-4000-8000-000000000000").set("authorization", `Bearer ${token}`);
+      expect(unknown.status).toBe(404);
+    });
   });
 
   // Audit remediation M5 — a same-key timeout retry of a commission must hash

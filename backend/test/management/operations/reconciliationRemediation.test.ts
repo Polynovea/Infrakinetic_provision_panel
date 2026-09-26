@@ -44,6 +44,8 @@ interface FakeOptions {
   receipts?: Record<string, Record<string, FakeReceipt>>;
   /** receipt reads that hit a 404 WITHOUT the owner's UNKNOWN_* code (a proxy/misroute) */
   proxy404Keys?: string[];
+  /** receipt reads the owner refuses with its L10 target-binding 409 */
+  bindingMismatchKeys?: string[];
 }
 
 const UNKNOWN_CODES: Record<string, string> = {
@@ -53,11 +55,21 @@ const UNKNOWN_CODES: Record<string, string> = {
   "credential-admin-commands": "UNKNOWN_CREDENTIAL_ADMIN_COMMAND",
 };
 
+function decodeAssertionClaims(init?: RequestInit): Record<string, unknown> {
+  const headers = new Headers(init?.headers);
+  const token = (headers.get("authorization") ?? "").replace(/^Bearer\s+/i, "");
+  const payload = token.split(".")[1];
+  return payload ? JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) : {};
+}
+
 function buildFakeInfrakinetic(options: FakeOptions = {}) {
   const calls: string[] = [];
-  const fetchImpl = (async (input: string | URL) => {
+  /** L10 — the signed target claims each call carried, by path */
+  const claims: Record<string, Record<string, unknown>> = {};
+  const fetchImpl = (async (input: string | URL, init?: RequestInit) => {
     const url = new URL(String(input));
     calls.push(url.pathname);
+    claims[url.pathname] = decodeAssertionClaims(init);
     if (url.pathname === `/management/v1/tenants/${TENANT_ID}`) {
       return {
         status: 200,
@@ -78,13 +90,16 @@ function buildFakeInfrakinetic(options: FakeOptions = {}) {
       const [, segment, rawKey] = receiptMatch;
       const key = decodeURIComponent(rawKey);
       if (options.proxy404Keys?.includes(key)) return { status: 404, json: async () => ({ error: "NOT_FOUND" }) } as Response;
+      if (options.bindingMismatchKeys?.includes(key)) {
+        return { status: 409, json: async () => ({ error: "MANAGEMENT_TARGET_RESOURCE_MISMATCH" }) } as Response;
+      }
       const receipt = options.receipts?.[segment]?.[key];
       if (!receipt) return { status: 404, json: async () => ({ error: UNKNOWN_CODES[segment] }) } as Response;
       return { status: 200, json: async () => ({ command: { idempotencyKey: key, status: receipt.status, tenantId: receipt.tenantId ?? null } }) } as Response;
     }
     return { status: 404, json: async () => ({ error: "NOT_FOUND" }) } as Response;
   }) as typeof fetch;
-  return { fetchImpl, calls };
+  return { fetchImpl, calls, claims };
 }
 
 async function buildFixtureSigningKeys(): Promise<ManagementSigningKeySet> {
@@ -314,5 +329,62 @@ describe("reconciliation — audit remediation (M3 / L4 / H3)", () => {
     const drift = await listDrift(deps(fetchImpl), { tenantId: TENANT_ID, ...OPERATOR_PARAMS });
 
     expect(drift.lifecycleMismatch).toEqual([]);
+  });
+
+  // L10 — every owner read carries an explicit, bound target; nothing gets
+  // fleet visibility through a tenant-oriented route.
+  describe("L10 read targets", () => {
+    it("identity/credential receipt reads are minted with the operation's own tenant + resource, not a fleet sentinel", async () => {
+      await commissionedTenants.createLegacyExisting({ tenantId: TENANT_ID, createdAt: LONG_AGO, observedPlatformAccessState: "active" });
+      await seedAt("partially_completed", {
+        idempotencyKey: "mfa-bound", requestedAction: "identity.mfa.reset", targetResourceType: "identity_user", targetResourceId: "user-1", riskClass: "R3",
+      });
+      const { fetchImpl, claims } = buildFakeInfrakinetic({ receipts: { "identity-admin-commands": { "mfa-bound": { status: "completed" } } } });
+
+      await reconcileTenant(deps(fetchImpl), { idempotencyKey: "recheck-l10a", tenantId: TENANT_ID, ...OPERATOR_PARAMS });
+
+      expect(claims["/management/v1/identity-admin-commands/mfa-bound"]).toMatchObject({
+        target_tenant_id: TENANT_ID, target_resource_type: "identity_user", target_resource_id: "user-1",
+      });
+      expect(claims["/management/v1/identity-admin-commands/mfa-bound"]).not.toHaveProperty("target_engine");
+    });
+
+    it("an early commission receipt read is bound to the commission request, with no invented tenant target", async () => {
+      await provisioningProjection(undefined);
+      await seedAt("running", { idempotencyKey: "commission-l10", ...COMMISSION_OP });
+      const { fetchImpl, claims } = buildFakeInfrakinetic({
+        receipts: { "tenant-lifecycle-commands": { "commission-l10": { status: "accepted" } } },
+      });
+
+      await reconcileCommissionRequest(deps(fetchImpl), { idempotencyKey: "recheck-l10b", commissionRequestId: COMMISSION_REQUEST_ID, ...OPERATOR_PARAMS });
+
+      const sent = claims["/management/v1/tenant-lifecycle-commands/commission-l10"];
+      expect(sent).toMatchObject({ target_resource_type: "commission_request", target_resource_id: COMMISSION_REQUEST_ID });
+      expect(sent).not.toHaveProperty("target_tenant_id");
+    });
+
+    it("an owner target-binding refusal (409) is surfaced as unknown — never resolved either way", async () => {
+      await commissionedTenants.createLegacyExisting({ tenantId: TENANT_ID, createdAt: LONG_AGO, observedPlatformAccessState: "active" });
+      const stuck = await seedAt("partially_completed", { idempotencyKey: "bound-409" });
+      const { fetchImpl } = buildFakeInfrakinetic({ bindingMismatchKeys: ["bound-409"] });
+
+      const result = await reconcileTenant(deps(fetchImpl), { idempotencyKey: "recheck-l10c", tenantId: TENANT_ID, ...OPERATOR_PARAMS });
+
+      expect(result.resolvedOperations).toEqual([]);
+      expect(result.remainingDrift).toEqual([expect.objectContaining({ operationId: stuck.operationId, class: "transport_ambiguous" })]);
+      expect((await ledger.getOperation(stuck.operationId)).status).toBe("partially_completed");
+    });
+
+    it("the tenant detail read is addressed to that tenant; the fleet list is addressed to the fleet with no tenant binding", async () => {
+      await commissionedTenants.createLegacyExisting({ tenantId: TENANT_ID, createdAt: LONG_AGO, observedPlatformAccessState: "active" });
+      const { fetchImpl, claims } = buildFakeInfrakinetic();
+
+      await listDrift(deps(fetchImpl), { tenantId: TENANT_ID, ...OPERATOR_PARAMS });
+      await listDrift(deps(fetchImpl), { ...OPERATOR_PARAMS });
+
+      expect(claims[`/management/v1/tenants/${TENANT_ID}`]).toMatchObject({ target_resource_type: "tenant", target_resource_id: TENANT_ID });
+      expect(claims["/management/v1/tenants"]).toMatchObject({ target_resource_type: "tenant_fleet" });
+      expect(claims["/management/v1/tenants"]).not.toHaveProperty("target_tenant_id");
+    });
   });
 });

@@ -1,5 +1,5 @@
 import request from "supertest";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { CognitoIdentityProvider } from "../../src/identity/providers/cognitoIdentityProvider.js";
 import { buildTestApp, type TestAppHandle } from "../helpers/testApp.js";
@@ -92,6 +92,49 @@ describe("requireManagementApiAuth — end-to-end through a real Express router"
     expect(res.status).toBe(200);
     expect(res.body.operator.operatorId).toBe(op.operatorId);
     expect(res.body.operator.roles).toEqual(["platform_admin"]);
+  });
+
+  // Audit remediation L8 — raw bearer auth is a controlled capability.
+  describe("production bearer capability (L8)", () => {
+    afterEach(() => {
+      vi.unstubAllEnvs();
+    });
+
+    it("production with the capability unset: a genuinely valid Cognito bearer token is rejected", async () => {
+      vi.stubEnv("NODE_ENV", "production");
+      vi.stubEnv("GOVERNANCE_OPERATOR_BEARER_AUTH", "");
+      const op = activeAdminOperator();
+      const { app: server } = app([op]);
+      const token = await signTestToken(keyPair, { subject: op.cognitoSub });
+      const res = await request(server).get("/management/v1/whoami").set("authorization", `Bearer ${token}`);
+      expect(res.status).toBe(401);
+      expect(res.body.error).toBe("BEARER_AUTH_DISABLED");
+      expect(res.body.operator).toBeUndefined();
+    });
+
+    it.each(["true", "1", "enabled", "ENABLED-FOR-TOOLING"])("production with an ambiguous value (%s) fails closed", async (value) => {
+      vi.stubEnv("NODE_ENV", "production");
+      vi.stubEnv("GOVERNANCE_OPERATOR_BEARER_AUTH", value);
+      const op = activeAdminOperator();
+      const { app: server } = app([op]);
+      const token = await signTestToken(keyPair, { subject: op.cognitoSub });
+      const res = await request(server).get("/management/v1/whoami").set("authorization", `Bearer ${token}`);
+      expect(res.status).toBe(401);
+      expect(res.body.error).toBe("BEARER_AUTH_DISABLED");
+    });
+
+    it("production explicitly enabled for tooling: bearer works, with every operator check still applied", async () => {
+      vi.stubEnv("NODE_ENV", "production");
+      vi.stubEnv("GOVERNANCE_OPERATOR_BEARER_AUTH", "enabled-for-tooling");
+      const active = activeAdminOperator();
+      const disabled = disabledOperator();
+      const { app: server } = app([active, disabled]);
+      const ok = await request(server).get("/management/v1/whoami").set("authorization", `Bearer ${await signTestToken(keyPair, { subject: active.cognitoSub })}`);
+      expect(ok.status).toBe(200);
+      const denied = await request(server).get("/management/v1/whoami").set("authorization", `Bearer ${await signTestToken(keyPair, { subject: disabled.cognitoSub })}`);
+      expect(denied.status).toBe(403);
+      expect(denied.body.error).toBe("OPERATOR_DISABLED");
+    });
   });
 
   it("rejects an unknown route under /management/v1 with 404 — no permissive catch-all", async () => {

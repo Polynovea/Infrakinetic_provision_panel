@@ -56,6 +56,8 @@ export interface DriftStuckOperation {
   requestedAction: string;
   targetTenantId?: string;
   targetEngine?: string;
+  targetResourceType?: string;
+  targetResourceId?: string;
   class: StuckOperationDriftClass;
   stage?: string;
   expected?: unknown;
@@ -78,10 +80,15 @@ export interface DriftDesiredProvisionedMismatch {
 // Audit remediation M3 — master plan §64's FIRST 1A.10 drift class, "desired
 // state differs from owner-provisioned state", for the lifecycle itself: the
 // Governance projection's desired lifecycle_state vs the owner's freshly
-// observed platform_access_state. SURFACE-ONLY: locked decision §3.7 of
-// Phase1A.10_Ground_Truth_and_Scoping makes the repair a refresh of the
-// observed cache, never a lifecycle transition, so an operator decides how
-// to converge desired intent (new lifecycle request, commission repair).
+// observed platform_access_state. SURFACE-ONLY. Locked decision §3.7 of
+// Phase1A.10_Ground_Truth_and_Scoping lets reconciliation automatically
+// repair provisioned!=effective drift by calling refreshObservedState() —
+// refreshing Governance's observed cache from fresh owner truth — but never
+// by a lifecycle transition and never by replaying the owner mutation. That
+// refresh path is unchanged. This mismatch is the separate question of
+// Governance's DESIRED lifecycle vs owner truth; reconciliation never issues
+// suspend/resume/decommission to erase it — an operator decides (new
+// lifecycle request, commission repair).
 export interface DriftLifecycleMismatch {
   tenantId: string;
   projectionLifecycleState: string;
@@ -126,7 +133,12 @@ export interface ListDriftParams {
 //     partial) commission awaiting completion/repair — not drift; owner
 //     'suspended'/'decommissioned' means a later lifecycle action succeeded
 //     at the owner while the projection could not follow (the M4 case).
-//   - other transitional states: a mutation in flight, not drift (§3.7).
+//     NOTE: this is a deliberate audit-driven EXTENSION of §3.7, not
+//     something §3.7 already said — §3.7 skips every transitional state,
+//     including provisioning. Without it the M4 stranded projection is
+//     invisible to reconciliation. It is surface-only, so it widens what is
+//     reported, never what reconciliation does.
+//   - other transitional states: a mutation in flight, not drift (as §3.7).
 export function isLifecycleDrift(
   lifecycleState: string,
   observed: "active" | "suspended" | "decommissioned" | undefined,
@@ -197,6 +209,10 @@ function classifyStuckOperation(op: ManagementOperationRecord): DriftStuckOperat
     requestedAction: op.requestedAction,
     targetTenantId: op.targetTenantId,
     targetEngine: op.targetEngine,
+    // H3 — lets the operator surface address a commission op by its
+    // commission request (the repair action) without inspecting the ledger.
+    targetResourceType: op.targetResourceType,
+    targetResourceId: op.targetResourceId,
     stage,
   };
   if (op.status === "submitted" || op.status === "accepted") return { ...base, class: "stranded_before_dispatch" };

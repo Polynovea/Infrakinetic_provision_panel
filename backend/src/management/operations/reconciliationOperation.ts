@@ -169,18 +169,28 @@ type ReceiptLookup =
   | { kind: "not_found" }
   | { kind: "unknown"; detail: string };
 
-// Honest sentinel, same reasoning tenantRegistryQuery.ts's own
-// TENANT_REGISTRY_TARGET comment gives: a receipt lookup by idempotencyKey
-// isn't really engine-scoped, but target_engine is a required claim on
-// every assertion, and none of the receipt routes check it.
-const RECONCILIATION_RECEIPT_TARGET = "reconciliation-receipt";
+// Audit remediation L10 — Infrakinetic returns a receipt only to an
+// assertion bound to the receipt's own tenant (or, for a commission receipt,
+// its commission request). The read is therefore minted with the stranded
+// operation's OWN signed target — exactly what the original mutation was
+// addressed to — never a fleet-wide sentinel. A mismatch comes back 409,
+// which lands in "unknown" below (surfaced, never resolved).
+type ReceiptTarget = Pick<ManagementOperationRecord,"targetTenantId" | "targetEngine" | "targetResourceType" | "targetResourceId">;
+
+function receiptAssertionTarget(op: ReceiptTarget) {
+  const target = op.targetResourceType === "engine" || (!op.targetResourceType && op.targetEngine)
+    ? { targetEngine: op.targetEngine }
+    : { targetResourceType: op.targetResourceType, targetResourceId: op.targetResourceId };
+  return { ...target, ...(op.targetTenantId ? { targetTenantId: op.targetTenantId } : {}) };
+}
 
 async function readCommandReceipt(
   deps: ReconciliationOperationDeps,
   params: ReconcileCallerParams,
   family: ReceiptFamily,
-  idempotencyKey: string,
+  op: ReceiptTarget & { idempotencyKey: string },
 ): Promise<ReceiptLookup> {
+  const idempotencyKey = op.idempotencyKey;
   const receiptPath = `${MANAGEMENT_V1_PREFIX}/${family.pathSegment}/${encodeURIComponent(idempotencyKey)}`;
   let result;
   try {
@@ -192,7 +202,7 @@ async function readCommandReceipt(
       operatorRoles: params.operatorRoles,
       operatorGrantedScopes: params.operatorGrantedScopes,
       requestedScopes: [family.scope],
-      targetEngine: RECONCILIATION_RECEIPT_TARGET,
+      ...receiptAssertionTarget(op),
       requestedAction: family.readAction,
       correlationId: params.correlationId,
     });
@@ -396,7 +406,7 @@ async function resolveStuckOperation(
     return remaining(cls, "no durable owner-side receipt exists for this command family (platform.engine-state.set predates the 1A.8 standing-receipt requirement) — resolve manually");
   }
 
-  const lookup = await readCommandReceipt(deps, params, family, op.idempotencyKey);
+  const lookup = await readCommandReceipt(deps, params, family, op);
 
   if (lookup.kind === "unknown") {
     return remaining(cls, `could not read the owner-side receipt (${lookup.detail}) — recheck later`);

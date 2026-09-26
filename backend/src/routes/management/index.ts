@@ -957,6 +957,42 @@ export function createManagementRouter(deps: ManagementRouterDeps): Router {
     },
   );
 
+  // H3 operator surface — what the repair dialog shows and prefills: the
+  // stored, approved commission (Governance-owned desired fields only; the
+  // initial admin's PII was never stored, per 0006). Read-only, R0; gated on
+  // the same scope as the repair it exists to prefill.
+  router.get(
+    "/tenants/commission-requests/:commissionRequestId",
+    requireScope("tenants.commission", deps.auditSink),
+    async (req, res, next) => {
+      try {
+        const projection = await deps.commissionedTenants.getByCommissionRequestId(req.params.commissionRequestId);
+        if (!projection || projection.provenance !== "governance_commissioned") {
+          res.status(404).json({ error: "COMMISSION_REQUEST_NOT_FOUND" });
+          return;
+        }
+        res.status(200).json({
+          commissionRequest: {
+            commissionRequestId: req.params.commissionRequestId,
+            tenantId: projection.tenantId ?? null,
+            lifecycleState: projection.lifecycleState,
+            repairable: projection.lifecycleState === "provisioning",
+            desiredName: projection.desiredName,
+            desiredSlug: projection.desiredSlug ?? null,
+            desiredPlan: projection.desiredPlan,
+            accountType: projection.accountType,
+          },
+        });
+      } catch (err) {
+        if (err instanceof DatabaseUnavailableError) {
+          res.status(err.httpStatus).json({ error: err.code, message: err.message });
+          return;
+        }
+        next(err);
+      }
+    },
+  );
+
   const TENANT_TRANSITION_ROUTES = [
     { segment: "suspend", scope: "tenants.suspend", fn: requestTenantSuspend },
     { segment: "resume", scope: "tenants.resume", fn: requestTenantResume },
