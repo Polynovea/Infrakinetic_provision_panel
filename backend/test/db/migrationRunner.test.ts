@@ -24,6 +24,13 @@ const migration0010Sql = readFileSync(
   fileURLToPath(new URL("../../migrations/0010_retire_tenant_plan_write_scope.sql", import.meta.url)),
   "utf8",
 );
+// Audit remediation M6 — 0014 is PL/pgSQL triggers, which pg-mem cannot
+// execute at all; it is certified against real Postgres by
+// provisioning/003_verify_0014_append_only.sql instead.
+const migration0014Sql = readFileSync(
+  fileURLToPath(new URL("../../migrations/0014_audit_append_only_enforcement.sql", import.meta.url)),
+  "utf8",
+);
 
 // pg-mem does not preserve PostgreSQL's auto-generated name for 0001's
 // inline operator_scopes CHECK constraint. 0008 correctly drops that real
@@ -49,6 +56,7 @@ async function runMigrationsWithPgMem0008FidelityGap(client: Parameters<typeof r
   for (const [id, sql] of [
     ["0008_operator_scopes_lifecycle_and_plan_scopes.sql", migration0008Sql],
     ["0010_retire_tenant_plan_write_scope.sql", migration0010Sql],
+    ["0014_audit_append_only_enforcement.sql", migration0014Sql],
   ] as const) {
     const checksum = createHash("sha256").update(sql, "utf8").digest("hex");
     await client.query(
@@ -79,8 +87,11 @@ describe("db/migrationRunner", () => {
       "0010_retire_tenant_plan_write_scope.sql",
       "0011_step_up_transactions.sql",
       "0012_management_approvals.sql",
+      "0013_management_approvals_safe_request_summary.sql",
+      "0014_audit_append_only_enforcement.sql",
     ]);
-    expect(results.filter((r) => !["0008_operator_scopes_lifecycle_and_plan_scopes.sql", "0010_retire_tenant_plan_write_scope.sql"].includes(r.id)).every((r) => r.applied)).toBe(true);
+    expect(results.filter((r) => !["0008_operator_scopes_lifecycle_and_plan_scopes.sql", "0010_retire_tenant_plan_write_scope.sql", "0014_audit_append_only_enforcement.sql"].includes(r.id)).every((r) => r.applied)).toBe(true);
+    expect(results.find((r) => r.id === "0014_audit_append_only_enforcement.sql")?.applied).toBe(false);
     expect(results.find((r) => r.id === "0008_operator_scopes_lifecycle_and_plan_scopes.sql")?.applied).toBe(false);
     expect(results.find((r) => r.id === "0010_retire_tenant_plan_write_scope.sql")?.applied).toBe(false);
 
@@ -185,6 +196,8 @@ describe("db/migrationRunner", () => {
       { id: "0010_retire_tenant_plan_write_scope.sql", applied: false },
       { id: "0011_step_up_transactions.sql", applied: true },
       { id: "0012_management_approvals.sql", applied: true },
+      { id: "0013_management_approvals_safe_request_summary.sql", applied: true },
+      { id: "0014_audit_append_only_enforcement.sql", applied: false },
     ]);
   });
 
@@ -226,6 +239,8 @@ describe("db/migrationRunner", () => {
       { id: "0010_retire_tenant_plan_write_scope.sql", applied: false },
       { id: "0011_step_up_transactions.sql", applied: true },
       { id: "0012_management_approvals.sql", applied: true },
+      { id: "0013_management_approvals_safe_request_summary.sql", applied: true },
+      { id: "0014_audit_append_only_enforcement.sql", applied: false },
     ]);
 
     // Idempotent from here on, same as every other migration.

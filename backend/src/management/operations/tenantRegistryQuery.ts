@@ -99,19 +99,23 @@ export type TenantRegistryListResult = FreshnessEnvelope & { tenants: TenantRegi
 export type TenantRegistryDetailResult = FreshnessEnvelope & { tenant: TenantRegistryEntry };
 export type TenantRegistryUsersResult = FreshnessEnvelope & { tenantId: string; users: TenantRegistryUser[] };
 
-// No engine is involved in a tenant-registry read; target_engine is a
-// required claim on every management assertion (managementAssertionIssuer.ts),
-// so this fixed, honest sentinel is used instead of a real engine key —
-// Infrakinetic's GET /tenants routes don't check target_engine (only the
-// engine-state PUT mutation route does), matching how GET /engines/catalog
-// is unchecked on that axis too.
-const TENANT_REGISTRY_TARGET = "tenant-registry";
+// Audit remediation L10 — registry reads carry an explicit target, and
+// Infrakinetic enforces it. The list is the deliberate fleet contract
+// (addressed to the fleet, never tenant-bound); detail/users are addressed
+// to the one tenant exactly as the route names it (id or slug), so an
+// assertion minted for tenant A can never read tenant B.
+const TENANT_FLEET_TARGET = { targetResourceType: "tenant_fleet", targetResourceId: "all" } as const;
+
+function tenantTarget(identifier: string) {
+  return { targetResourceType: "tenant", targetResourceId: identifier };
+}
 
 async function mintAndCall(
   deps: TenantRegistryQueryDeps,
   params: TenantRegistryQueryParams,
   requestedAction: string,
   path: string,
+  target: { targetResourceType: string; targetResourceId: string },
 ): Promise<{ status: number; body: unknown }> {
   const correlationId = params.correlationId ?? randomUUID();
   const assertion = await mintManagementAssertion(deps.signingKeys, deps.transportConfig, {
@@ -120,7 +124,7 @@ async function mintAndCall(
     operatorRoles: params.operatorRoles,
     operatorGrantedScopes: params.operatorGrantedScopes,
     requestedScopes: ["tenants.read"],
-    targetEngine: TENANT_REGISTRY_TARGET,
+    ...target,
     requestedAction,
     correlationId,
   });
@@ -139,7 +143,7 @@ export async function listTenantRegistry(
   params: TenantRegistryQueryParams,
 ): Promise<TenantRegistryListResult> {
   const path = `${MANAGEMENT_V1_PREFIX}/tenants`;
-  const result = await mintAndCall(deps, params, "tenants.registry.read", path);
+  const result = await mintAndCall(deps, params, "tenants.registry.read", path, TENANT_FLEET_TARGET);
   if (result.status !== 200) {
     throw new UnexpectedManagementApiResponseError(result.status, path);
   }
@@ -151,7 +155,7 @@ export async function getTenantRegistryEntry(
   params: TenantRegistryQueryParams & { identifier: string },
 ): Promise<TenantRegistryDetailResult> {
   const path = `${MANAGEMENT_V1_PREFIX}/tenants/${encodeURIComponent(params.identifier)}`;
-  const result = await mintAndCall(deps, params, "tenants.registry.detail.read", path);
+  const result = await mintAndCall(deps, params, "tenants.registry.detail.read", path, tenantTarget(params.identifier));
   if (result.status === 404) {
     throw new UnknownTenantError(params.identifier);
   }
@@ -166,7 +170,7 @@ export async function getTenantRegistryUsers(
   params: TenantRegistryQueryParams & { identifier: string },
 ): Promise<TenantRegistryUsersResult> {
   const path = `${MANAGEMENT_V1_PREFIX}/tenants/${encodeURIComponent(params.identifier)}/users`;
-  const result = await mintAndCall(deps, params, "tenants.registry.users.read", path);
+  const result = await mintAndCall(deps, params, "tenants.registry.users.read", path, tenantTarget(params.identifier));
   if (result.status === 404) {
     throw new UnknownTenantError(params.identifier);
   }

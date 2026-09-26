@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { Router, type ErrorRequestHandler } from "express";
 
 import type { AuditSink } from "../../identity/auditSink.js";
@@ -55,7 +54,7 @@ import {
   listTenantEngineEntitlements,
 } from "../../management/operations/tenantEngineEntitlementQuery.js";
 import { listDrift } from "../../management/operations/reconciliationQuery.js";
-import { reconcileTenant } from "../../management/operations/reconciliationOperation.js";
+import { reconcileTenant, reconcileCommissionRequest } from "../../management/operations/reconciliationOperation.js";
 import {
   listTenantIdentities,
   getIdentityDetail,
@@ -270,6 +269,10 @@ export function createManagementRouter(deps: ManagementRouterDeps): Router {
     }
   });
 
+  // Clock skew tolerated between Governance and Cognito when comparing the
+  // ID token's auth_time with the step-up transaction's start.
+  const STEP_UP_AUTH_TIME_SKEW_SECONDS = 30;
+
   router.get("/session/step-up/callback", async (req, res, next) => {
     let config: BrowserAuthConfig;
     try {
@@ -383,6 +386,22 @@ export function createManagementRouter(deps: ManagementRouterDeps): Router {
           operatorSessionId: transaction.boundOperatorSessionId, reasonCode: "STEP_UP_SUBJECT_MISMATCH",
         });
         redirectStepUpFailure("forbidden");
+        return;
+      }
+
+      // Audit remediation M8 — prove the re-authentication actually happened
+      // AFTER this step-up began, rather than trusting Cognito to have
+      // honoured prompt=login. A silently reused Hosted UI SSO session yields
+      // an ID token whose auth_time predates the transaction; that must not
+      // be recorded as a fresh re-auth. Missing auth_time fails closed.
+      const authTime = claims.rawClaims.auth_time;
+      const transactionStartedSeconds = Math.floor(new Date(transaction.createdAt).getTime() / 1000);
+      if (typeof authTime !== "number" || authTime < transactionStartedSeconds - STEP_UP_AUTH_TIME_SKEW_SECONDS) {
+        await deps.auditSink.record({
+          eventType: "authz.denied", occurredAt: new Date().toISOString(),
+          operatorSessionId: transaction.boundOperatorSessionId, reasonCode: "STEP_UP_NOT_FRESH",
+        });
+        redirectStepUpFailure("failed");
         return;
       }
 
@@ -629,19 +648,26 @@ export function createManagementRouter(deps: ManagementRouterDeps): Router {
     }
   });
 
-  // 1A.6 — the real vertical. requireStepUp is deliberately NOT used here:
-  // authorize.ts's own header calls it a skeleton and explicitly warns "R3+
-  // actions must not be wired to only this check until the real challenge
-  // exists" — wiring an R4 action to a fake step-up would be worse than not
-  // gating on step-up at all (false assurance). engines.platform_state.write
-  // is granted only to platform_admin/break_glass by ROLE_SCOPE_CEILING
-  // (roles.ts), which is the real control this phase relies on; R3/R4
-  // maker-checker remains 1A.19's deliverable (1A.5's own approval_evidence
-  // column exists precisely so that can be added later without a schema
-  // change).
+  // 1A.6 — the real vertical. Originally shipped without step-up because the
+  // step-up challenge was then only a skeleton (wiring an R4 action to a fake
+  // step-up would have been false assurance). Audit remediation M7: real
+  // Cognito re-auth step-up shipped in 1A.12.4, so that justification is
+  // gone — global engine disable is R4 (master plan §20, "strongest
+  // controls") and now needs a fresh step-up, like every R3 action already
+  // does. Only the R4 transition (desiredState 'disabled') is gated: moving
+  // an engine back to operational/degraded is R2 recovery and must stay fast
+  // during an incident. engines.platform_state.write stays restricted to
+  // platform_admin/break_glass by ROLE_SCOPE_CEILING (roles.ts). R4
+  // maker-checker and the break-glass policy remain 1A.19's deliverable.
+  const requireStepUpForR4EngineState = requireStepUp(300, deps.sessionStore, deps.auditSink);
   router.put(
     "/engine-state/:engineKey",
     requireScope("engines.platform_state.write", deps.auditSink),
+    (req, res, next) => {
+      const desiredState = (req.body as Record<string, unknown> | undefined)?.desiredState;
+      if (desiredState === "disabled") return requireStepUpForR4EngineState(req, res, next);
+      next();
+    },
     async (req, res, next) => {
       try {
         const ctx = req.operatorContext;
@@ -789,6 +815,44 @@ export function createManagementRouter(deps: ManagementRouterDeps): Router {
   // mapping). commissionRequestId is Governance-generated here (not
   // caller-supplied) — the operator's browser has no legitimate reason to
   // mint its own commission identity.
+  type CommissionBody = Omit<Parameters<typeof requestTenantCommission>[1],
+    "operatorId" | "operatorSessionId" | "operatorRoles" | "operatorGrantedScopes" | "commissionRequestId" | "correlationId" | "causationId">;
+
+  // Shared by commission and commission-repair: returns the parsed body, or
+  // writes the 400 and returns undefined.
+  function parseCommissionBody(raw: unknown, res: import("express").Response): CommissionBody | undefined {
+    const body = (raw ?? {}) as Record<string, unknown>;
+    if (typeof body.idempotencyKey !== "string" || body.idempotencyKey.trim() === "") { res.status(400).json({ error: "IDEMPOTENCY_KEY_REQUIRED" }); return undefined; }
+    if (typeof body.reason !== "string" || body.reason.trim() === "") { res.status(400).json({ error: "REASON_REQUIRED" }); return undefined; }
+    if (typeof body.name !== "string" || body.name.trim() === "") { res.status(400).json({ error: "NAME_REQUIRED" }); return undefined; }
+    if (typeof body.plan !== "string" || body.plan.trim() === "") { res.status(400).json({ error: "PLAN_REQUIRED" }); return undefined; }
+    if (body.accountType !== "demo" && body.accountType !== "live") { res.status(400).json({ error: "INVALID_ACCOUNT_TYPE" }); return undefined; }
+    const sendInvite = body.sendInvite !== false;
+    const initialAdmin = body.initialAdmin as { name?: string; email?: string } | undefined;
+    if (sendInvite && (!initialAdmin?.name || !initialAdmin?.email)) { res.status(400).json({ error: "INITIAL_ADMIN_REQUIRED" }); return undefined; }
+    return {
+      idempotencyKey: body.idempotencyKey,
+      name: body.name,
+      slug: typeof body.slug === "string" ? body.slug : undefined,
+      plan: body.plan,
+      industry: typeof body.industry === "string" ? body.industry : undefined,
+      country: typeof body.country === "string" ? body.country : undefined,
+      timezone: typeof body.timezone === "string" ? body.timezone : undefined,
+      accountType: body.accountType,
+      trialDays: typeof body.trialDays === "number" ? body.trialDays : undefined,
+      initialAdmin: sendInvite || initialAdmin ? (initialAdmin as { name: string; email: string }) : undefined,
+      sendInvite,
+      reason: body.reason,
+    };
+  }
+
+  function commissionErrorResponse(err: unknown, res: import("express").Response): boolean {
+    if (err instanceof UnexpectedManagementApiResponseError) { res.status(502).json({ error: "MANAGEMENT_API_UPSTREAM_ERROR", message: err.message }); return true; }
+    if (err instanceof ManagementOperationError) { res.status(err.httpStatus).json({ error: err.code, message: err.message }); return true; }
+    if (err instanceof DatabaseUnavailableError) { res.status(err.httpStatus).json({ error: err.code, message: err.message }); return true; }
+    return false;
+  }
+
   router.post(
     "/tenants/commission",
     requireScope("tenants.commission", deps.auditSink),
@@ -799,33 +863,8 @@ export function createManagementRouter(deps: ManagementRouterDeps): Router {
           res.status(403).json({ error: "NOT_AUTHENTICATED" });
           return;
         }
-        const body = (req.body ?? {}) as Record<string, unknown>;
-        if (typeof body.idempotencyKey !== "string" || body.idempotencyKey.trim() === "") {
-          res.status(400).json({ error: "IDEMPOTENCY_KEY_REQUIRED" });
-          return;
-        }
-        if (typeof body.reason !== "string" || body.reason.trim() === "") {
-          res.status(400).json({ error: "REASON_REQUIRED" });
-          return;
-        }
-        if (typeof body.name !== "string" || body.name.trim() === "") {
-          res.status(400).json({ error: "NAME_REQUIRED" });
-          return;
-        }
-        if (typeof body.plan !== "string" || body.plan.trim() === "") {
-          res.status(400).json({ error: "PLAN_REQUIRED" });
-          return;
-        }
-        if (body.accountType !== "demo" && body.accountType !== "live") {
-          res.status(400).json({ error: "INVALID_ACCOUNT_TYPE" });
-          return;
-        }
-        const sendInvite = body.sendInvite !== false;
-        const initialAdmin = body.initialAdmin as { name?: string; email?: string } | undefined;
-        if (sendInvite && (!initialAdmin?.name || !initialAdmin?.email)) {
-          res.status(400).json({ error: "INITIAL_ADMIN_REQUIRED" });
-          return;
-        }
+        const parsed = parseCommissionBody(req.body, res);
+        if (!parsed) return;
 
         const signingKeys = await deps.getManagementSigningKeys();
         const transportConfig = deps.loadTransportConfig();
@@ -833,36 +872,118 @@ export function createManagementRouter(deps: ManagementRouterDeps): Router {
         const result = await requestTenantCommission(
           { ledger: deps.ledger, commissionedTenants: deps.commissionedTenants, signingKeys, transportConfig, infrakineticBaseUrl: deps.infrakineticBaseUrl },
           {
-            idempotencyKey: body.idempotencyKey,
+            ...parsed,
             operatorId: ctx.operatorId,
             operatorSessionId: ctx.operatorSessionId,
             operatorRoles: ctx.roles,
             operatorGrantedScopes: ctx.scopes,
-            commissionRequestId: randomUUID(),
-            name: body.name,
-            slug: typeof body.slug === "string" ? body.slug : undefined,
-            plan: body.plan,
-            industry: typeof body.industry === "string" ? body.industry : undefined,
-            country: typeof body.country === "string" ? body.country : undefined,
-            timezone: typeof body.timezone === "string" ? body.timezone : undefined,
-            accountType: body.accountType,
-            trialDays: typeof body.trialDays === "number" ? body.trialDays : undefined,
-            initialAdmin: sendInvite || initialAdmin ? (initialAdmin as { name: string; email: string }) : undefined,
-            sendInvite,
-            reason: body.reason,
+            // Stable across a same-key retry (audit remediation M5), so a
+            // timeout retry replays instead of 409-ing.
+            commissionRequestId: await deps.ledger.resolveStableRequestId(parsed.idempotencyKey, "tenant.commission", "commission_request"),
             correlationId: ctx.correlationId,
           },
         );
         res.status(200).json({ operation: result.operation, replay: result.replay });
       } catch (err) {
-        if (err instanceof UnexpectedManagementApiResponseError) {
-          res.status(502).json({ error: "MANAGEMENT_API_UPSTREAM_ERROR", message: err.message });
+        if (commissionErrorResponse(err, res)) return;
+        next(err);
+      }
+    },
+  );
+
+  // Audit remediation H3 — the repair path the owner-side receipt design
+  // exists for (Infrakinetic resumes from durable stage checkpoints when it
+  // sees a NEW idempotency key with the SAME commissionRequestId). Before
+  // this route, every HTTP commission minted a fresh commissionRequestId, so
+  // a partially-completed commission (e.g. identity stage failed) had no
+  // reachable repair. Governance never stored the admin's PII (0006), so the
+  // operator resubmits the commission fields; they must match the stored
+  // desired name/plan/account type/slug, so a repair can finish the approved
+  // commission but never repurpose it.
+  router.post(
+    "/tenants/commission-requests/:commissionRequestId/repair",
+    requireScope("tenants.commission", deps.auditSink),
+    async (req, res, next) => {
+      try {
+        const ctx = req.operatorContext;
+        if (!ctx) {
+          res.status(403).json({ error: "NOT_AUTHENTICATED" });
           return;
         }
-        if (err instanceof ManagementOperationError) {
-          res.status(err.httpStatus).json({ error: err.code, message: err.message });
+        const parsed = parseCommissionBody(req.body, res);
+        if (!parsed) return;
+
+        const projection = await deps.commissionedTenants.getByCommissionRequestId(req.params.commissionRequestId);
+        if (!projection || projection.provenance !== "governance_commissioned") {
+          res.status(404).json({ error: "COMMISSION_REQUEST_NOT_FOUND" });
           return;
         }
+        if (projection.lifecycleState !== "provisioning") {
+          res.status(409).json({
+            error: "COMMISSION_NOT_REPAIRABLE",
+            message: `Only a commission still in 'provisioning' can be repaired; this one is '${projection.lifecycleState}'.`,
+          });
+          return;
+        }
+        if (
+          projection.desiredName !== parsed.name ||
+          projection.desiredPlan !== parsed.plan ||
+          projection.accountType !== parsed.accountType ||
+          (projection.desiredSlug ?? undefined) !== (parsed.slug ?? undefined)
+        ) {
+          res.status(409).json({ error: "COMMISSION_REPAIR_MISMATCH", message: "Repair must resubmit the original commission's name, slug, plan and account type." });
+          return;
+        }
+
+        const signingKeys = await deps.getManagementSigningKeys();
+        const transportConfig = deps.loadTransportConfig();
+        const result = await requestTenantCommission(
+          { ledger: deps.ledger, commissionedTenants: deps.commissionedTenants, signingKeys, transportConfig, infrakineticBaseUrl: deps.infrakineticBaseUrl },
+          {
+            ...parsed,
+            operatorId: ctx.operatorId,
+            operatorSessionId: ctx.operatorSessionId,
+            operatorRoles: ctx.roles,
+            operatorGrantedScopes: ctx.scopes,
+            commissionRequestId: req.params.commissionRequestId,
+            correlationId: ctx.correlationId,
+          },
+        );
+        res.status(200).json({ operation: result.operation, replay: result.replay });
+      } catch (err) {
+        if (commissionErrorResponse(err, res)) return;
+        next(err);
+      }
+    },
+  );
+
+  // H3 operator surface — what the repair dialog shows and prefills: the
+  // stored, approved commission (Governance-owned desired fields only; the
+  // initial admin's PII was never stored, per 0006). Read-only, R0; gated on
+  // the same scope as the repair it exists to prefill.
+  router.get(
+    "/tenants/commission-requests/:commissionRequestId",
+    requireScope("tenants.commission", deps.auditSink),
+    async (req, res, next) => {
+      try {
+        const projection = await deps.commissionedTenants.getByCommissionRequestId(req.params.commissionRequestId);
+        if (!projection || projection.provenance !== "governance_commissioned") {
+          res.status(404).json({ error: "COMMISSION_REQUEST_NOT_FOUND" });
+          return;
+        }
+        res.status(200).json({
+          commissionRequest: {
+            commissionRequestId: req.params.commissionRequestId,
+            tenantId: projection.tenantId ?? null,
+            lifecycleState: projection.lifecycleState,
+            repairable: projection.lifecycleState === "provisioning",
+            desiredName: projection.desiredName,
+            desiredSlug: projection.desiredSlug ?? null,
+            desiredPlan: projection.desiredPlan,
+            accountType: projection.accountType,
+          },
+        });
+      } catch (err) {
         if (err instanceof DatabaseUnavailableError) {
           res.status(err.httpStatus).json({ error: err.code, message: err.message });
           return;
@@ -1195,6 +1316,58 @@ export function createManagementRouter(deps: ManagementRouterDeps): Router {
     },
   );
 
+  // Audit remediation M3 — the same R1 receipt-driven resolution for a
+  // commission request whose projection has no tenant id yet (ambiguous
+  // before the owner reported one), which no per-tenant recheck can reach.
+  router.post(
+    "/reconciliation/commission-requests/:commissionRequestId/recheck",
+    requireScope("runtime.repair.request", deps.auditSink),
+    async (req, res, next) => {
+      try {
+        const ctx = req.operatorContext;
+        if (!ctx) {
+          res.status(403).json({ error: "NOT_AUTHENTICATED" });
+          return;
+        }
+        const body = (req.body ?? {}) as Record<string, unknown>;
+        if (typeof body.idempotencyKey !== "string" || body.idempotencyKey.trim() === "") {
+          res.status(400).json({ error: "IDEMPOTENCY_KEY_REQUIRED" });
+          return;
+        }
+        const projection = await deps.commissionedTenants.getByCommissionRequestId(req.params.commissionRequestId);
+        if (!projection) {
+          res.status(404).json({ error: "COMMISSION_REQUEST_NOT_FOUND" });
+          return;
+        }
+        const signingKeys = await deps.getManagementSigningKeys();
+        const transportConfig = deps.loadTransportConfig();
+        const result = await reconcileCommissionRequest(
+          { ledger: deps.ledger, commissionedTenants: deps.commissionedTenants, signingKeys, transportConfig, infrakineticBaseUrl: deps.infrakineticBaseUrl },
+          {
+            idempotencyKey: body.idempotencyKey,
+            operatorId: ctx.operatorId,
+            operatorSessionId: ctx.operatorSessionId,
+            operatorRoles: ctx.roles,
+            operatorGrantedScopes: ctx.scopes,
+            commissionRequestId: req.params.commissionRequestId,
+            correlationId: ctx.correlationId,
+          },
+        );
+        res.status(200).json(result);
+      } catch (err) {
+        if (err instanceof ManagementOperationError) {
+          res.status(err.httpStatus).json({ error: err.code, message: err.message });
+          return;
+        }
+        if (err instanceof DatabaseUnavailableError) {
+          res.status(err.httpStatus).json({ error: err.code, message: err.message });
+          return;
+        }
+        next(err);
+      }
+    },
+  );
+
   // ───────────────────────────────────────────────────────────────────────
   // 1A.12 — identity administration. Reads (R0, no ledger, same reasoning
   // as /tenants above) plus the routine (R2) invitation/recovery/access-
@@ -1299,7 +1472,8 @@ export function createManagementRouter(deps: ManagementRouterDeps): Router {
         {
           idempotencyKey: body.idempotencyKey, operatorId: ctx.operatorId, operatorSessionId: ctx.operatorSessionId,
           operatorRoles: ctx.roles, operatorGrantedScopes: ctx.scopes, tenantId: req.params.tenantId,
-          invitationRequestId: randomUUID(), email: body.email,
+          invitationRequestId: await deps.ledger.resolveStableRequestId(body.idempotencyKey, "identity.invitation.issue", "identity_invitation_request"),
+          email: body.email,
           fullName: typeof body.fullName === "string" ? body.fullName : undefined,
           roleKey: typeof body.roleKey === "string" ? body.roleKey : undefined,
           reason: body.reason, correlationId: ctx.correlationId,
@@ -1456,7 +1630,13 @@ export function createManagementRouter(deps: ManagementRouterDeps): Router {
     return false;
   }
 
-  router.post("/tenants/:tenantId/credentials/:credentialId/test", requireScope("credentials.metadata.read", deps.auditSink), async (req, res, next) => {
+  // Audit remediation L7 — a test decrypts the tenant's live secrets and
+  // makes a real provider call with them. That is not a metadata read: a
+  // read-only platform_viewer (who holds credentials.metadata.read) must not
+  // be able to trigger it. Gated on credentials.submit — the operator
+  // already trusted with this credential's material. (The owner-side
+  // assertion scope is unchanged: Governance is the gate that knows roles.)
+  router.post("/tenants/:tenantId/credentials/:credentialId/test", requireScope("credentials.submit", deps.auditSink), async (req, res, next) => {
     const ctx = req.operatorContext;
     try {
       if (!ctx) { res.status(403).json({ error: "NOT_AUTHENTICATED" }); return; }
@@ -1586,9 +1766,11 @@ export function createManagementRouter(deps: ManagementRouterDeps): Router {
 
   // 1A.13 — R3 credential actions (rotate, revoke): same three-phase flow as
   // identity's R3 actions above, over /credentials/:credentialId instead of
-  // /identities/:userId. Note the request body carries only `reason` here —
-  // rotate's actual new secretValue is supplied later, at execute() time
-  // only (see credentialApprovalOperation.ts's header for why).
+  // /identities/:userId. Rotate's request carries secretKind, overlap,
+  // endpoint and the new material (audit remediation H1): all of it is bound
+  // into the approval — the material only as a salted digest, never stored —
+  // and the executor must resubmit identical material. See
+  // credentialApprovalOperation.ts's header.
   const CREDENTIAL_R3_ROUTE_SEGMENTS: Record<CredentialR3ActionKey, string> = { rotate: "rotate", revoke: "revoke" };
 
   for (const actionKey of Object.keys(CREDENTIAL_R3_ACTIONS) as CredentialR3ActionKey[]) {
@@ -1603,10 +1785,25 @@ export function createManagementRouter(deps: ManagementRouterDeps): Router {
           if (!ctx) { res.status(403).json({ error: "NOT_AUTHENTICATED" }); return; }
           const body = (req.body ?? {}) as Record<string, unknown>;
           if (typeof body.reason !== "string" || body.reason.trim() === "") { res.status(400).json({ error: "REASON_REQUIRED" }); return; }
+          if (actionKey === "rotate" && !requireCredentialSecretMaterial(body, res)) return;
+          if (body.overlapHours !== undefined && typeof body.overlapHours !== "number") { res.status(400).json({ error: "INVALID_OVERLAP_HOURS" }); return; }
 
           const approval = await requestCredentialR3Approval(
             { approvals: deps.approvals },
-            { actionKey, tenantId: req.params.tenantId, credentialId: req.params.credentialId, reason: body.reason, makerOperatorId: ctx.operatorId, correlationId: ctx.correlationId },
+            {
+              actionKey, tenantId: req.params.tenantId, credentialId: req.params.credentialId, reason: body.reason,
+              makerOperatorId: ctx.operatorId, correlationId: ctx.correlationId,
+              ...(actionKey === "rotate"
+                ? {
+                    secretKind: body.secretKind as "webhook_secret" | "api_key_pair",
+                    secretValue: typeof body.secretValue === "string" ? body.secretValue : undefined,
+                    apiKeyId: typeof body.apiKeyId === "string" ? body.apiKeyId : undefined,
+                    apiKeySecret: typeof body.apiKeySecret === "string" ? body.apiKeySecret : undefined,
+                    overlapHours: typeof body.overlapHours === "number" ? body.overlapHours : undefined,
+                    webhookEndpointId: typeof body.webhookEndpointId === "string" ? body.webhookEndpointId : undefined,
+                  }
+                : {}),
+            },
           );
           res.status(201).json({ approval });
         } catch (err) {
@@ -1628,9 +1825,13 @@ export function createManagementRouter(deps: ManagementRouterDeps): Router {
     return Object.values(CREDENTIAL_R3_ACTIONS).some((entry) => entry.action === approval.requestedAction);
   }
 
+  // Audit remediation M8 — the checker's decision is the control maker-
+  // checker exists for, so it needs the same fresh step-up as the maker's
+  // request and the execution; a hijacked checker session alone must not
+  // be able to approve an R3 action.
   const APPROVAL_DECISIONS = ["approve", "reject"] as const;
   for (const segment of APPROVAL_DECISIONS) {
-    router.post(`/approvals/:approvalId/${segment}`, async (req, res, next) => {
+    router.post(`/approvals/:approvalId/${segment}`, requireStepUp(300, deps.sessionStore, deps.auditSink), async (req, res, next) => {
       const ctx = req.operatorContext;
       try {
         if (!ctx) { res.status(403).json({ error: "NOT_AUTHENTICATED" }); return; }
@@ -1655,12 +1856,14 @@ export function createManagementRouter(deps: ManagementRouterDeps): Router {
     });
   }
 
-  // Execution is deliberately not restricted to the original maker — any
-  // operator holding the approval's required scope, with their OWN fresh
-  // step-up, may execute an already-approved request. The approval record
-  // itself (maker/checker/decidedAt) is the audit trail for who authorized
-  // what; this route only proves the executing operator is currently
-  // privileged and freshly re-authenticated.
+  // Execution is not restricted to the original maker — any operator holding
+  // the approval's required scope, with their OWN fresh step-up, may execute
+  // an already-approved request. That is safe only because an approval binds
+  // everything the execution will do (audit remediation H1): identity R3 and
+  // revoke are parameterless, and rotate's material must reproduce the
+  // digest the checker approved, so an executor can carry out the approved
+  // change but never substitute a different one. The approval record
+  // (maker/checker/decidedAt) is the audit trail for who authorized what.
   router.post(
     "/approvals/:approvalId/execute",
     requireStepUp(300, deps.sessionStore, deps.auditSink),
@@ -1687,18 +1890,16 @@ export function createManagementRouter(deps: ManagementRouterDeps): Router {
           operatorRoles: ctx.roles, operatorGrantedScopes: ctx.scopes, correlationId: ctx.correlationId,
         };
         // Dispatch by domain: identity's R3 actions (force-reset, mfa-reset)
-        // are parameterless, credential's rotate needs the actual new
-        // secretValue supplied here (see credentialApprovalOperation.ts's
-        // header for why it is never captured earlier, at request time).
+        // are parameterless. Credential rotate needs the material resubmitted
+        // (Governance never stored it); it must reproduce the digest bound at
+        // request time. Kind/overlap/endpoint come from the approval itself —
+        // any executor-supplied values for them are ignored.
         const result = isCredentialR3Approval(current)
           ? await executeCredentialR3Approval(approvalDeps, {
               ...executeParams,
-              secretKind: body.secretKind === "webhook_secret" || body.secretKind === "api_key_pair" ? body.secretKind : undefined,
               secretValue: typeof body.secretValue === "string" ? body.secretValue : undefined,
               apiKeyId: typeof body.apiKeyId === "string" ? body.apiKeyId : undefined,
               apiKeySecret: typeof body.apiKeySecret === "string" ? body.apiKeySecret : undefined,
-              overlapHours: typeof body.overlapHours === "number" ? body.overlapHours : undefined,
-              webhookEndpointId: typeof body.webhookEndpointId === "string" ? body.webhookEndpointId : undefined,
             })
           : await executeIdentityR3Approval(approvalDeps, executeParams);
         res.status(200).json({ operation: result.operation, approval: result.approval, replay: result.replay });

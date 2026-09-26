@@ -17,6 +17,8 @@ export interface ApprovalRecord {
   targetResourceType: string;
   targetResourceId: string;
   safePayloadHash: string;
+  /** Checker-visible safe diff of what was requested (migration 0013). Never secret material. */
+  safeRequestSummary?: Record<string, unknown>;
   riskClass: RiskClass;
   reason: string;
   makerOperatorId: string;
@@ -89,6 +91,7 @@ export interface CreateApprovalParams {
   targetResourceType: string;
   targetResourceId: string;
   safePayloadHash: string;
+  safeRequestSummary?: Record<string, unknown>;
   riskClass: RiskClass;
   reason: string;
   makerOperatorId: string;
@@ -109,6 +112,7 @@ interface ApprovalRow {
   target_resource_type: string;
   target_resource_id: string;
   safe_payload_hash: string;
+  safe_request_summary: unknown;
   risk_class: string;
   reason: string;
   maker_operator_id: string;
@@ -121,6 +125,18 @@ interface ApprovalRow {
   expires_at: string;
 }
 
+function parseSummary(value: unknown): Record<string, unknown> | undefined {
+  if (value === null || value === undefined) return undefined;
+  if (typeof value === "string") {
+    try {
+      return JSON.parse(value) as Record<string, unknown>;
+    } catch {
+      return undefined;
+    }
+  }
+  return value as Record<string, unknown>;
+}
+
 function mapRow(row: ApprovalRow): ApprovalRecord {
   return {
     approvalId: row.approval_id,
@@ -129,6 +145,7 @@ function mapRow(row: ApprovalRow): ApprovalRecord {
     targetResourceType: row.target_resource_type,
     targetResourceId: row.target_resource_id,
     safePayloadHash: row.safe_payload_hash,
+    safeRequestSummary: parseSummary(row.safe_request_summary),
     riskClass: row.risk_class as RiskClass,
     reason: row.reason,
     makerOperatorId: row.maker_operator_id,
@@ -158,8 +175,9 @@ export class ManagementApprovalStore {
     const result = await this.db.query<ApprovalRow>(
       `INSERT INTO governance.management_approvals
          (approval_id, requested_action, target_tenant_id, target_resource_type, target_resource_id,
-          safe_payload_hash, risk_class, reason, maker_operator_id, status, correlation_id, requested_at, expires_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'pending', $10, now(), $11)
+          safe_payload_hash, risk_class, reason, maker_operator_id, status, correlation_id, requested_at, expires_at,
+          safe_request_summary)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'pending', $10, now(), $11, $12::jsonb)
        RETURNING *`,
       [
         params.approvalId,
@@ -173,6 +191,7 @@ export class ManagementApprovalStore {
         params.makerOperatorId,
         params.correlationId,
         expiresAt,
+        params.safeRequestSummary === undefined ? null : JSON.stringify(params.safeRequestSummary),
       ],
     );
     return mapRow(result.rows[0]);

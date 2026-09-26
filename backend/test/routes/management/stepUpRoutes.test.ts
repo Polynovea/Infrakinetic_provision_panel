@@ -132,6 +132,41 @@ describe("GET /management/v1/session/step-up/callback", () => {
     expect(replay.headers.location).toContain("stepUp=failed");
   });
 
+  // Audit remediation M8 — Cognito silently reusing an SSO session instead
+  // of honouring prompt=login would return an ID token whose auth_time is
+  // the ORIGINAL login. That is not a fresh re-auth and must not be recorded.
+  for (const [label, extra] of [
+    ["auth_time predating the step-up (silent SSO reuse)", { auth_time: Math.floor(Date.now() / 1000) - 3600 }],
+    ["no auth_time at all", { auth_time: undefined }],
+  ] as const) {
+    it(`${label}: fails closed, never records step-up`, async () => {
+      const keyPair = await generateTestKeyPair();
+      const provider = buildTestIdentityProvider(keyPair);
+      const op = activeAdminOperator();
+      let capturedNonce = "";
+      const { app, sessionStore } = buildTestApp(provider, [op], {
+        loadBrowserAuthConfig: () => FIXTURE_CONFIG,
+        fetchImpl: (async () => {
+          const idToken = await signTestToken(keyPair, { subject: op.cognitoSub, extraClaims: { nonce: capturedNonce, ...extra } });
+          return { ok: true, json: async () => ({ id_token: idToken }) } as Response;
+        }) as typeof fetch,
+      });
+      const token = await signTestToken(keyPair, { subject: op.cognitoSub });
+      const agent = request.agent(app);
+      const jti = JSON.parse(Buffer.from(token.split(".")[1], "base64url").toString()).jti as string;
+
+      const startRes = await agent.get("/management/v1/session/step-up/start").set("authorization", `Bearer ${token}`);
+      const location = startRes.headers.location as string;
+      const state = extractQueryParam(location, "state")!;
+      capturedNonce = extractQueryParam(location, "nonce")!;
+
+      const callbackRes = await agent.get("/management/v1/session/step-up/callback").query({ code: "fake-code", state }).set("authorization", `Bearer ${token}`);
+
+      expect(callbackRes.headers.location).toContain("stepUp=failed");
+      expect(await sessionStore.getStepUp(jti)).toBeUndefined();
+    });
+  }
+
   it("invalid/unknown state -> failed, no step-up recorded", async () => {
     const keyPair = await generateTestKeyPair();
     const provider = buildTestIdentityProvider(keyPair);

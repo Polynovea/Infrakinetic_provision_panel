@@ -253,7 +253,8 @@ export function IdentityPanel({
       const res = await request(`/management/v1/approvals/${approvalId}/${decision}`, { method: "POST" });
       const body = (await res.json()) as ApiErrorBody;
       if (!res.ok) {
-        setApprovalActionError(body.message ?? body.error ?? "The decision failed.");
+        // The checker's decision needs its own fresh step-up.
+        setApprovalActionError(body.error === "STEP_UP_REQUIRED" ? "STEP_UP_REQUIRED" : body.message ?? body.error ?? "The decision failed.");
         return;
       }
       loadApprovals();

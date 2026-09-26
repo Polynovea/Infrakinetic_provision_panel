@@ -9,7 +9,8 @@ import { MANAGEMENT_V1_PREFIX, ManagementApiUnreachableError } from "./engineSta
 import { buildSafeSnapshot } from "./evidence.js";
 import { MANAGEMENT_COMMAND_CONTRACT } from "./commandEnvelope.js";
 import { CommissionedTenantsRepository } from "./commissionedTenants.js";
-import { ManagementOperationLedger, OPERATIONS_LIST_MAX_LIMIT, type ManagementOperationRecord } from "./managementOperationLedger.js";
+import { ManagementOperationLedger, type ManagementOperationRecord } from "./managementOperationLedger.js";
+import { listStuckOperationCandidates } from "./reconciliationQuery.js";
 import type { OperationStatus } from "./lifecycle.js";
 
 // 1A.10.4 — the reconciliation repair orchestration (master plan §64). Every
@@ -20,20 +21,28 @@ import type { OperationStatus } from "./lifecycle.js";
 // required) per Phase1A.10_Ground_Truth_and_Scoping §3.9 — this is not a
 // new privileged mutation class.
 //
-// IMPORTANT asymmetry, found while building this (not anticipated by the
-// scoping doc): tenant-lifecycle (1A.8) and tenant-engine-entitlement (1A.9)
-// commands both have a durable owner-side receipt table on the CRM side —
-// 1A.8's own addendum named this a standing requirement for exactly this
-// reconciliation phase. `platform.engine-state.set` (1A.6) predates that
-// requirement and has NO such receipt. A transport-ambiguous engine-state
-// operation therefore cannot be resolved from a receipt at all — there is
-// nothing to read, and the ledger stores only a HASH of the original
-// request payload (managementOperationLedger.ts never persists raw
-// payload), so reconciliation cannot even recover what desired state was
-// being requested well enough to compare against a fresh effective-state
-// read. This module surfaces that case rather than guessing; adding a
-// receipt table for engine-state (extending 1A.8's pattern backward to
-// 1A.6) is a real, well-scoped follow-up, not something invented here.
+// IMPORTANT asymmetry: tenant-lifecycle (1A.8), tenant-engine-entitlement
+// (1A.9), identity (1A.12) and credential (1A.13) commands all have a
+// durable owner-side receipt table on the CRM side. `platform.engine-state.
+// set` (1A.6) predates that requirement and has NO such receipt, and the
+// ledger stores only a hash of the request payload — so an ambiguous
+// engine-state op is surfaced for manual resolution, never guessed at.
+//
+// Audit remediation M3 (2026-09-25) closed the gaps between this module and
+// its own §64 exit gates:
+//   - operations stranded in 'submitted'/'accepted'/'running' (restart
+//     mid-call, hung owner call, M4's projection failure) are now in scope,
+//     not just 'partially_completed' ones;
+//   - commission operations (addressed by commission_request, not tenant)
+//     are reachable from the per-tenant sweep and from a per-commission-
+//     request sweep;
+//   - identity and credential receipts are read, so ambiguous R3 rotate/
+//     revoke/MFA-reset operations no longer need hand resolution.
+// Desired-vs-observed LIFECYCLE drift is surfaced by listDrift (surface-
+// only per locked decision §3.7), not realigned here.
+// Audit remediation L4: a 404 counts as "confirmed never executed" only when
+// the owner says so with its own UNKNOWN_*_COMMAND code; a proxy or
+// mis-routed 404 is an unknown outcome.
 
 export interface ProjectionRepairResult {
   created: boolean;
@@ -86,22 +95,28 @@ export interface ReconciliationOperationDeps {
   fetchImpl?: typeof fetch;
 }
 
-export interface ReconcileTenantParams {
+interface ReconcileCallerParams {
   idempotencyKey: string;
   operatorId: string;
   operatorSessionId: string;
   operatorRoles: readonly string[];
   operatorGrantedScopes: readonly string[];
-  tenantId: string;
   correlationId?: string;
   causationId?: string;
+}
+
+export interface ReconcileTenantParams extends ReconcileCallerParams {
+  tenantId: string;
+}
+
+export interface ReconcileCommissionRequestParams extends ReconcileCallerParams {
+  commissionRequestId: string;
 }
 
 const RECONCILIATION_RISK_CLASS = "R1" as const;
 
 // §3.7 — only these three lifecycle states have a fixed expected observed
-// value. Transitional states (approved/provisioning/decommission_requested/
-// decommissioning/etc.) are a mutation in flight, not drift, and are
+// value. Transitional states are a mutation in flight, not drift, and are
 // intentionally left unmapped here.
 const EXPECTED_OBSERVED_STATE: Partial<Record<string, "active" | "suspended" | "decommissioned">> = {
   active: "active",
@@ -111,88 +126,142 @@ const EXPECTED_OBSERVED_STATE: Partial<Record<string, "active" | "suspended" | "
 
 const TENANT_LIFECYCLE_ACTIONS = new Set(["tenant.commission", "tenant.suspend", "tenant.resume", "tenant.decommission"]);
 
-interface CommandReceipt {
-  status: "accepted" | "executing" | "partially_completed" | "completed" | "failed";
+interface ReceiptFamily {
+  pathSegment: string;
+  readAction: string;
+  scope: string;
+  unknownCode: string;
 }
 
-// A confirmed 404 ("not_found") is a positive signal — Infrakinetic
-// durably reserves the receipt row very early in its handler, before the
-// mutation itself, so a genuine absence means the request never reached
-// that point. Any OTHER failure to read the receipt (non-200/non-404
-// status, an unparseable body) is NOT the same thing and must not be
-// treated as it — it means the outcome is still unknown, not that it's
-// confirmed never-executed. Collapsing these two cases together (an
-// earlier version of this function did, via a shared `undefined` return)
-// would let a transient 500 on this read resolve a stuck operation to
-// `failed` and invite a retry of a mutation that may have actually
-// succeeded — exactly the mistake this phase exists to prevent.
+function receiptFamilyFor(requestedAction: string): ReceiptFamily | undefined {
+  if (TENANT_LIFECYCLE_ACTIONS.has(requestedAction)) {
+    return { pathSegment: "tenant-lifecycle-commands", readAction: "tenants.lifecycle-commands.read", scope: "tenants.read", unknownCode: "UNKNOWN_LIFECYCLE_COMMAND" };
+  }
+  if (requestedAction === "tenant.engine.entitlement.set") {
+    return { pathSegment: "tenant-engine-entitlement-commands", readAction: "tenants.entitlement-commands.read", scope: "tenants.read", unknownCode: "UNKNOWN_ENTITLEMENT_COMMAND" };
+  }
+  if (requestedAction.startsWith("identity.")) {
+    return { pathSegment: "identity-admin-commands", readAction: "identity.admin-commands.read", scope: "identity.read", unknownCode: "UNKNOWN_IDENTITY_ADMIN_COMMAND" };
+  }
+  // credential.test is read-tier and never ledgered.
+  if (requestedAction.startsWith("credential.") && requestedAction !== "credential.test") {
+    return { pathSegment: "credential-admin-commands", readAction: "credential.admin-commands.read", scope: "credentials.metadata.read", unknownCode: "UNKNOWN_CREDENTIAL_ADMIN_COMMAND" };
+  }
+  return undefined;
+}
+
+type ReceiptStatus = "accepted" | "executing" | "partially_completed" | "completed" | "failed";
+
+interface CommandReceipt {
+  status: ReceiptStatus;
+  tenantId?: string;
+}
+
+// A confirmed "not_found" is a positive signal — Infrakinetic durably
+// reserves the receipt row very early in its handler, before the mutation
+// itself, so a genuine absence means the request never reached that point.
+// Any OTHER failure to read the receipt is NOT the same thing and must not
+// be treated as it — it means the outcome is still unknown. Collapsing
+// these would let a transient failure resolve a stuck operation to
+// `failed` and invite a retry of a mutation that may have succeeded.
 type ReceiptLookup =
   | { kind: "found"; receipt: CommandReceipt }
   | { kind: "not_found" }
   | { kind: "unknown"; detail: string };
 
-// Honest sentinel, same reasoning tenantRegistryQuery.ts's own
-// TENANT_REGISTRY_TARGET comment gives: a receipt lookup by idempotencyKey
-// isn't really engine-scoped, but target_engine is a required claim on
-// every assertion, and neither commands route checks it.
-const RECONCILIATION_RECEIPT_TARGET = "reconciliation-receipt";
+// Audit remediation L10 — Infrakinetic returns a receipt only to an
+// assertion bound to the receipt's own tenant (or, for a commission receipt,
+// its commission request). The read is therefore minted with the stranded
+// operation's OWN signed target — exactly what the original mutation was
+// addressed to — never a fleet-wide sentinel. A mismatch comes back 409,
+// which lands in "unknown" below (surfaced, never resolved).
+type ReceiptTarget = Pick<ManagementOperationRecord,"targetTenantId" | "targetEngine" | "targetResourceType" | "targetResourceId">;
 
-async function mintAndCall(
-  deps: ReconciliationOperationDeps,
-  params: ReconcileTenantParams,
-  requestedAction: string,
-  path: string,
-): Promise<{ status: number; body: unknown }> {
-  const assertion = await mintManagementAssertion(deps.signingKeys, deps.transportConfig, {
-    operatorId: params.operatorId,
-    operatorSessionId: params.operatorSessionId,
-    operatorRoles: params.operatorRoles,
-    operatorGrantedScopes: params.operatorGrantedScopes,
-    requestedScopes: ["tenants.read"],
-    targetEngine: RECONCILIATION_RECEIPT_TARGET,
-    requestedAction,
-    correlationId: params.correlationId,
-  });
-  return callInfrakineticManagementApi({
-    baseUrl: deps.infrakineticBaseUrl,
-    path,
-    assertion,
-    method: "GET",
-    correlationId: params.correlationId,
-    fetchImpl: deps.fetchImpl,
-  });
+function receiptAssertionTarget(op: ReceiptTarget) {
+  const target = op.targetResourceType === "engine" || (!op.targetResourceType && op.targetEngine)
+    ? { targetEngine: op.targetEngine }
+    : { targetResourceType: op.targetResourceType, targetResourceId: op.targetResourceId };
+  return { ...target, ...(op.targetTenantId ? { targetTenantId: op.targetTenantId } : {}) };
 }
 
 async function readCommandReceipt(
   deps: ReconciliationOperationDeps,
-  params: ReconcileTenantParams,
-  requestedAction: string,
-  idempotencyKey: string,
+  params: ReconcileCallerParams,
+  family: ReceiptFamily,
+  op: ReceiptTarget & { idempotencyKey: string },
 ): Promise<ReceiptLookup> {
-  const receiptPath = TENANT_LIFECYCLE_ACTIONS.has(requestedAction)
-    ? `${MANAGEMENT_V1_PREFIX}/tenant-lifecycle-commands/${encodeURIComponent(idempotencyKey)}`
-    : `${MANAGEMENT_V1_PREFIX}/tenant-engine-entitlement-commands/${encodeURIComponent(idempotencyKey)}`;
-  const readAction = TENANT_LIFECYCLE_ACTIONS.has(requestedAction)
-    ? "tenants.lifecycle-commands.read"
-    : "tenants.entitlement-commands.read";
+  const idempotencyKey = op.idempotencyKey;
+  const receiptPath = `${MANAGEMENT_V1_PREFIX}/${family.pathSegment}/${encodeURIComponent(idempotencyKey)}`;
   let result;
   try {
-    result = await mintAndCall(deps, params, readAction, receiptPath);
+    // Minted with the family's own read scope: an operator who does not
+    // hold it gets an "unknown" outcome (surfaced), never a wrong answer.
+    const assertion = await mintManagementAssertion(deps.signingKeys, deps.transportConfig, {
+      operatorId: params.operatorId,
+      operatorSessionId: params.operatorSessionId,
+      operatorRoles: params.operatorRoles,
+      operatorGrantedScopes: params.operatorGrantedScopes,
+      requestedScopes: [family.scope],
+      ...receiptAssertionTarget(op),
+      requestedAction: family.readAction,
+      correlationId: params.correlationId,
+    });
+    result = await callInfrakineticManagementApi({
+      baseUrl: deps.infrakineticBaseUrl,
+      path: receiptPath,
+      assertion,
+      method: "GET",
+      correlationId: params.correlationId,
+      fetchImpl: deps.fetchImpl,
+    });
   } catch (err) {
     return { kind: "unknown", detail: err instanceof Error ? err.message : String(err) };
   }
-  if (result.status === 404) return { kind: "not_found" };
+  if (result.status === 404) {
+    const code = (result.body as { error?: unknown } | undefined)?.error;
+    if (code === family.unknownCode) return { kind: "not_found" };
+    return { kind: "unknown", detail: `404 from ${receiptPath} without the owner's ${family.unknownCode} code — not treated as a confirmed absence` };
+  }
   if (result.status !== 200) return { kind: "unknown", detail: `unexpected status ${result.status} from ${receiptPath}` };
-  const body = result.body as { command?: { status?: string } };
+  const body = result.body as { command?: { status?: string; tenantId?: string | null } };
   const status = body.command?.status;
   if (status === "accepted" || status === "executing" || status === "partially_completed" || status === "completed" || status === "failed") {
-    return { kind: "found", receipt: { status } };
+    return { kind: "found", receipt: { status, tenantId: body.command?.tenantId ?? undefined } };
   }
   return { kind: "unknown", detail: `unparseable receipt body from ${receiptPath}` };
 }
 
-function hasDurableReceipt(requestedAction: string): boolean {
-  return TENANT_LIFECYCLE_ACTIONS.has(requestedAction) || requestedAction === "tenant.engine.entitlement.set";
+async function recordProjectionReconcile(
+  deps: ReconciliationOperationDeps,
+  params: ReconcileTenantParams,
+  projectionId: string,
+  payload: Record<string, unknown>,
+  apply: () => Promise<void>,
+  snapshot: Record<string, unknown>,
+): Promise<void> {
+  const { operation: submitted, replay } = await deps.ledger.createOrReplayOperation({
+    idempotencyKey: `${params.idempotencyKey}:projection`,
+    operatorId: params.operatorId,
+    operatorSessionId: params.operatorSessionId,
+    requestedAction: "tenant.projection.reconcile",
+    targetTenantId: params.tenantId,
+    targetResourceType: "commissioned_tenant_projection",
+    targetResourceId: projectionId,
+    riskClass: RECONCILIATION_RISK_CLASS,
+    payload,
+    contractVersion: MANAGEMENT_COMMAND_CONTRACT,
+    correlationId: params.correlationId ?? randomUUID(),
+    causationId: params.causationId,
+  });
+  if (replay) return;
+  await deps.ledger.transitionOperation(submitted.operationId, { toStatus: "accepted" });
+  await deps.ledger.transitionOperation(submitted.operationId, { toStatus: "running" });
+  await apply();
+  await deps.ledger.transitionOperation(submitted.operationId, {
+    toStatus: "completed",
+    afterStateSafeSnapshot: buildSafeSnapshot(snapshot),
+    result: { projectionId, ...payload },
+  });
 }
 
 async function repairProjection(
@@ -202,12 +271,7 @@ async function repairProjection(
   // Unlike listDrift() (reconciliationQuery.ts), which degrades gracefully
   // on a registry read failure because it has other drift classes still
   // worth returning, a repair has no fallback data to act on — but the
-  // failure must still surface as a typed, clean error (same
-  // ManagementApiUnreachableError the 1A.9 retro introduced for
-  // engineStateOperation.ts's own pre-reservation resolve-read), not the
-  // uncaught-network-exception shape that retro flagged as a known,
-  // deferred gap on every GET route in this router — this is exactly the
-  // read route the gap now had to be closed on.
+  // failure must still surface as a typed, clean error.
   let fresh;
   try {
     fresh = await getTenantRegistryEntry(deps, { ...params, identifier: params.tenantId });
@@ -221,8 +285,7 @@ async function repairProjection(
   if (!existing) {
     if (!observedState) {
       // Master plan §64 forbids fabricating history — without a freshly
-      // observed platform_access_state (e.g. a stale Infrakinetic deploy
-      // that doesn't send the field yet) there is nothing safe to create.
+      // observed platform_access_state there is nothing safe to create.
       return { created: false, observedRefreshed: false };
     }
     const { record, created } = await deps.commissionedTenants.getOrCreateLegacyExisting({
@@ -256,103 +319,109 @@ async function repairProjection(
     return { created, observedRefreshed: false };
   }
 
+  // Locked decision §3.7: the repair is a refresh of the observed cache,
+  // never a lifecycle transition — a desired-vs-observed lifecycle
+  // disagreement is surfaced by listDrift's lifecycleMismatch instead.
   const expected = EXPECTED_OBSERVED_STATE[existing.lifecycleState];
   const needsRefresh = expected !== undefined && observedState !== undefined && existing.lastObservedPlatformAccessState !== observedState;
   if (!needsRefresh) {
     return { created: false, observedRefreshed: false };
   }
 
-  const { operation: submitted } = await deps.ledger.createOrReplayOperation({
-    idempotencyKey: `${params.idempotencyKey}:projection`,
-    operatorId: params.operatorId,
-    operatorSessionId: params.operatorSessionId,
-    requestedAction: "tenant.projection.reconcile",
-    targetTenantId: params.tenantId,
-    targetResourceType: "commissioned_tenant_projection",
-    targetResourceId: existing.projectionId,
-    riskClass: RECONCILIATION_RISK_CLASS,
-    payload: { action: "refresh_observed_state", from: existing.lastObservedPlatformAccessState ?? null, to: observedState },
-    contractVersion: MANAGEMENT_COMMAND_CONTRACT,
-    correlationId: params.correlationId ?? randomUUID(),
-    causationId: params.causationId,
-  });
-  await deps.ledger.transitionOperation(submitted.operationId, { toStatus: "accepted" });
-  await deps.ledger.transitionOperation(submitted.operationId, { toStatus: "running" });
-  await deps.commissionedTenants.refreshObservedState(existing.projectionId, observedState as "active" | "suspended" | "decommissioned");
-  await deps.ledger.transitionOperation(submitted.operationId, {
-    toStatus: "completed",
-    afterStateSafeSnapshot: buildSafeSnapshot({ tenantId: params.tenantId, observedState }),
-    result: { projectionId: existing.projectionId, refreshedTo: observedState },
-  });
+  await recordProjectionReconcile(
+    deps,
+    params,
+    existing.projectionId,
+    { action: "refresh_observed_state", from: existing.lastObservedPlatformAccessState ?? null, to: observedState },
+    async () => { await deps.commissionedTenants.refreshObservedState(existing.projectionId, observedState as "active" | "suspended" | "decommissioned"); },
+    { tenantId: params.tenantId, observedState },
+  );
   return { created: false, observedRefreshed: true };
 }
 
+// A resolved tenant.commission operation also settles its projection, which
+// is keyed by commission request (the tenant id may only be learned here,
+// from the owner receipt).
+async function syncCommissionProjection(
+  deps: ReconciliationOperationDeps,
+  op: ManagementOperationRecord,
+  outcome: { status: ReceiptStatus | "not_found"; tenantId?: string },
+): Promise<void> {
+  if (op.requestedAction !== "tenant.commission" || op.targetResourceType !== "commission_request" || !op.targetResourceId) return;
+  const projection = await deps.commissionedTenants.getByCommissionRequestId(op.targetResourceId);
+  if (!projection || projection.lifecycleState !== "provisioning") return;
+  if (outcome.status === "completed" && outcome.tenantId) {
+    await deps.commissionedTenants.transitionLifecycleState(projection.projectionId, { toState: "active", tenantId: outcome.tenantId, lastOperationId: op.operationId });
+    return;
+  }
+  if (outcome.status === "partially_completed" && outcome.tenantId && !projection.tenantId) {
+    await deps.commissionedTenants.transitionLifecycleState(projection.projectionId, { toState: "provisioning", tenantId: outcome.tenantId, lastOperationId: op.operationId });
+    return;
+  }
+  // Never fail a projection whose tenant an EARLIER attempt already created.
+  if ((outcome.status === "failed" || outcome.status === "not_found") && !projection.tenantId) {
+    await deps.commissionedTenants.transitionLifecycleState(projection.projectionId, { toState: "failed" });
+  }
+}
+
+const COMMISSION_REPAIR_NOTE = "owner reported a partial commission — finish it with POST /management/v1/tenants/commission-requests/:commissionRequestId/repair";
+
 async function resolveStuckOperation(
   deps: ReconciliationOperationDeps,
-  params: ReconcileTenantParams,
+  params: ReconcileCallerParams,
   op: ManagementOperationRecord,
 ): Promise<{ resolved?: ResolvedStuckOperation; remaining?: RemainingStuckOperation }> {
   const stage = (op.partialFailureState as { stage?: string } | undefined)?.stage;
+  const from = op.status;
+  const resolved = (to: OperationStatus, resolvedStage?: string): { resolved: ResolvedStuckOperation } => ({
+    resolved: { operationId: op.operationId, requestedAction: op.requestedAction, from, to, stage: resolvedStage ?? stage },
+  });
+  const remaining = (cls: string, note: string): { remaining: RemainingStuckOperation } => ({
+    remaining: { operationId: op.operationId, requestedAction: op.requestedAction, class: cls, note },
+  });
 
-  // Only the transport-ambiguous class (§64's first required drift class)
-  // is auto-resolved here. effective-mismatch's outcome is already known on
-  // the row itself (§3.5 — surfaced, an operator decides whether to
-  // re-request); effective-observation and commission-partial need their
-  // own dedicated handling this phase deliberately keeps out of MVP scope
-  // (Phase1A.10_Ground_Truth_and_Scoping §3.5/§8) — surfaced, not silently
-  // dropped.
-  if (stage !== "mutation-call") {
-    return {
-      remaining: {
-        operationId: op.operationId,
-        requestedAction: op.requestedAction,
-        class: stage ?? "unclassified",
-        note: "surfaced only — not auto-repaired by 1A.10 (see Phase1A.10_Ground_Truth_and_Scoping §3.5)",
-      },
-    };
+  // Stranded before dispatch: every operation module transitions to
+  // 'running' before its first owner mutation call, so this op provably
+  // never reached the owner. Safe to conclude failed without a receipt.
+  if (op.status === "submitted" || op.status === "accepted") {
+    const updated = await deps.ledger.transitionOperation(op.operationId, {
+      toStatus: "failed",
+      partialFailureState: { stage: "stranded-before-dispatch", message: "resolved via reconciliation: operation never reached the owner mutation call" },
+    });
+    await syncCommissionProjection(deps, op, { status: "not_found" });
+    return resolved(updated.status, "stranded-before-dispatch");
   }
 
-  if (!hasDurableReceipt(op.requestedAction)) {
-    return {
-      remaining: {
-        operationId: op.operationId,
-        requestedAction: op.requestedAction,
-        class: "transport_ambiguous",
-        note: "no durable owner-side receipt exists for this command family (platform.engine-state.set predates the 1A.8 standing-receipt requirement) — resolve manually",
-      },
-    };
+  const ambiguous = op.status === "running" || (op.status === "partially_completed" && stage === "mutation-call");
+  if (!ambiguous) {
+    if (stage === "commission-partial") return remaining("owner_partial_success", COMMISSION_REPAIR_NOTE);
+    // effective-mismatch's outcome is already known on the row itself;
+    // effective-observation needs its own handling — surfaced, not dropped.
+    return remaining(stage ?? "unclassified", "surfaced only — not auto-repaired by 1A.10 (see Phase1A.10_Ground_Truth_and_Scoping §3.5)");
   }
 
-  const lookup = await readCommandReceipt(deps, params, op.requestedAction, op.idempotencyKey);
+  const cls = op.status === "running" ? "stranded_in_flight" : "transport_ambiguous";
+  const family = receiptFamilyFor(op.requestedAction);
+  if (!family) {
+    return remaining(cls, "no durable owner-side receipt exists for this command family (platform.engine-state.set predates the 1A.8 standing-receipt requirement) — resolve manually");
+  }
+
+  const lookup = await readCommandReceipt(deps, params, family, op);
 
   if (lookup.kind === "unknown") {
-    // Could not determine the real outcome (transient error, unexpected
-    // status, unparseable body) — this is NOT the same as a confirmed
-    // absence and must never be treated as "safe to conclude failed".
-    // Surfaced, left exactly as-is, retried on the next recheck.
-    return {
-      remaining: {
-        operationId: op.operationId,
-        requestedAction: op.requestedAction,
-        class: "transport_ambiguous",
-        note: `could not read the owner-side receipt (${lookup.detail}) — recheck later`,
-      },
-    };
+    return remaining(cls, `could not read the owner-side receipt (${lookup.detail}) — recheck later`);
   }
 
   if (lookup.kind === "found" && lookup.receipt.status === "completed") {
     const updated = await deps.ledger.transitionOperation(op.operationId, {
       toStatus: "completed",
-      result: { resolvedByReconciliation: true, receiptStatus: "completed" },
+      result: { resolvedByReconciliation: true, receiptStatus: "completed", tenantId: lookup.receipt.tenantId ?? null },
     });
-    return { resolved: { operationId: op.operationId, requestedAction: op.requestedAction, from: "partially_completed", to: updated.status, stage } };
+    await syncCommissionProjection(deps, op, lookup.receipt);
+    return resolved(updated.status);
   }
 
   if (lookup.kind === "not_found" || (lookup.kind === "found" && lookup.receipt.status === "failed")) {
-    // A confirmed 404 means the request never reached the point where
-    // Infrakinetic durably records one (reservation happens very early in
-    // its handler, before the actual mutation) — as confident a "this never
-    // executed" signal as an explicit 'failed' receipt.
     const updated = await deps.ledger.transitionOperation(op.operationId, {
       toStatus: "failed",
       partialFailureState: {
@@ -361,19 +430,28 @@ async function resolveStuckOperation(
         message: "resolved via reconciliation: owner-side receipt confirms this command never completed",
       },
     });
-    return { resolved: { operationId: op.operationId, requestedAction: op.requestedAction, from: "partially_completed", to: updated.status, stage } };
+    await syncCommissionProjection(deps, op, lookup.kind === "found" ? lookup.receipt : { status: "not_found" });
+    return resolved(updated.status, "mutation-call-resolved-not-dispatched");
   }
 
-  // accepted / executing / partially_completed on the owner side — still
-  // genuinely in flight or itself ambiguous; nothing safe to conclude yet.
-  return {
-    remaining: {
-      operationId: op.operationId,
-      requestedAction: op.requestedAction,
-      class: "transport_ambiguous",
-      note: `owner-side receipt still '${lookup.kind === "found" ? lookup.receipt.status : "unknown"}' — recheck later`,
-    },
-  };
+  if (lookup.receipt.status === "partially_completed") {
+    await syncCommissionProjection(deps, op, lookup.receipt);
+    if (op.status === "running") {
+      const updated = await deps.ledger.transitionOperation(op.operationId, {
+        toStatus: "partially_completed",
+        partialFailureState: {
+          stage: op.requestedAction === "tenant.commission" ? "commission-partial" : "owner-partial",
+          receiptStatus: "partially_completed",
+          message: "resolved via reconciliation: owner-side receipt reports a partial outcome",
+        },
+      });
+      return resolved(updated.status, op.requestedAction === "tenant.commission" ? "commission-partial" : "owner-partial");
+    }
+    return remaining("owner_partial_success", op.requestedAction === "tenant.commission" ? COMMISSION_REPAIR_NOTE : "owner-side receipt reports a partial outcome — inspect and re-request if needed");
+  }
+
+  // accepted / executing on the owner side — still genuinely in flight.
+  return remaining(cls, `owner-side receipt still '${lookup.receipt.status}' — recheck later`);
 }
 
 function describeError(err: unknown): string {
@@ -386,22 +464,16 @@ interface StuckOperationsSweepResult {
 }
 
 // The list-then-resolve sweep as its own unit, so reconcileTenant() can run
-// it independently of, and isolated from, projection repair. A single
-// stuck operation whose OWN resolution attempt throws unexpectedly (every
-// expected failure mode — a network error, a non-200, an unparseable body —
-// is already absorbed inside resolveStuckOperation()/readCommandReceipt()
-// and reported as `remaining`, never thrown) is caught here too, so one
-// bad row can't erase the real, already-committed results of the rows
+// it independently of, and isolated from, projection repair. A single stuck
+// operation whose own resolution attempt throws unexpectedly is caught here
+// too, so one bad row can't erase the already-committed results of the rows
 // resolved before it in the same sweep.
 async function resolveStuckOperations(
   deps: ReconciliationOperationDeps,
-  params: ReconcileTenantParams,
+  params: ReconcileCallerParams,
+  scope: { tenantId?: string; commissionRequestId?: string },
 ): Promise<StuckOperationsSweepResult> {
-  const stuckOperations = await deps.ledger.listOperations({
-    status: "partially_completed",
-    targetTenantId: params.tenantId,
-    limit: OPERATIONS_LIST_MAX_LIMIT,
-  });
+  const stuckOperations = await listStuckOperationCandidates(deps.ledger, deps.commissionedTenants, scope);
 
   const resolvedOperations: ResolvedStuckOperation[] = [];
   const remainingDrift: RemainingStuckOperation[] = [];
@@ -426,15 +498,12 @@ export async function reconcileTenant(
   deps: ReconciliationOperationDeps,
   params: ReconcileTenantParams,
 ): Promise<ReconcileTenantResult> {
-  // Projection repair (needs a fresh owner-registry read) and stuck-
-  // operation resolution (needs only the ledger plus, per-op, an owner
-  // receipt read) are independent — neither depends on the other's
-  // success. Promise.allSettled (not Promise.all) so a failure on one
-  // side — e.g. the tenant registry being unreachable — can never prevent
-  // the other from completing and being reported.
+  // Projection repair and stuck-operation resolution are independent —
+  // Promise.allSettled so a failure on one side can never prevent the other
+  // from completing and being reported.
   const [projectionSettled, stuckOpsSettled] = await Promise.allSettled([
     repairProjection(deps, params),
-    resolveStuckOperations(deps, params),
+    resolveStuckOperations(deps, params, { tenantId: params.tenantId }),
   ]);
 
   const projection = projectionSettled.status === "fulfilled" ? projectionSettled.value : { created: false, observedRefreshed: false };
@@ -458,4 +527,25 @@ export async function reconcileTenant(
     outcome,
     observedAt: new Date().toISOString(),
   };
+}
+
+export interface ReconcileCommissionRequestResult {
+  commissionRequestId: string;
+  resolvedOperations: ResolvedStuckOperation[];
+  remainingDrift: RemainingStuckOperation[];
+  observedAt: string;
+}
+
+// Audit remediation M3 — a commission that went ambiguous BEFORE the owner
+// reported a tenant id has a projection with no tenant, so no per-tenant
+// recheck can ever reach it. This sweeps that commission request's own
+// stuck operations from the owner receipts (which carry the tenant id once
+// one exists), settling the projection as it goes. Same R1, read-receipt-
+// only rules as reconcileTenant: nothing is ever resent.
+export async function reconcileCommissionRequest(
+  deps: ReconciliationOperationDeps,
+  params: ReconcileCommissionRequestParams,
+): Promise<ReconcileCommissionRequestResult> {
+  const { resolvedOperations, remainingDrift } = await resolveStuckOperations(deps, params, { commissionRequestId: params.commissionRequestId });
+  return { commissionRequestId: params.commissionRequestId, resolvedOperations, remainingDrift, observedAt: new Date().toISOString() };
 }

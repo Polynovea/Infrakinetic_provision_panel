@@ -16,6 +16,12 @@ jobs:
         run: node backend/scripts/check_no_infrakinetic_imports.mjs
       - name: Check no Cognito secret material reaches frontend/
         run: node backend/scripts/check_no_cognito_secret_in_frontend.mjs
+      # Master plan §69.4 — the management signing private key never reaches
+      # the browser. The check existed but was never wired into CI (audit
+      # remediation L9). Added as a step in this existing job, so the
+      # required status-check names are unchanged.
+      - name: Check no management signing key material reaches frontend/
+        run: node backend/scripts/check_no_signing_key_in_frontend.mjs
 
   backend:
     runs-on: ubuntu-latest

@@ -44,7 +44,9 @@ export async function signTestToken(keyPair: TestKeyPair, options: SignOptions =
   const iat = nowSeconds - (options.issuedAtSecondsAgo ?? 0);
   const exp = iat + (options.expiresInSeconds ?? 3600);
 
-  let builder = new SignJWT({ token_use: options.tokenUse ?? "id", ...options.extraClaims })
+  // Cognito ID tokens always carry auth_time (when the user actually
+  // authenticated); the step-up callback checks it (audit remediation M8).
+  let builder = new SignJWT({ token_use: options.tokenUse ?? "id", auth_time: iat, ...options.extraClaims })
     .setProtectedHeader({ alg: "RS256", kid: keyPair.kid })
     .setIssuedAt(iat)
     .setExpirationTime(exp)

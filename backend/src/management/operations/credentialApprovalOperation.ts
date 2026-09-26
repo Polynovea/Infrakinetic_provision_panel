@@ -1,4 +1,5 @@
-import { randomUUID } from "node:crypto";
+import { randomUUID, scrypt as scryptCallback } from "node:crypto";
+import { promisify } from "node:util";
 
 import type { ManagementSigningKeySet } from "../managementSigningKeys.js";
 import type { ManagementTransportConfig } from "../managementConfig.js";
@@ -13,41 +14,38 @@ import { ManagementApprovalStore, type ApprovalRecord, type ApprovalDecision } f
 import type { Scope } from "../../identity/roles.js";
 
 // 1A.13 — R3 credential actions (rotate, revoke). Mirrors
-// identityApprovalOperation.ts's three-phase flow exactly: request (maker)
-// -> decide (checker, != maker) -> execute (fresh step-up, approval
-// consumed exactly once). Step-up freshness is enforced by requireStepUp at
-// the route layer (routes/management/index.ts), not here — this module
-// only owns the approval/ledger mechanics, reusing the same
-// ManagementApprovalStore 1A.12.5 built as the "minimal reusable maker-
-// checker approval substrate" (1A.12 handoff's explicit instruction to
-// reuse this for the next high-risk vertical, rather than build a second
-// approval mechanism).
+// identityApprovalOperation.ts's three-phase flow: request (maker) -> decide
+// (checker, != maker) -> execute (fresh step-up, approval consumed exactly
+// once). Step-up freshness is enforced by requireStepUp at the route layer
+// (routes/management/index.ts), not here — this module only owns the
+// approval/ledger mechanics, reusing ManagementApprovalStore (1A.12.5's
+// reusable maker-checker substrate) rather than a second approval mechanism.
 //
-// One real difference from identity's R3 actions: force-reset/mfa-reset are
-// parameterless, so identityApprovalOperation.ts's execute() sends an empty
-// body. Rotate needs the actual new secret value, which must NOT be held by
-// Governance across a pending approval's lifetime (up to
-// APPROVAL_TTL_SECONDS = 24h) — Governance never persists a raw secret at
-// rest, even temporarily. So the approval hash covers only the ACTION
-// (rotate this credential), never the value; the value is supplied only at
-// execute() time, by whichever operator with the required scope + fresh
-// step-up actually executes the already-approved request.
+// Audit remediation H1 (2026-09-25) — master plan §58 "checker reviews safe
+// diff". Originally the rotate approval bound only {action, tenant,
+// credential}; secret kind, overlap window, webhook endpoint AND the new
+// material were all supplied by whoever executed — including the checker —
+// so maker-checker authorised "a rotation happens", never "these keys". An
+// executor could install an api_key_pair for a merchant account they
+// control. Rotate now works like this:
 //
-// Closure-remediation audit (2026-09-23) — rotate now covers two secret
-// kinds (webhook_secret, with an overlap window; api_key_pair, an atomic
-// cutover of both provider key halves — see credentialAdministration.js's
-// header on the Infrakinetic side for why api_key_id/api_key_secret were
-// collapsed into one pseudo-kind). WHICH kind is being rotated is, like the
-// secret value itself, deferred to execute() time rather than bound into
-// the approval: ManagementApprovalStore has no column for structured
-// per-request metadata beyond the safe payload hash (see
-// managementApprovalStore.ts), and both kinds share the exact same risk
-// tier, scope (`credentials.rotate`), and step-up requirement, so nothing
-// is weakened by letting the executing operator — who must independently
-// hold that scope and a fresh step-up — pick the kind at execute time. This
-// is accepted architecture debt in the same shape the secret-value deferral
-// already was, not a new gap; §13 of the scoping doc records it explicitly
-// rather than silently relying on it.
+//   request  — the maker submits kind, overlap, endpoint AND the material.
+//              Governance keeps no plaintext (never at rest, not even across
+//              the 24h approval window): it folds a salted, deliberately slow
+//              scrypt digest of the material into the approval's safe
+//              payload hash, and stores a checker-visible safe diff
+//              (safe_request_summary, migration 0013): kind, overlap,
+//              endpoint, a masked hint of the provider key id (a public
+//              identifier, not the secret half) and a short fingerprint.
+//   decide   — the checker sees that safe diff, so an approval now means
+//              "rotate to THIS key id / fingerprint".
+//   execute  — kind/overlap/endpoint come from the approved summary, never
+//              the executor; the executor must resubmit material whose
+//              digest reproduces the approved hash, or markExecuted fails
+//              with APPROVAL_PAYLOAD_MISMATCH before anything is sent.
+//
+// This also retires the 1A.13 "kind chosen at execute time" accepted debt.
+// Revoke has no parameters beyond the target and is unchanged.
 
 export const CREDENTIAL_R3_ACTIONS = {
   rotate: { action: "credential.rotate", scope: "credentials.rotate" as Scope, segment: "rotate" },
@@ -55,11 +53,23 @@ export const CREDENTIAL_R3_ACTIONS = {
 } as const;
 
 export type CredentialR3ActionKey = keyof typeof CREDENTIAL_R3_ACTIONS;
+export type RotateSecretKind = "webhook_secret" | "api_key_pair";
 
 // Same 24h window as identity's R3 actions — see identityApprovalOperation.ts's
 // header for the rationale; revisit under 1A.19 if a different policy value
 // is warranted platform-wide.
 const APPROVAL_TTL_SECONDS = 24 * 60 * 60;
+
+// Mirrors Infrakinetic's own clamp (credentialAdministration.js) so the
+// approved value is exactly the value that will be applied.
+const MIN_OVERLAP_HOURS = 1;
+const MAX_OVERLAP_HOURS = 72;
+const DEFAULT_OVERLAP_HOURS = 24;
+
+const scrypt = promisify(scryptCallback) as (password: string, salt: string, keylen: number, options: { N: number; r: number; p: number }) => Promise<Buffer>;
+// ~16 MiB / tens of ms per digest: negligible for one request, expensive
+// for anyone brute-forcing a low-entropy webhook secret from a DB read.
+const MATERIAL_DIGEST_PARAMS = { N: 16384, r: 8, p: 1 } as const;
 
 export class UnknownCredentialR3ActionError extends Error {
   constructor(readonly requestedAction: string) {
@@ -75,13 +85,84 @@ export class MissingCredentialApprovalTargetError extends Error {
   }
 }
 
-function computeCredentialApprovalHash(requestedAction: string, tenantId: string, credentialId: string): string {
+export interface RotateMaterial {
+  secretValue?: string;
+  apiKeyId?: string;
+  apiKeySecret?: string;
+}
+
+interface ApprovedRotateParameters {
+  secretKind: RotateSecretKind;
+  overlapHours: number | null;
+  webhookEndpointId: string | null;
+}
+
+function nonEmpty(value: string | undefined): value is string {
+  return typeof value === "string" && value.trim() !== "";
+}
+
+function assertRotateMaterial(secretKind: RotateSecretKind, material: RotateMaterial): void {
+  if (secretKind === "webhook_secret" && !nonEmpty(material.secretValue)) {
+    throw new MissingCredentialApprovalTargetError("secretValue");
+  }
+  if (secretKind === "api_key_pair" && (!nonEmpty(material.apiKeyId) || !nonEmpty(material.apiKeySecret))) {
+    throw new MissingCredentialApprovalTargetError("apiKeyId/apiKeySecret");
+  }
+}
+
+function normalizeRotateParameters(input: {
+  secretKind?: string;
+  overlapHours?: number;
+  webhookEndpointId?: string;
+}): ApprovedRotateParameters {
+  if (input.secretKind !== "webhook_secret" && input.secretKind !== "api_key_pair") {
+    throw new MissingCredentialApprovalTargetError("secretKind");
+  }
+  let overlapHours: number | null = null;
+  if (input.secretKind === "webhook_secret") {
+    const raw = input.overlapHours ?? DEFAULT_OVERLAP_HOURS;
+    if (!Number.isFinite(raw)) throw new MissingCredentialApprovalTargetError("overlapHours");
+    overlapHours = Math.min(MAX_OVERLAP_HOURS, Math.max(MIN_OVERLAP_HOURS, Math.trunc(raw)));
+  }
+  return {
+    secretKind: input.secretKind,
+    overlapHours,
+    webhookEndpointId: input.secretKind === "webhook_secret" && nonEmpty(input.webhookEndpointId) ? input.webhookEndpointId : null,
+  };
+}
+
+// Salted per approval so identical material under two approvals never
+// yields the same digest.
+async function computeRotateMaterialDigest(approvalId: string, secretKind: RotateSecretKind, material: RotateMaterial): Promise<string> {
+  const canonical = secretKind === "api_key_pair"
+    ? JSON.stringify(["api_key_pair", material.apiKeyId, material.apiKeySecret])
+    : JSON.stringify(["webhook_secret", material.secretValue]);
+  const digest = await scrypt(canonical, `polynovea-governance:credential-rotate-approval:${approvalId}`, 32, MATERIAL_DIGEST_PARAMS);
+  return digest.toString("hex");
+}
+
+// The provider key id (e.g. Razorpay's rzp_live_…) is a public identifier —
+// it ships in client-side checkout — not the secret half. A masked form is
+// what lets the checker confirm the keys belong to the merchant's account.
+export function maskKeyId(apiKeyId: string): string {
+  const trimmed = apiKeyId.trim();
+  if (trimmed.length >= 12) return `${trimmed.slice(0, 8)}…${trimmed.slice(-4)}`;
+  return `…${trimmed.slice(-2)}`;
+}
+
+function computeCredentialApprovalHash(
+  requestedAction: string,
+  tenantId: string,
+  credentialId: string,
+  rotate?: ApprovedRotateParameters & { materialDigest: string },
+): string {
   return computeSafePayloadHash({
     requestedAction,
     targetTenantId: tenantId,
     targetResourceType: "credential",
     targetResourceId: credentialId,
-    payload: { tenantId, credentialId },
+    // Revoke keeps its original, byte-identical payload shape.
+    payload: rotate ? { tenantId, credentialId, ...rotate } : { tenantId, credentialId },
   });
 }
 
@@ -95,13 +176,17 @@ export interface CredentialApprovalOperationDeps {
   fetchImpl?: typeof fetch;
 }
 
-export interface RequestCredentialR3ApprovalParams {
+export interface RequestCredentialR3ApprovalParams extends RotateMaterial {
   actionKey: CredentialR3ActionKey;
   tenantId: string;
   credentialId: string;
   reason: string;
   makerOperatorId: string;
   correlationId?: string;
+  /** Rotate only — bound into the approval; the executor cannot change them. */
+  secretKind?: RotateSecretKind;
+  overlapHours?: number;
+  webhookEndpointId?: string;
 }
 
 // Only the approval store is needed to request/decide — no assertion is
@@ -111,18 +196,36 @@ export async function requestCredentialR3Approval(
   deps: Pick<CredentialApprovalOperationDeps, "approvals">,
   params: RequestCredentialR3ApprovalParams,
 ): Promise<ApprovalRecord> {
-  if (!params.tenantId || params.tenantId.trim() === "") throw new MissingCredentialApprovalTargetError("tenantId");
-  if (!params.credentialId || params.credentialId.trim() === "") throw new MissingCredentialApprovalTargetError("credentialId");
+  if (!nonEmpty(params.tenantId)) throw new MissingCredentialApprovalTargetError("tenantId");
+  if (!nonEmpty(params.credentialId)) throw new MissingCredentialApprovalTargetError("credentialId");
   const entry = CREDENTIAL_R3_ACTIONS[params.actionKey];
   if (!entry) throw new UnknownCredentialR3ActionError(params.actionKey);
 
+  const approvalId = randomUUID();
+  let safePayloadHash: string;
+  let safeRequestSummary: Record<string, unknown> | undefined;
+  if (entry.action === CREDENTIAL_R3_ACTIONS.rotate.action) {
+    const approved = normalizeRotateParameters(params);
+    assertRotateMaterial(approved.secretKind, params);
+    const materialDigest = await computeRotateMaterialDigest(approvalId, approved.secretKind, params);
+    safePayloadHash = computeCredentialApprovalHash(entry.action, params.tenantId, params.credentialId, { ...approved, materialDigest });
+    safeRequestSummary = {
+      ...approved,
+      apiKeyIdHint: approved.secretKind === "api_key_pair" ? maskKeyId(params.apiKeyId!) : null,
+      materialFingerprint: materialDigest.slice(0, 12),
+    };
+  } else {
+    safePayloadHash = computeCredentialApprovalHash(entry.action, params.tenantId, params.credentialId);
+  }
+
   return deps.approvals.createApproval({
-    approvalId: randomUUID(),
+    approvalId,
     requestedAction: entry.action,
     targetTenantId: params.tenantId,
     targetResourceType: "credential",
     targetResourceId: params.credentialId,
-    safePayloadHash: computeCredentialApprovalHash(entry.action, params.tenantId, params.credentialId),
+    safePayloadHash,
+    safeRequestSummary,
     riskClass: "R3",
     reason: params.reason,
     makerOperatorId: params.makerOperatorId,
@@ -147,7 +250,7 @@ export function decideCredentialR3Approval(
   return deps.approvals.decideApproval(params);
 }
 
-export interface ExecuteCredentialR3ApprovalParams {
+export interface ExecuteCredentialR3ApprovalParams extends RotateMaterial {
   approvalId: string;
   idempotencyKey: string;
   operatorId: string;
@@ -156,21 +259,24 @@ export interface ExecuteCredentialR3ApprovalParams {
   operatorGrantedScopes: readonly string[];
   correlationId?: string;
   causationId?: string;
-  /** Rotate only — which kind is being rotated ("webhook_secret" | "api_key_pair"). See this module's header for why it is supplied here, not at request time. Ignored for revoke. */
-  secretKind?: "webhook_secret" | "api_key_pair";
-  /** Rotate + secretKind "webhook_secret" only — the actual new secret value. */
-  secretValue?: string;
-  /** Rotate + secretKind "api_key_pair" only — both halves, supplied together. */
-  apiKeyId?: string;
-  apiKeySecret?: string;
-  overlapHours?: number;
-  webhookEndpointId?: string;
 }
 
 export interface ExecuteCredentialR3ApprovalResult {
   operation: ManagementOperationRecord;
   approval: ApprovalRecord;
   replay: boolean;
+}
+
+function approvedRotateParameters(approval: ApprovalRecord): ApprovedRotateParameters {
+  const summary = approval.safeRequestSummary;
+  // A rotate approval created before migration 0013 bound no parameters at
+  // all — fail closed; the operator must raise a fresh request.
+  if (!summary) throw new MissingCredentialApprovalTargetError("approved rotate parameters (re-request this rotation)");
+  return normalizeRotateParameters({
+    secretKind: typeof summary.secretKind === "string" ? summary.secretKind : undefined,
+    overlapHours: typeof summary.overlapHours === "number" ? summary.overlapHours : undefined,
+    webhookEndpointId: typeof summary.webhookEndpointId === "string" ? summary.webhookEndpointId : undefined,
+  });
 }
 
 export async function executeCredentialR3Approval(
@@ -181,23 +287,27 @@ export async function executeCredentialR3Approval(
   const entry = Object.values(CREDENTIAL_R3_ACTIONS).find((e) => e.action === approval.requestedAction);
   if (!entry) throw new UnknownCredentialR3ActionError(approval.requestedAction);
   if (!approval.targetTenantId) throw new MissingCredentialApprovalTargetError("tenantId");
+  const isRotate = approval.requestedAction === CREDENTIAL_R3_ACTIONS.rotate.action;
 
-  if (approval.requestedAction === CREDENTIAL_R3_ACTIONS.rotate.action) {
-    if (params.secretKind !== "webhook_secret" && params.secretKind !== "api_key_pair") {
-      throw new MissingCredentialApprovalTargetError("secretKind");
-    }
-    if (params.secretKind === "webhook_secret" && (!params.secretValue || params.secretValue.trim() === "")) {
-      throw new MissingCredentialApprovalTargetError("secretValue");
-    }
-    if (params.secretKind === "api_key_pair" && (!params.apiKeyId || params.apiKeyId.trim() === "" || !params.apiKeySecret || params.apiKeySecret.trim() === "")) {
-      throw new MissingCredentialApprovalTargetError("apiKeyId/apiKeySecret");
-    }
+  // §59 replay BEFORE the single-use gate (audit remediation M5): a retry
+  // of an execution that already produced an operation returns it.
+  const prior = await deps.ledger.findApprovalExecutionReplay(params.idempotencyKey, approval.approvalId, approval.requestedAction);
+  if (prior) return { operation: prior, replay: true, approval };
+
+  let rotate: ApprovedRotateParameters | undefined;
+  let expectedHash: string;
+  if (isRotate) {
+    rotate = approvedRotateParameters(approval);
+    assertRotateMaterial(rotate.secretKind, params);
+    const materialDigest = await computeRotateMaterialDigest(approval.approvalId, rotate.secretKind, params);
+    expectedHash = computeCredentialApprovalHash(approval.requestedAction, approval.targetTenantId, approval.targetResourceId, { ...rotate, materialDigest });
+  } else {
+    expectedHash = computeCredentialApprovalHash(approval.requestedAction, approval.targetTenantId, approval.targetResourceId);
   }
 
-  // Single-use gate FIRST — same discipline as identityApprovalOperation.ts:
-  // whatever happens to the mutation call below, this approval can never
-  // authorize a second attempt.
-  const expectedHash = computeCredentialApprovalHash(approval.requestedAction, approval.targetTenantId, approval.targetResourceId);
+  // Single-use gate — whatever happens to the mutation call below, this
+  // approval can never authorize a second attempt. A material mismatch
+  // fails here (APPROVAL_PAYLOAD_MISMATCH) without consuming the approval.
   const executedApproval = await deps.approvals.markExecuted(params.approvalId, expectedHash);
 
   const correlationId = params.correlationId ?? randomUUID();
@@ -214,13 +324,13 @@ export async function executeCredentialR3Approval(
     targetResourceId: credentialId,
     reason: approval.reason,
     riskClass: "R3",
-    // secretValue/apiKeyId/apiKeySecret deliberately excluded from payload,
-    // same reasoning as credentialOperation.ts's requestCredentialReplace.
-    // secretKind is a label, not material — safe to record.
+    // Material deliberately excluded, same reasoning as
+    // credentialOperation.ts's requestCredentialReplace. secretKind is a
+    // label, not material — safe to record.
     payload: {
       tenantId,
       credentialId,
-      secretKind: approval.requestedAction === CREDENTIAL_R3_ACTIONS.rotate.action ? params.secretKind ?? null : null,
+      secretKind: rotate?.secretKind ?? null,
       approvalId: approval.approvalId,
     },
     contractVersion: MANAGEMENT_COMMAND_CONTRACT,
@@ -249,16 +359,16 @@ export async function executeCredentialR3Approval(
   const commandId = randomUUID();
   const path = `${MANAGEMENT_V1_PREFIX}/tenants/${encodeURIComponent(tenantId)}/credentials/${encodeURIComponent(credentialId)}/${entry.segment}`;
   const body: Record<string, unknown> = { reason: approval.reason, idempotencyKey: params.idempotencyKey, commandId };
-  if (approval.requestedAction === CREDENTIAL_R3_ACTIONS.rotate.action) {
-    body.secretKind = params.secretKind;
-    if (params.secretKind === "api_key_pair") {
+  if (rotate) {
+    body.secretKind = rotate.secretKind;
+    if (rotate.secretKind === "api_key_pair") {
       body.apiKeyId = params.apiKeyId;
       body.apiKeySecret = params.apiKeySecret;
     } else {
       body.secretValue = params.secretValue;
+      if (rotate.overlapHours !== null) body.overlapHours = rotate.overlapHours;
+      if (rotate.webhookEndpointId !== null) body.webhookEndpointId = rotate.webhookEndpointId;
     }
-    if (params.overlapHours !== undefined) body.overlapHours = params.overlapHours;
-    if (params.webhookEndpointId !== undefined) body.webhookEndpointId = params.webhookEndpointId;
   }
 
   let result;

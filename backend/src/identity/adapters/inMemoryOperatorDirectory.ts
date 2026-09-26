@@ -1,4 +1,4 @@
-import type { OperatorDirectory } from "../operatorDirectory.js";
+import { isPendingFirstMfaLogin, type OperatorDirectory } from "../operatorDirectory.js";
 import type { OperatorRecord } from "../types.js";
 
 // 1A.2 interim implementation. Real operator provisioning (add/disable an
@@ -17,12 +17,14 @@ export class InMemoryOperatorDirectory implements OperatorDirectory {
     return this.byCognitoSub.get(cognitoSub);
   }
 
-  async activatePendingOperator(operatorId: string): Promise<void> {
+  async activatePendingOperator(operatorId: string): Promise<boolean> {
     for (const [sub, op] of this.byCognitoSub) {
       if (op.operatorId === operatorId) {
+        if (!isPendingFirstMfaLogin(op)) return false;
         this.byCognitoSub.set(sub, { ...op, status: "active", mfaEnrolled: true, disabledAt: undefined, disabledReason: undefined });
-        return;
+        return true;
       }
     }
+    return false;
   }
 }

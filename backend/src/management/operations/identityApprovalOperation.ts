@@ -148,7 +148,13 @@ export async function executeIdentityR3Approval(
   if (!entry) throw new UnknownIdentityR3ActionError(approval.requestedAction);
   if (!approval.targetTenantId) throw new MissingIdentityApprovalTargetError("tenantId");
 
-  // Single-use gate FIRST: whatever happens to the mutation call below, this
+  // §59 replay BEFORE the single-use gate (audit remediation M5): a timeout
+  // retry with the same idempotency key returns the already-recorded
+  // operation instead of 409 APPROVAL_ALREADY_EXECUTED.
+  const prior = await deps.ledger.findApprovalExecutionReplay(params.idempotencyKey, approval.approvalId, approval.requestedAction);
+  if (prior) return { operation: prior, replay: true, approval };
+
+  // Single-use gate: whatever happens to the mutation call below, this
   // approval can never authorize a second attempt. A failed mutation after
   // this point requires a fresh approval to retry — deliberately, not a bug
   // (§10: "changing target/action/payload after approval invalidates it";

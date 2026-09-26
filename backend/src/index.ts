@@ -3,6 +3,7 @@ import express from "express";
 import { LazyDbClient } from "./db/lazyDbClient.js";
 import { PgDbClient } from "./db/pgDbClient.js";
 import { ConsoleAuditSink } from "./identity/adapters/consoleAuditSink.js";
+import { PostgresAuditSink } from "./identity/adapters/postgresAuditSink.js";
 import { PostgresBrowserAuthStore } from "./identity/adapters/postgresBrowserAuthStore.js";
 import { PostgresOperatorDirectory } from "./identity/adapters/postgresOperatorDirectory.js";
 import { PostgresSessionStore } from "./identity/adapters/postgresSessionStore.js";
@@ -79,7 +80,9 @@ const identityProvider = new LazyIdentityProvider(() => CognitoIdentityProvider.
 const operatorDirectory = new PostgresOperatorDirectory(dbClient);
 const sessionStore = new PostgresSessionStore(dbClient);
 const browserAuthStore = new PostgresBrowserAuthStore(dbClient);
-const auditSink = new ConsoleAuditSink();
+// Audit remediation M6 — durable auth/authz audit (governance.
+// operator_auth_audit_log), still mirrored to stdout for log shipping.
+const auditSink = new PostgresAuditSink(dbClient, new ConsoleAuditSink());
 
 // 1A.6 — reuses the exact same lazy dbClient/signing-keys singletons this
 // file already constructs for the identity adapters and the JWKS endpoint;

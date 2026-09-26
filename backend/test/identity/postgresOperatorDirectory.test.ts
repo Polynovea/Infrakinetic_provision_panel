@@ -63,15 +63,30 @@ describe("identity/adapters/postgresOperatorDirectory", () => {
   it("activatePendingOperator flips a pending-MFA operator to active and clears the disabled fields", async () => {
     db.public.none(`
       INSERT INTO governance.operators (operator_id, cognito_sub, email, display_name, status, mfa_enrolled, created_at, updated_at, disabled_at, disabled_reason)
-      VALUES ('33333333-3333-4333-8333-333333333333', 'sub-pending-mfa', 'c@example.invalid', 'C', 'disabled', false, now(), now(), now(), 'Pending real TOTP MFA enrollment')
+      VALUES ('33333333-3333-4333-8333-333333333333', 'sub-pending-mfa', 'c@example.invalid', 'C', 'disabled', false, now(), now(), now(), 'Pending real TOTP MFA enrollment (bootstrap-created, not yet verified)')
     `);
 
-    await directory.activatePendingOperator("33333333-3333-4333-8333-333333333333");
+    expect(await directory.activatePendingOperator("33333333-3333-4333-8333-333333333333")).toBe(true);
 
     const record = await directory.findByCognitoSub("sub-pending-mfa");
     expect(record?.status).toBe("active");
     expect(record?.mfaEnrolled).toBe(true);
     expect(record?.disabledAt).toBeUndefined();
     expect(record?.disabledReason).toBeUndefined();
+  });
+
+  // Audit remediation M2 — the SQL itself refuses a for-cause disable, even
+  // if a caller forgets to check.
+  it("activatePendingOperator refuses (returns false, changes nothing) for a disabled, never-enrolled operator WITHOUT the bootstrap marker", async () => {
+    db.public.none(`
+      INSERT INTO governance.operators (operator_id, cognito_sub, email, display_name, status, mfa_enrolled, created_at, updated_at, disabled_at, disabled_reason)
+      VALUES ('44444444-4444-4444-8444-444444444444', 'sub-offboarded', 'd@example.invalid', 'D', 'disabled', false, now(), now(), now(), 'Offboarded before first login')
+    `);
+
+    expect(await directory.activatePendingOperator("44444444-4444-4444-8444-444444444444")).toBe(false);
+
+    const record = await directory.findByCognitoSub("sub-offboarded");
+    expect(record?.status).toBe("disabled");
+    expect(record?.disabledReason).toBe("Offboarded before first login");
   });
 });

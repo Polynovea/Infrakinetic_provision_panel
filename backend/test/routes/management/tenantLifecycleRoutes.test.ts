@@ -226,4 +226,111 @@ describe("POST /management/v1/tenants/commission and /tenants/:tenantId/{suspend
       expect(res.status).toBe(403);
     });
   });
+  // Audit remediation H3 — the repair route that makes owner-side commission
+  // repair reachable. Validation short-circuits before any Infrakinetic call.
+  describe("POST /tenants/commission-requests/:commissionRequestId/repair", () => {
+    const CRID = "eeeeeeee-0000-4eee-8eee-000000000001";
+    const BODY = {
+      idempotencyKey: "repair-1", reason: "identity stage failed", name: "Acme", slug: "acme", plan: "pro", accountType: "live",
+      sendInvite: true, initialAdmin: { name: "Ada", email: "ada@example.invalid" },
+    };
+
+    async function projectionAt(state: "provisioning" | "active") {
+      const created = await commissionedTenants.createForCommissionRequest({
+        commissionRequestId: CRID, desiredName: "Acme", desiredSlug: "acme", desiredPlan: "pro", accountType: "live",
+        responsibleOperatorId: activeAdminOperator().operatorId,
+      });
+      await commissionedTenants.transitionLifecycleState(created.projectionId, { toState: "approved" });
+      await commissionedTenants.transitionLifecycleState(created.projectionId, { toState: "provisioning", tenantId: "ffffffff-0000-4fff-8fff-000000000001" });
+      if (state === "active") await commissionedTenants.transitionLifecycleState(created.projectionId, { toState: "active" });
+    }
+
+    async function post(body: Record<string, unknown>, crid = CRID) {
+      const { server, op } = appWithAdmin();
+      const token = await signTestToken(keyPair, { subject: op.cognitoSub });
+      return request(server).post(`/management/v1/tenants/commission-requests/${crid}/repair`).set("authorization", `Bearer ${token}`).send(body);
+    }
+
+    it("404 for an unknown commission request", async () => {
+      const res = await post(BODY);
+      expect(res.status).toBe(404);
+      expect(res.body.error).toBe("COMMISSION_REQUEST_NOT_FOUND");
+    });
+
+    it("409 when the commission is not in 'provisioning' (nothing to repair)", async () => {
+      await projectionAt("active");
+      const res = await post(BODY);
+      expect(res.status).toBe(409);
+      expect(res.body.error).toBe("COMMISSION_NOT_REPAIRABLE");
+    });
+
+    it("409 when the resubmitted commission differs from the approved one — a repair can finish a commission, never repurpose it", async () => {
+      await projectionAt("provisioning");
+      for (const changed of [{ name: "Other" }, { plan: "enterprise" }, { accountType: "demo" }, { slug: "other" }]) {
+        const res = await post({ ...BODY, ...changed });
+        expect(res.status).toBe(409);
+        expect(res.body.error).toBe("COMMISSION_REPAIR_MISMATCH");
+      }
+    });
+
+    it("a matching repair passes validation and reaches orchestration with the STORED commissionRequestId", async () => {
+      await projectionAt("provisioning");
+      const res = await post(BODY);
+      // Unreachable fake Infrakinetic: the call is dispatched and fails
+      // ambiguously, proving validation passed; the ledger op is addressed
+      // by the stored commission request, not a fresh one.
+      expect([200, 502]).toContain(res.status);
+      const op = await ledger.getByIdempotencyKey("repair-1");
+      expect(op?.targetResourceType).toBe("commission_request");
+      expect(op?.targetResourceId).toBe(CRID);
+    });
+
+    it("requires tenants.commission", async () => {
+      const { server, op } = appWithAdmin({ scopes: ["tenants.suspend"] });
+      await projectionAt("provisioning");
+      const token = await signTestToken(keyPair, { subject: op.cognitoSub });
+      const res = await request(server).post(`/management/v1/tenants/commission-requests/${CRID}/repair`).set("authorization", `Bearer ${token}`).send(BODY);
+      expect(res.status).toBe(403);
+    });
+
+    // H3 operator surface — the read the repair dialog prefills from.
+    it("GET returns the stored approved commission (no admin PII) and whether it is repairable", async () => {
+      await projectionAt("provisioning");
+      const { server, op } = appWithAdmin();
+      const token = await signTestToken(keyPair, { subject: op.cognitoSub });
+      const res = await request(server).get(`/management/v1/tenants/commission-requests/${CRID}`).set("authorization", `Bearer ${token}`);
+      expect(res.status).toBe(200);
+      expect(res.body.commissionRequest).toEqual({
+        commissionRequestId: CRID, tenantId: "ffffffff-0000-4fff-8fff-000000000001", lifecycleState: "provisioning", repairable: true,
+        desiredName: "Acme", desiredSlug: "acme", desiredPlan: "pro", accountType: "live",
+      });
+      expect(JSON.stringify(res.body)).not.toMatch(/@/);
+    });
+
+    it("GET reports a finished commission as not repairable, and 404s an unknown one", async () => {
+      await projectionAt("active");
+      const { server, op } = appWithAdmin();
+      const token = await signTestToken(keyPair, { subject: op.cognitoSub });
+      const known = await request(server).get(`/management/v1/tenants/commission-requests/${CRID}`).set("authorization", `Bearer ${token}`);
+      expect(known.body.commissionRequest.repairable).toBe(false);
+      const unknown = await request(server).get("/management/v1/tenants/commission-requests/00000000-0000-4000-8000-000000000000").set("authorization", `Bearer ${token}`);
+      expect(unknown.status).toBe(404);
+    });
+  });
+
+  // Audit remediation M5 — a same-key timeout retry of a commission must hash
+  // identically (stable commissionRequestId), so it replays instead of 409-ing.
+  it("POST /tenants/commission: a same-key retry reuses the first attempt's commissionRequestId", async () => {
+    const { server, op } = appWithAdmin();
+    const token = await signTestToken(keyPair, { subject: op.cognitoSub });
+    const body = { idempotencyKey: "commission-retry", reason: "new customer", name: "Retry Co", plan: "pro", accountType: "live", sendInvite: false };
+    const first = await request(server).post("/management/v1/tenants/commission").set("authorization", `Bearer ${token}`).send(body);
+    const firstOp = await ledger.getByIdempotencyKey("commission-retry");
+    const second = await request(server).post("/management/v1/tenants/commission").set("authorization", `Bearer ${token}`).send(body);
+
+    expect(firstOp?.targetResourceId).toBeTruthy();
+    expect(second.status).not.toBe(409);
+    expect(second.body.replay).toBe(true);
+    expect(second.body.operation.operationId).toBe(first.body.operation?.operationId ?? firstOp?.operationId);
+  });
 });

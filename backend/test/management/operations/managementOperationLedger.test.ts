@@ -55,6 +55,38 @@ describe("management/operations/managementOperationLedger", () => {
     await seedOperator(client);
   });
 
+  // Audit remediation M5 (secondary) — the key reservation autocommits
+  // separately from the operation insert; a failure between them must not
+  // burn the key forever.
+  it("releases the idempotency-key reservation when the operation insert fails, so a retry with the SAME key succeeds", async () => {
+    const realTransaction = client.transaction.bind(client);
+    let failed = false;
+    client.transaction = (async (work: Parameters<DbClient["transaction"]>[0]) => {
+      if (!failed) {
+        failed = true;
+        throw new Error("simulated DB failure mid-insert");
+      }
+      return realTransaction(work);
+    }) as DbClient["transaction"];
+
+    await expect(ledger.createOrReplayOperation(baseParams({ idempotencyKey: "burn-me" }))).rejects.toThrow("simulated DB failure");
+    const retry = await ledger.createOrReplayOperation(baseParams({ idempotencyKey: "burn-me" }));
+    expect(retry.replay).toBe(false);
+    expect(retry.operation.status).toBe("submitted");
+  });
+
+  it("resolveStableRequestId reuses the request id already bound to this key (same action/resource type), and mints fresh otherwise", async () => {
+    const { operation } = await ledger.createOrReplayOperation(baseParams({
+      idempotencyKey: "commission-key", requestedAction: "tenant.commission", targetEngine: undefined,
+      targetResourceType: "commission_request", targetResourceId: "cr-original",
+    }));
+    expect(await ledger.resolveStableRequestId("commission-key", "tenant.commission", "commission_request")).toBe(operation.targetResourceId);
+    const fresh = await ledger.resolveStableRequestId("unused-key", "tenant.commission", "commission_request");
+    expect(fresh).toMatch(/^[0-9a-f-]{36}$/);
+    // A key bound to a different action never leaks its id into another action.
+    expect(await ledger.resolveStableRequestId("commission-key", "identity.invitation.issue", "identity_invitation_request")).not.toBe("cr-original");
+  });
+
   it("creates a new operation on first use of an idempotency key", async () => {
     const { operation, replay } = await ledger.createOrReplayOperation(baseParams());
     expect(replay).toBe(false);

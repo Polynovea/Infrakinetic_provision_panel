@@ -384,6 +384,26 @@ export class ManagementOperationLedger {
       const safeApprovalEvidence =
         params.approvalEvidence !== undefined ? redactSecretShapedFields(params.approvalEvidence) : undefined;
 
+      // Audit remediation M5 (secondary): the reservation above autocommits
+      // on its own, so a DB failure inside the transaction below used to
+      // leave the key 'in_progress' with no operation row — permanently
+      // burned (every retry looped, then 409'd). Release the reservation on
+      // failure; the guard makes the release a no-op if the operation row
+      // did land.
+      // Best-effort: if the release itself fails the key stays reserved,
+      // which is the pre-fix behaviour, never worse.
+      const releaseReservation = async (): Promise<void> => {
+        try {
+          if (await this.getByIdempotencyKey(params.idempotencyKey)) return;
+          await this.db.query(
+            `DELETE FROM governance.management_idempotency_keys WHERE idempotency_key = $1 AND status = 'in_progress'`,
+            [params.idempotencyKey],
+          );
+        } catch {
+          // swallow — see above
+        }
+      };
+
       const row = await this.db.transaction(async (tx) => {
         const inserted = await tx.query<OperationRow>(
           `INSERT INTO governance.management_operations
@@ -428,6 +448,9 @@ export class ManagementOperationLedger {
           contractVersion: params.contractVersion,
         });
         return inserted.rows[0];
+      }).catch(async (err: unknown) => {
+        await releaseReservation();
+        throw err;
       });
       return { operation: mapOperationRow(row), replay: false };
     }
@@ -472,6 +495,46 @@ export class ManagementOperationLedger {
     );
     const row = result.rows[0];
     return row ? mapOperationRow(row) : undefined;
+  }
+
+  // Audit remediation M5 — commission and invitation-issue operations are
+  // addressed by a Governance-minted request id (targetResourceId), which is
+  // part of the safe payload hash. Minting a fresh id on every HTTP call made
+  // a same-key timeout retry hash differently and 409 instead of replaying
+  // (§59). Routes resolve the id through here: a key already bound to an
+  // operation of this action/resource type reuses that operation's id (so a
+  // genuine replay hashes identically, and a changed payload still
+  // conflicts); an unused key gets a fresh id.
+  async resolveStableRequestId(idempotencyKey: string, requestedAction: string, targetResourceType: string): Promise<string> {
+    if (!idempotencyKey || idempotencyKey.trim() === "") throw new MissingIdempotencyKeyError();
+    const existing = await this.getByIdempotencyKey(idempotencyKey);
+    if (existing && existing.requestedAction === requestedAction && existing.targetResourceType === targetResourceType && existing.targetResourceId) {
+      return existing.targetResourceId;
+    }
+    return randomUUID();
+  }
+
+  // Audit remediation M5 — §59 "same key + same payload -> safe replay" for
+  // maker-checker execution. Approval execution consumes the approval
+  // (markExecuted) before creating the ledger operation, so a timeout retry
+  // with the SAME idempotency key used to hit APPROVAL_ALREADY_EXECUTED
+  // instead of replaying. Execute paths call this BEFORE markExecuted: an
+  // existing operation under this key that was produced by this same
+  // approval is returned as a replay; one produced by anything else is a
+  // key-reuse conflict. Undefined means "never executed under this key".
+  async findApprovalExecutionReplay(
+    idempotencyKey: string,
+    approvalId: string,
+    requestedAction: string,
+  ): Promise<ManagementOperationRecord | undefined> {
+    if (!idempotencyKey || idempotencyKey.trim() === "") throw new MissingIdempotencyKeyError();
+    const existing = await this.getByIdempotencyKey(idempotencyKey);
+    if (!existing) return undefined;
+    const priorApprovalId = (existing.approvalEvidence as { approvalId?: unknown } | undefined)?.approvalId;
+    if (priorApprovalId !== approvalId || existing.requestedAction !== requestedAction) {
+      throw new IdempotencyConflictError(idempotencyKey);
+    }
+    return existing;
   }
 
   // Newest-first, bounded. Powers the Overview dashboard's "recent
@@ -532,6 +595,13 @@ export class ManagementOperationLedger {
       throw new InvalidLifecycleTransitionError(current.status, params.toStatus);
     }
 
+    // Audit remediation L3 — snapshots were redacted but `result` and
+    // `partialFailureState` were stored verbatim, so whatever an owner
+    // response carried (e.g. a tenant user's email) landed in the ledger.
+    // Same central redaction as every other evidence field.
+    const safeResult = params.result === undefined ? undefined : redactSecretShapedFields(params.result);
+    const safePartialFailureState = params.partialFailureState === undefined ? undefined : redactSecretShapedFields(params.partialFailureState);
+
     const outcome: TransitionOutcome = await this.db.transaction(async (tx) => {
       const updated = await tx.query<OperationRow>(
         `UPDATE governance.management_operations
@@ -551,8 +621,8 @@ export class ManagementOperationLedger {
           params.toStatus,
           toJsonbParam(params.beforeStateSafeSnapshot),
           toJsonbParam(params.afterStateSafeSnapshot),
-          toJsonbParam(params.result),
-          toJsonbParam(params.partialFailureState),
+          toJsonbParam(safeResult),
+          toJsonbParam(safePartialFailureState),
           current.status,
         ],
       );

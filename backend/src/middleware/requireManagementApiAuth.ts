@@ -3,10 +3,12 @@ import { randomUUID } from "node:crypto";
 import type { NextFunction, Request, RequestHandler, Response } from "express";
 
 import type { AuditSink } from "../identity/auditSink.js";
+import { isOperatorBearerAuthEnabled } from "../identity/bearerAuthPolicy.js";
 import { sha256Base64Url } from "../identity/browserAuthCrypto.js";
 import type { BrowserAuthStore } from "../identity/browserAuthStore.js";
-import { parseCookies, SESSION_COOKIE_CANDIDATES } from "../identity/browserCookies.js";
+import { parseCookies, sessionCookieCandidates } from "../identity/browserCookies.js";
 import {
+  BearerAuthDisabledError,
   ManagementAuthError,
   MissingTokenError,
   OperatorDisabledError,
@@ -28,6 +30,12 @@ export interface ManagementAuthDeps {
   sessionStore: OperatorSessionStore;
   auditSink: AuditSink;
   browserAuthStore?: BrowserAuthStore;
+  /**
+   * L8 — whether raw operator bearer tokens are accepted. Defaults to
+   * isOperatorBearerAuthEnabled(process.env): on outside production, off in
+   * production unless explicitly enabled for non-browser tooling.
+   */
+  bearerAuthEnabled?: boolean;
 }
 
 function extractBearerToken(req: Request): string | undefined {
@@ -39,7 +47,7 @@ function extractBearerToken(req: Request): string | undefined {
 
 function extractBrowserSessionToken(req: Request): string | undefined {
   const cookies = parseCookies(req.header("cookie"));
-  for (const name of SESSION_COOKIE_CANDIDATES) {
+  for (const name of sessionCookieCandidates(process.env.NODE_ENV === "production")) {
     const value = cookies[name];
     if (value) return value;
   }
@@ -92,6 +100,13 @@ export function requireManagementApiAuth(deps: ManagementAuthDeps): RequestHandl
       let operatorSessionId: string;
 
       if (rawToken) {
+        // Rejected outright rather than silently falling through to the
+        // cookie: a caller presenting a bearer token gets a clear, audited
+        // refusal instead of an ambiguous identity.
+        if (!(deps.bearerAuthEnabled ?? isOperatorBearerAuthEnabled())) {
+          await fail(new BearerAuthDisabledError());
+          return;
+        }
         const claims = await deps.identityProvider.verifyToken(rawToken);
         operator = await deps.operatorDirectory.findByCognitoSub(claims.subject);
         operatorSessionId = claims.tokenId;

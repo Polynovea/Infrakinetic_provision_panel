@@ -30,3 +30,13 @@ export function parseCookies(header: string | undefined): Record<string, string>
 }
 
 export const SESSION_COOKIE_CANDIDATES = ["__Host-governance_session", "governance_session"] as const;
+
+// Audit remediation L8 — a __Host- cookie cannot be set by a sibling
+// subdomain (no Domain attribute, Secure, Path=/), which is the whole point
+// of the prefix. Also accepting the unprefixed name in production let a
+// cookie planted from any *.parent-domain host stand in for the session
+// cookie (session fixation). Production (secure cookies) accepts only the
+// __Host- name; local non-TLS development keeps the plain name.
+export function sessionCookieCandidates(production: boolean): readonly string[] {
+  return production ? ["__Host-governance_session"] : SESSION_COOKIE_CANDIDATES;
+}
