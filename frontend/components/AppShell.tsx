@@ -11,6 +11,8 @@ const NAV_ITEMS = [
   { href: "/tenants", label: "Tenants", icon: "domain" },
   { href: "/engine-state", label: "Platform", icon: "dns" },
   { href: "/reconciliation", label: "Reconciliation", icon: "fact_check" },
+  { href: "/payment-adapters", label: "Payment adapters", icon: "payments" },
+  { href: "/global-config", label: "Global config", icon: "settings_backup_restore" },
 ] as const;
 
 const PAGE_TITLES: Record<string, string> = {

@@ -27,6 +27,10 @@ const migration0010Sql = readFileSync(
 // Audit remediation M6 — 0014 is PL/pgSQL triggers, which pg-mem cannot
 // execute at all; it is certified against real Postgres by
 // provisioning/003_verify_0014_append_only.sql instead.
+const migration0015Sql = readFileSync(
+  fileURLToPath(new URL("../../migrations/0015_payment_adapter_and_global_config_scopes.sql", import.meta.url)),
+  "utf8",
+);
 const migration0014Sql = readFileSync(
   fileURLToPath(new URL("../../migrations/0014_audit_append_only_enforcement.sql", import.meta.url)),
   "utf8",
@@ -57,6 +61,9 @@ async function runMigrationsWithPgMem0008FidelityGap(client: Parameters<typeof r
     ["0008_operator_scopes_lifecycle_and_plan_scopes.sql", migration0008Sql],
     ["0010_retire_tenant_plan_write_scope.sql", migration0010Sql],
     ["0014_audit_append_only_enforcement.sql", migration0014Sql],
+    // 1A.14 — same operator_scopes CHECK drop/re-add as 0008/0010; covered
+    // by its own production-shaped DDL test.
+    ["0015_payment_adapter_and_global_config_scopes.sql", migration0015Sql],
   ] as const) {
     const checksum = createHash("sha256").update(sql, "utf8").digest("hex");
     await client.query(
@@ -89,8 +96,11 @@ describe("db/migrationRunner", () => {
       "0012_management_approvals.sql",
       "0013_management_approvals_safe_request_summary.sql",
       "0014_audit_append_only_enforcement.sql",
+      "0015_payment_adapter_and_global_config_scopes.sql",
+      "0016_global_config_restore.sql",
     ]);
-    expect(results.filter((r) => !["0008_operator_scopes_lifecycle_and_plan_scopes.sql", "0010_retire_tenant_plan_write_scope.sql", "0014_audit_append_only_enforcement.sql"].includes(r.id)).every((r) => r.applied)).toBe(true);
+    expect(results.filter((r) => !["0008_operator_scopes_lifecycle_and_plan_scopes.sql", "0010_retire_tenant_plan_write_scope.sql", "0014_audit_append_only_enforcement.sql", "0015_payment_adapter_and_global_config_scopes.sql"].includes(r.id)).every((r) => r.applied)).toBe(true);
+    expect(results.find((r) => r.id === "0015_payment_adapter_and_global_config_scopes.sql")?.applied).toBe(false);
     expect(results.find((r) => r.id === "0014_audit_append_only_enforcement.sql")?.applied).toBe(false);
     expect(results.find((r) => r.id === "0008_operator_scopes_lifecycle_and_plan_scopes.sql")?.applied).toBe(false);
     expect(results.find((r) => r.id === "0010_retire_tenant_plan_write_scope.sql")?.applied).toBe(false);
@@ -198,6 +208,8 @@ describe("db/migrationRunner", () => {
       { id: "0012_management_approvals.sql", applied: true },
       { id: "0013_management_approvals_safe_request_summary.sql", applied: true },
       { id: "0014_audit_append_only_enforcement.sql", applied: false },
+      { id: "0015_payment_adapter_and_global_config_scopes.sql", applied: false },
+      { id: "0016_global_config_restore.sql", applied: true },
     ]);
   });
 
@@ -241,6 +253,8 @@ describe("db/migrationRunner", () => {
       { id: "0012_management_approvals.sql", applied: true },
       { id: "0013_management_approvals_safe_request_summary.sql", applied: true },
       { id: "0014_audit_append_only_enforcement.sql", applied: false },
+      { id: "0015_payment_adapter_and_global_config_scopes.sql", applied: false },
+      { id: "0016_global_config_restore.sql", applied: true },
     ]);
 
     // Idempotent from here on, same as every other migration.

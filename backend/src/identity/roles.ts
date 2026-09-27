@@ -45,6 +45,8 @@ export const SCOPES = [
   "ai.emergency_suspend",
 
   "payments.adapters.read",
+  // 1A.14 (scoping §15 Q2) — separately grantable supply-chain entry.
+  "payments.adapters.submit",
   "payments.adapters.certify",
   "payments.adapters.approve",
   "payments.adapters.revoke",
@@ -57,6 +59,12 @@ export const SCOPES = [
 
   "finops.read",
   "finops.policy.write",
+
+  // 1A.14 (scoping §15 Q2) — global configuration restore. prepare/dry-run
+  // and apply are separate so apply can be withheld from an operator who
+  // may stage packages.
+  "global_config.restore",
+  "global_config.restore.apply",
 
   "audit.read",
 ] as const;

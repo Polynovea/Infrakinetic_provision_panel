@@ -10,6 +10,7 @@ import { createManagementRouter, type ManagementRouterDeps } from "../../src/rou
 import { ManagementOperationLedger } from "../../src/management/operations/managementOperationLedger.js";
 import { CommissionedTenantsRepository } from "../../src/management/operations/commissionedTenants.js";
 import { ManagementApprovalStore } from "../../src/management/operations/managementApprovalStore.js";
+import { GlobalConfigRestoreStore } from "../../src/management/operations/globalConfigRestoreOperation.js";
 import { buildMigratedPgMemClient } from "./pgMemDb.js";
 
 export interface TestAppHandle {
@@ -30,7 +31,7 @@ export function buildTestApp(
   overrides: Partial<
     Pick<
       ManagementRouterDeps,
-      "ledger" | "commissionedTenants" | "approvals" | "getManagementSigningKeys" | "loadTransportConfig" | "infrakineticBaseUrl" | "loadBrowserAuthConfig" | "fetchImpl"
+      "ledger" | "commissionedTenants" | "approvals" | "globalConfigStore" | "getManagementSigningKeys" | "loadTransportConfig" | "infrakineticBaseUrl" | "loadBrowserAuthConfig" | "fetchImpl"
     >
   > = {},
 ): TestAppHandle {
@@ -50,6 +51,7 @@ export function buildTestApp(
   const ledger = overrides.ledger ?? new ManagementOperationLedger(defaultClient!);
   const commissionedTenants = overrides.commissionedTenants ?? new CommissionedTenantsRepository(defaultClient!);
   const approvals = overrides.approvals ?? new ManagementApprovalStore(defaultClient!);
+  const globalConfigStore = overrides.globalConfigStore ?? new GlobalConfigRestoreStore(defaultClient ?? buildMigratedPgMemClient().client);
 
   app.use(
     "/management/v1",
@@ -62,6 +64,7 @@ export function buildTestApp(
       ledger,
       commissionedTenants,
       approvals,
+      globalConfigStore,
       getManagementSigningKeys: overrides.getManagementSigningKeys ?? (() => Promise.reject(new Error("management signing keys not configured in this test"))),
       loadTransportConfig: overrides.loadTransportConfig ?? (() => { throw new Error("management transport config not configured in this test"); }),
       infrakineticBaseUrl: overrides.infrakineticBaseUrl ?? "http://127.0.0.1:0",
