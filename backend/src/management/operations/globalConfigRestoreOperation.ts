@@ -287,6 +287,14 @@ export class GlobalConfigRestoreStore {
     return mapOperation(rows[0]);
   }
 
+  async listOperations(classKey?: string): Promise<Array<Omit<RestoreOperation, "beforeSnapshot">>> {
+    const { rows } = await this.db.query<Record<string, unknown>>(
+      `SELECT * FROM governance.global_config_restore_operations ${classKey ? "WHERE class_key = $1" : ""} ORDER BY created_at DESC LIMIT 100`,
+      classKey ? [classKey] : [],
+    );
+    return rows.map((r) => { const op: Partial<RestoreOperation> = mapOperation(r); delete op.beforeSnapshot; return op as Omit<RestoreOperation, "beforeSnapshot">; });
+  }
+
   async findOperationByManagementOperation(managementOperationId: string): Promise<RestoreOperation | null> {
     const { rows } = await this.db.query<Record<string, unknown>>(`SELECT * FROM governance.global_config_restore_operations WHERE management_operation_id = $1`, [managementOperationId]);
     return rows[0] ? mapOperation(rows[0]) : null;

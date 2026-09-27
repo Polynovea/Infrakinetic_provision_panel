@@ -2069,6 +2069,10 @@ export function createManagementRouter(deps: ManagementRouterDeps): Router {
     body: await dryRunPackage(await globalConfigDeps(), { ...operatorParams(ctx), packageId: req.params.packageId }),
   }));
 
+  gcRoute("get", "/global-config/restore-operations", async (_ctx, req) => ({
+    body: { restoreOperations: await deps.globalConfigStore.listOperations(typeof req.query.classKey === "string" ? req.query.classKey : undefined) },
+  }));
+
   gcRoute("get", "/global-config/restore-operations/:restoreOperationId", async (_ctx, req) => ({
     body: { restoreOperation: await deps.globalConfigStore.getOperation(req.params.restoreOperationId) },
   }));
