@@ -15,6 +15,7 @@ import { loadManagementTransportConfig } from "./management/managementConfig.js"
 import { ManagementOperationLedger } from "./management/operations/managementOperationLedger.js";
 import { CommissionedTenantsRepository } from "./management/operations/commissionedTenants.js";
 import { ManagementApprovalStore } from "./management/operations/managementApprovalStore.js";
+import { GlobalConfigRestoreStore } from "./management/operations/globalConfigRestoreOperation.js";
 import { createBrowserAuthRouter } from "./routes/auth/index.js";
 import { createManagementRouter } from "./routes/management/index.js";
 import { DatabaseUnavailableError } from "./db/errors.js";
@@ -96,6 +97,7 @@ const managementDeps = {
   ledger: new ManagementOperationLedger(dbClient),
   commissionedTenants: new CommissionedTenantsRepository(dbClient),
   approvals: new ManagementApprovalStore(dbClient),
+  globalConfigStore: new GlobalConfigRestoreStore(dbClient),
   getManagementSigningKeys: getManagementSigningKeysLazy,
   loadTransportConfig: loadManagementTransportConfig,
   infrakineticBaseUrl: process.env.INFRAKINETIC_MANAGEMENT_BASE_URL ?? "http://127.0.0.1:4000",

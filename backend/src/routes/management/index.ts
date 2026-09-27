@@ -42,6 +42,21 @@ import {
 } from "../../management/operations/paymentAdapterOperation.js";
 import { listTenantIntegrations } from "../../management/operations/integrationQuery.js";
 import {
+  GlobalConfigRestoreStore,
+  GlobalConfigPackageRejectedError,
+  UnknownGlobalConfigPackageError,
+  listGlobalConfigClasses,
+  captureSnapshot,
+  submitPackage,
+  authorPackage,
+  dryRunPackage,
+  requestRestoreApply,
+  executeRestoreApply,
+  createRollbackPackage,
+  observeRestoreOperation,
+  isGlobalConfigRestoreApproval,
+} from "../../management/operations/globalConfigRestoreOperation.js";
+import {
   requestEngineStateChange,
   recoverEngineState,
   UnknownEngineError,
@@ -155,6 +170,8 @@ export interface ManagementRouterDeps {
   fetchImpl?: typeof fetch;
   // 1A.12.5 — the maker-checker approval substrate for R3 identity actions.
   approvals: ManagementApprovalStore;
+  /** 1A.14 — staged global configuration packages and restore operations (migration 0016). */
+  globalConfigStore: GlobalConfigRestoreStore;
 }
 
 // 1A.2 route integration points (whoami/session/audit) prove the operator
@@ -1983,6 +2000,109 @@ export function createManagementRouter(deps: ManagementRouterDeps): Router {
   }
 
   // ───────────────────────────────────────────────────────────────────────
+  // 1A.14 §8 — global configuration restore. Package staging, validation,
+  // dry-run, rollback-package creation and observation need
+  // global_config.restore (no owner mutation). The apply is R4: requested
+  // here with global_config.restore.apply + fresh step-up, decided and
+  // executed through the shared maker-checker section below.
+  // ───────────────────────────────────────────────────────────────────────
+
+  function globalConfigErrorResponse(err: unknown, res: import("express").Response): boolean {
+    if (err instanceof GlobalConfigPackageRejectedError) {
+      const status = err.code === "UNKNOWN_GLOBAL_CONFIG_CLASS" ? 404 : err.code.endsWith("_INVALID") || err.code.startsWith("PACKAGE_") || err.code === "UNSUPPORTED_PACKAGE_FORMAT" ? 400 : 409;
+      res.status(status).json({ error: err.code, message: err.message });
+      return true;
+    }
+    if (err instanceof UnknownGlobalConfigPackageError) { res.status(404).json({ error: "GLOBAL_CONFIG_PACKAGE_NOT_FOUND", message: err.message }); return true; }
+    return adapterOperationErrorResponse(err, res);
+  }
+
+  async function globalConfigDeps() {
+    const d = await adapterDeps();
+    return { ...d, store: deps.globalConfigStore };
+  }
+
+  const gcRoute = (
+    method: "get" | "post",
+    path: string,
+    handler: (ctx: NonNullable<import("express").Request["operatorContext"]>, req: import("express").Request) => Promise<{ status?: number; body: unknown }>,
+  ) => {
+    router[method](path, requireScope("global_config.restore", deps.auditSink), async (req, res, next) => {
+      try {
+        const ctx = req.operatorContext;
+        if (!ctx) { res.status(403).json({ error: "NOT_AUTHENTICATED" }); return; }
+        const out = await handler(ctx, req);
+        res.status(out.status ?? 200).json(out.body);
+      } catch (err) {
+        if (globalConfigErrorResponse(err, res)) return;
+        next(err);
+      }
+    });
+  };
+
+  gcRoute("get", "/global-config/classes", async (ctx) => ({ body: { classes: await listGlobalConfigClasses(await globalConfigDeps(), operatorParams(ctx)) } }));
+
+  gcRoute("get", "/global-config/packages", async (_ctx, req) => ({
+    body: { packages: await deps.globalConfigStore.listPackages(typeof req.query.classKey === "string" ? req.query.classKey : undefined) },
+  }));
+
+  gcRoute("get", "/global-config/packages/:packageId", async (_ctx, req) => ({ body: { package: await deps.globalConfigStore.getPackage(req.params.packageId) } }));
+
+  gcRoute("post", "/global-config/:classKey/snapshots", async (ctx, req) => ({
+    status: 201,
+    body: { package: await captureSnapshot(await globalConfigDeps(), { ...operatorParams(ctx), classKey: req.params.classKey }) },
+  }));
+
+  gcRoute("post", "/global-config/packages", async (ctx, req) => {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    return { status: 201, body: { package: await submitPackage(await globalConfigDeps(), { ...operatorParams(ctx), pkg: body.package as never, purpose: "restore" }) } };
+  });
+
+  gcRoute("post", "/global-config/:classKey/packages/authored", async (ctx, req) => {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    if (!Array.isArray(body.rows)) throw new GlobalConfigPackageRejectedError("PACKAGE_ROWS_INVALID", "rows must be an array.");
+    const purpose = body.purpose === "forward_fix" ? "forward_fix" : "restore";
+    return { status: 201, body: { package: await authorPackage(await globalConfigDeps(), { ...operatorParams(ctx), classKey: req.params.classKey, rows: body.rows as never, purpose }) } };
+  });
+
+  gcRoute("post", "/global-config/packages/:packageId/dry-run", async (ctx, req) => ({
+    body: await dryRunPackage(await globalConfigDeps(), { ...operatorParams(ctx), packageId: req.params.packageId }),
+  }));
+
+  gcRoute("get", "/global-config/restore-operations/:restoreOperationId", async (_ctx, req) => ({
+    body: { restoreOperation: await deps.globalConfigStore.getOperation(req.params.restoreOperationId) },
+  }));
+
+  gcRoute("post", "/global-config/restore-operations/:restoreOperationId/rollback-package", async (ctx, req) => ({
+    status: 201,
+    body: { package: await createRollbackPackage(await globalConfigDeps(), { ...operatorParams(ctx), restoreOperationId: req.params.restoreOperationId }) },
+  }));
+
+  gcRoute("post", "/global-config/restore-operations/:restoreOperationId/observe", async (ctx, req) => ({
+    body: { restoreOperation: await observeRestoreOperation(await globalConfigDeps(), { ...operatorParams(ctx), restoreOperationId: req.params.restoreOperationId }) },
+  }));
+
+  router.post(
+    "/global-config/packages/:packageId/apply/request",
+    requireScope("global_config.restore.apply", deps.auditSink),
+    requireStepUp(300, deps.sessionStore, deps.auditSink),
+    async (req, res, next) => {
+      try {
+        const ctx = req.operatorContext;
+        if (!ctx) { res.status(403).json({ error: "NOT_AUTHENTICATED" }); return; }
+        const body = (req.body ?? {}) as Record<string, unknown>;
+        if (typeof body.reason !== "string" || body.reason.trim() === "") { res.status(400).json({ error: "REASON_REQUIRED" }); return; }
+        const approval = await requestRestoreApply(await globalConfigDeps(), { ...operatorParams(ctx), packageId: req.params.packageId, reason: body.reason });
+        res.status(201).json({ approval });
+      } catch (err) {
+        if (approvalErrorResponse(err, res)) return;
+        if (globalConfigErrorResponse(err, res)) return;
+        next(err);
+      }
+    },
+  );
+
+  // ───────────────────────────────────────────────────────────────────────
   // 1A.12.5 — R3 identity actions (force-reset, mfa-reset): request (maker,
   // fresh step-up) -> decide (checker, != maker) -> execute (fresh step-up,
   // approval consumed exactly once). §9.1's default 5-minute freshness
@@ -2089,7 +2209,8 @@ export function createManagementRouter(deps: ManagementRouterDeps): Router {
     return (
       Object.values(IDENTITY_R3_ACTIONS).find((entry) => entry.action === approval.requestedAction)?.scope ??
       Object.values(CREDENTIAL_R3_ACTIONS).find((entry) => entry.action === approval.requestedAction)?.scope ??
-      paymentAdapterApprovalScope(approval)
+      paymentAdapterApprovalScope(approval) ??
+      (isGlobalConfigRestoreApproval(approval) ? "global_config.restore.apply" : undefined)
     );
   }
 
@@ -2166,6 +2287,13 @@ export function createManagementRouter(deps: ManagementRouterDeps): Router {
         // (Governance never stored it); it must reproduce the digest bound at
         // request time. Kind/overlap/endpoint come from the approval itself —
         // any executor-supplied values for them are ignored.
+        if (isGlobalConfigRestoreApproval(current)) {
+          // 1A.14 — the approval binds package, before/after hashes and the
+          // safe diff; nothing but the idempotency key comes from the executor.
+          const restoreResult = await executeRestoreApply({ ...approvalDeps, store: deps.globalConfigStore }, executeParams);
+          res.status(200).json({ operation: restoreResult.operation, restoreOperation: restoreResult.restoreOperation, approval: restoreResult.approval, replay: restoreResult.replay });
+          return;
+        }
         if (isPaymentAdapterApproval(current)) {
           // 1A.14 — adapter approvals bind their whole safe diff; nothing is
           // accepted from the executor beyond the idempotency key.

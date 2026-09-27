@@ -59,6 +59,12 @@ export function buildMigratedPgMemClient(): { db: ReturnType<typeof newDb>; clie
     new URL("../../migrations/0013_management_approvals_safe_request_summary.sql", import.meta.url),
   );
   db.public.none(readFileSync(migration0013Path, "utf8"));
+  // 0014 (PL/pgSQL triggers) and 0015 (operator_scopes CHECK re-add) are
+  // pg-mem fidelity gaps covered by their own tests; 0016 is plain DDL.
+  const migration0016Path = fileURLToPath(
+    new URL("../../migrations/0016_global_config_restore.sql", import.meta.url),
+  );
+  db.public.none(readFileSync(migration0016Path, "utf8"));
 
   const { Pool } = db.adapters.createPg();
   const pool = new Pool();

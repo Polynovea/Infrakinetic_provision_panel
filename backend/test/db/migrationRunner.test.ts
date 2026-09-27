@@ -97,6 +97,7 @@ describe("db/migrationRunner", () => {
       "0013_management_approvals_safe_request_summary.sql",
       "0014_audit_append_only_enforcement.sql",
       "0015_payment_adapter_and_global_config_scopes.sql",
+      "0016_global_config_restore.sql",
     ]);
     expect(results.filter((r) => !["0008_operator_scopes_lifecycle_and_plan_scopes.sql", "0010_retire_tenant_plan_write_scope.sql", "0014_audit_append_only_enforcement.sql", "0015_payment_adapter_and_global_config_scopes.sql"].includes(r.id)).every((r) => r.applied)).toBe(true);
     expect(results.find((r) => r.id === "0015_payment_adapter_and_global_config_scopes.sql")?.applied).toBe(false);
@@ -208,6 +209,7 @@ describe("db/migrationRunner", () => {
       { id: "0013_management_approvals_safe_request_summary.sql", applied: true },
       { id: "0014_audit_append_only_enforcement.sql", applied: false },
       { id: "0015_payment_adapter_and_global_config_scopes.sql", applied: false },
+      { id: "0016_global_config_restore.sql", applied: true },
     ]);
   });
 
@@ -252,6 +254,7 @@ describe("db/migrationRunner", () => {
       { id: "0013_management_approvals_safe_request_summary.sql", applied: true },
       { id: "0014_audit_append_only_enforcement.sql", applied: false },
       { id: "0015_payment_adapter_and_global_config_scopes.sql", applied: false },
+      { id: "0016_global_config_restore.sql", applied: true },
     ]);
 
     // Idempotent from here on, same as every other migration.
