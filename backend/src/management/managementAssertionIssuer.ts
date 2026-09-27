@@ -31,6 +31,13 @@ export interface MintManagementAssertionParams {
   requestedAction: string;
   correlationId?: string;
   ttlSeconds?: number;
+  /**
+   * 1A.14 — signed maker-checker evidence for an approved R3/R4 execution.
+   * Lets an owner that enforces its own segregation (e.g. Payments'
+   * adapter submitter != approver) read the CHECKER from the signature
+   * instead of trusting a request body or the executing operator.
+   */
+  approvalEvidence?: { approvalId: string; makerOperatorId: string; checkerOperatorId: string };
 }
 
 export class ScopeNotGrantedError extends Error {
@@ -119,6 +126,16 @@ export async function mintManagementAssertion(
   }
   if (params.targetTenantId !== undefined) {
     claims.target_tenant_id = params.targetTenantId;
+  }
+  if (params.approvalEvidence !== undefined) {
+    const { approvalId, makerOperatorId, checkerOperatorId } = params.approvalEvidence;
+    if (!nonEmpty(approvalId) || !nonEmpty(makerOperatorId) || !nonEmpty(checkerOperatorId)) {
+      throw new InvalidManagementTargetError("approvalEvidence requires approvalId, makerOperatorId and checkerOperatorId.");
+    }
+    if (makerOperatorId === checkerOperatorId) {
+      throw new InvalidManagementTargetError("approvalEvidence maker and checker must differ.");
+    }
+    claims.approval = { approval_id: approvalId, maker_operator_id: makerOperatorId, checker_operator_id: checkerOperatorId };
   }
 
   return new SignJWT(claims)

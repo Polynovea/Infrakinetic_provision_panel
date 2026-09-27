@@ -24,6 +24,24 @@ import type { ManagementSigningKeySet } from "../../management/managementSigning
 import type { ManagementTransportConfig } from "../../management/managementConfig.js";
 import { DatabaseUnavailableError } from "../../db/errors.js";
 import {
+  listPaymentAdapters,
+  getPaymentAdapter,
+  getPaymentAdapterRevokeImpact,
+  getPaymentAdapterRuntime,
+  submitPaymentAdapter,
+  certifyPaymentAdapter,
+  deprecatePaymentAdapter,
+  requestPaymentAdapterApproval,
+  executePaymentAdapterApproval,
+  isPaymentAdapterApproval,
+  paymentAdapterApprovalScope,
+  PAYMENT_ADAPTER_APPROVAL_ACTIONS,
+  UnknownPaymentAdapterReleaseError,
+  MissingPaymentAdapterFieldError,
+  type PaymentAdapterApprovalActionKey,
+} from "../../management/operations/paymentAdapterOperation.js";
+import { listTenantIntegrations } from "../../management/operations/integrationQuery.js";
+import {
   requestEngineStateChange,
   recoverEngineState,
   UnknownEngineError,
@@ -1795,6 +1813,176 @@ export function createManagementRouter(deps: ManagementRouterDeps): Router {
   });
 
   // ───────────────────────────────────────────────────────────────────────
+  // 1A.14 — tenant integration inventory (R0) and payment adapter
+  // lifecycle (scoping §5): reads R0; submit/certify/deprecate R2 (reason +
+  // idempotency, ledger); approve/retire (R3) and revoke (R4) go through the
+  // shared maker-checker section below via /request -> decide -> execute.
+  // ───────────────────────────────────────────────────────────────────────
+
+  function adapterOperationErrorResponse(err: unknown, res: import("express").Response): boolean {
+    if (err instanceof UnknownPaymentAdapterReleaseError) { res.status(404).json({ error: "PAYMENT_ADAPTER_RELEASE_NOT_FOUND", message: err.message }); return true; }
+    if (err instanceof MissingPaymentAdapterFieldError) { res.status(400).json({ error: "PAYMENT_ADAPTER_REQUEST_INVALID", message: err.message }); return true; }
+    if (err instanceof UnexpectedManagementApiResponseError || err instanceof ManagementApiUnreachableError) { res.status(502).json({ error: "MANAGEMENT_API_UPSTREAM_ERROR", message: err.message }); return true; }
+    if (err instanceof ManagementOperationError) { res.status(err.httpStatus).json({ error: err.code, message: err.message }); return true; }
+    if (err instanceof DatabaseUnavailableError) { res.status(err.httpStatus).json({ error: err.code, message: err.message }); return true; }
+    return false;
+  }
+
+  async function adapterDeps() {
+    const signingKeys = await deps.getManagementSigningKeys();
+    const transportConfig = deps.loadTransportConfig();
+    return { ledger: deps.ledger, approvals: deps.approvals, signingKeys, transportConfig, infrakineticBaseUrl: deps.infrakineticBaseUrl };
+  }
+
+  function operatorParams(ctx: NonNullable<import("express").Request["operatorContext"]>) {
+    return { operatorId: ctx.operatorId, operatorSessionId: ctx.operatorSessionId, operatorRoles: ctx.roles, operatorGrantedScopes: ctx.scopes, correlationId: ctx.correlationId };
+  }
+
+  function requireReasonAndKey(body: Record<string, unknown>, res: import("express").Response): body is Record<string, unknown> & { reason: string; idempotencyKey: string } {
+    if (typeof body.idempotencyKey !== "string" || body.idempotencyKey.trim() === "") { res.status(400).json({ error: "IDEMPOTENCY_KEY_REQUIRED" }); return false; }
+    if (typeof body.reason !== "string" || body.reason.trim() === "") { res.status(400).json({ error: "REASON_REQUIRED" }); return false; }
+    return true;
+  }
+
+  router.get("/tenants/:tenantId/integrations", requireScope("integrations.read", deps.auditSink), async (req, res, next) => {
+    try {
+      const ctx = req.operatorContext;
+      if (!ctx) { res.status(403).json({ error: "NOT_AUTHENTICATED" }); return; }
+      const d = await adapterDeps();
+      res.status(200).json(await listTenantIntegrations(d, { tenantId: req.params.tenantId, ...operatorParams(ctx) }));
+    } catch (err) {
+      if (err instanceof UnknownTenantError) { res.status(404).json({ error: "UNKNOWN_TENANT", message: err.message }); return; }
+      if (adapterOperationErrorResponse(err, res)) return;
+      next(err);
+    }
+  });
+
+  router.get("/payment-adapters", requireScope("payments.adapters.read", deps.auditSink), async (req, res, next) => {
+    try {
+      const ctx = req.operatorContext;
+      if (!ctx) { res.status(403).json({ error: "NOT_AUTHENTICATED" }); return; }
+      res.status(200).json(await listPaymentAdapters(await adapterDeps(), operatorParams(ctx)));
+    } catch (err) {
+      if (adapterOperationErrorResponse(err, res)) return;
+      next(err);
+    }
+  });
+
+  router.get("/payment-adapters/runtime", requireScope("payments.adapters.read", deps.auditSink), async (req, res, next) => {
+    try {
+      const ctx = req.operatorContext;
+      if (!ctx) { res.status(403).json({ error: "NOT_AUTHENTICATED" }); return; }
+      res.status(200).json(await getPaymentAdapterRuntime(await adapterDeps(), operatorParams(ctx)));
+    } catch (err) {
+      if (adapterOperationErrorResponse(err, res)) return;
+      next(err);
+    }
+  });
+
+  router.get("/payment-adapters/:releaseId", requireScope("payments.adapters.read", deps.auditSink), async (req, res, next) => {
+    try {
+      const ctx = req.operatorContext;
+      if (!ctx) { res.status(403).json({ error: "NOT_AUTHENTICATED" }); return; }
+      res.status(200).json(await getPaymentAdapter(await adapterDeps(), { releaseId: req.params.releaseId, ...operatorParams(ctx) }));
+    } catch (err) {
+      if (adapterOperationErrorResponse(err, res)) return;
+      next(err);
+    }
+  });
+
+  router.get("/payment-adapters/:releaseId/revoke-impact", requireScope("payments.adapters.read", deps.auditSink), async (req, res, next) => {
+    try {
+      const ctx = req.operatorContext;
+      if (!ctx) { res.status(403).json({ error: "NOT_AUTHENTICATED" }); return; }
+      res.status(200).json(await getPaymentAdapterRevokeImpact(await adapterDeps(), { releaseId: req.params.releaseId, ...operatorParams(ctx) }));
+    } catch (err) {
+      if (adapterOperationErrorResponse(err, res)) return;
+      next(err);
+    }
+  });
+
+  router.post("/payment-adapters", requireScope("payments.adapters.submit", deps.auditSink), async (req, res, next) => {
+    try {
+      const ctx = req.operatorContext;
+      if (!ctx) { res.status(403).json({ error: "NOT_AUTHENTICATED" }); return; }
+      const body = (req.body ?? {}) as Record<string, unknown>;
+      if (!requireReasonAndKey(body, res)) return;
+      const result = await submitPaymentAdapter(await adapterDeps(), {
+        ...operatorParams(ctx), idempotencyKey: body.idempotencyKey, reason: body.reason,
+        manifest: body.manifest as Record<string, unknown>,
+        manifestSignature: body.manifestSignature as string, vendorPublicKey: body.vendorPublicKey as string, vendorName: body.vendorName as string,
+        fixtures: body.fixtures, signatureVectors: body.signatureVectors,
+      });
+      res.status(200).json({ operation: result.operation, replay: result.replay });
+    } catch (err) {
+      if (adapterOperationErrorResponse(err, res)) return;
+      next(err);
+    }
+  });
+
+  router.post("/payment-adapters/:releaseId/certify", requireScope("payments.adapters.certify", deps.auditSink), async (req, res, next) => {
+    try {
+      const ctx = req.operatorContext;
+      if (!ctx) { res.status(403).json({ error: "NOT_AUTHENTICATED" }); return; }
+      const body = (req.body ?? {}) as Record<string, unknown>;
+      if (!requireReasonAndKey(body, res)) return;
+      // Sandbox credentials are never accepted here — the owner resolves them.
+      const result = await certifyPaymentAdapter(await adapterDeps(), {
+        ...operatorParams(ctx), idempotencyKey: body.idempotencyKey, reason: body.reason, releaseId: req.params.releaseId,
+        fixtures: body.fixtures, signatureVectors: body.signatureVectors,
+      });
+      res.status(200).json({ operation: result.operation, replay: result.replay });
+    } catch (err) {
+      if (adapterOperationErrorResponse(err, res)) return;
+      next(err);
+    }
+  });
+
+  router.post("/payment-adapters/:releaseId/deprecate", requireScope("payments.adapters.revoke", deps.auditSink), async (req, res, next) => {
+    try {
+      const ctx = req.operatorContext;
+      if (!ctx) { res.status(403).json({ error: "NOT_AUTHENTICATED" }); return; }
+      const body = (req.body ?? {}) as Record<string, unknown>;
+      if (!requireReasonAndKey(body, res)) return;
+      const result = await deprecatePaymentAdapter(await adapterDeps(), {
+        ...operatorParams(ctx), idempotencyKey: body.idempotencyKey, reason: body.reason, releaseId: req.params.releaseId,
+        retireAt: typeof body.retireAt === "string" ? body.retireAt : undefined,
+      });
+      res.status(200).json({ operation: result.operation, replay: result.replay });
+    } catch (err) {
+      if (adapterOperationErrorResponse(err, res)) return;
+      next(err);
+    }
+  });
+
+  for (const actionKey of Object.keys(PAYMENT_ADAPTER_APPROVAL_ACTIONS) as PaymentAdapterApprovalActionKey[]) {
+    const { scope, segment } = PAYMENT_ADAPTER_APPROVAL_ACTIONS[actionKey];
+    router.post(
+      `/payment-adapters/:releaseId/${segment}/request`,
+      requireScope(scope, deps.auditSink),
+      requireStepUp(300, deps.sessionStore, deps.auditSink),
+      async (req, res, next) => {
+        try {
+          const ctx = req.operatorContext;
+          if (!ctx) { res.status(403).json({ error: "NOT_AUTHENTICATED" }); return; }
+          const body = (req.body ?? {}) as Record<string, unknown>;
+          if (typeof body.reason !== "string" || body.reason.trim() === "") { res.status(400).json({ error: "REASON_REQUIRED" }); return; }
+          const approval = await requestPaymentAdapterApproval(await adapterDeps(), {
+            ...operatorParams(ctx), actionKey, releaseId: req.params.releaseId, reason: body.reason,
+            effectiveFrom: typeof body.effectiveFrom === "string" ? body.effectiveFrom : undefined,
+            recoveryIntent: typeof body.recoveryIntent === "string" ? body.recoveryIntent : undefined,
+          });
+          res.status(201).json({ approval });
+        } catch (err) {
+          if (approvalErrorResponse(err, res)) return;
+          if (adapterOperationErrorResponse(err, res)) return;
+          next(err);
+        }
+      },
+    );
+  }
+
+  // ───────────────────────────────────────────────────────────────────────
   // 1A.12.5 — R3 identity actions (force-reset, mfa-reset): request (maker,
   // fresh step-up) -> decide (checker, != maker) -> execute (fresh step-up,
   // approval consumed exactly once). §9.1's default 5-minute freshness
@@ -1812,6 +2000,8 @@ export function createManagementRouter(deps: ManagementRouterDeps): Router {
     if (err instanceof ApprovalAlreadyExecutedError) { res.status(409).json({ error: "APPROVAL_ALREADY_EXECUTED", message: err.message }); return true; }
     if (err instanceof ApprovalPayloadMismatchError) { res.status(409).json({ error: "APPROVAL_PAYLOAD_MISMATCH", message: err.message }); return true; }
     if (err instanceof UnknownIdentityR3ActionError || err instanceof MissingIdentityApprovalTargetError) { res.status(400).json({ error: "IDENTITY_R3_REQUEST_INVALID", message: err.message }); return true; }
+    if (err instanceof UnknownPaymentAdapterReleaseError) { res.status(404).json({ error: "PAYMENT_ADAPTER_RELEASE_NOT_FOUND", message: err.message }); return true; }
+    if (err instanceof MissingPaymentAdapterFieldError) { res.status(400).json({ error: "PAYMENT_ADAPTER_REQUEST_INVALID", message: err.message }); return true; }
     if (err instanceof UnknownCredentialR3ActionError || err instanceof MissingCredentialApprovalTargetError) { res.status(400).json({ error: "CREDENTIAL_R3_REQUEST_INVALID", message: err.message }); return true; }
     if (err instanceof DatabaseUnavailableError) { res.status(err.httpStatus).json({ error: err.code, message: err.message }); return true; }
     return false;
@@ -1898,7 +2088,8 @@ export function createManagementRouter(deps: ManagementRouterDeps): Router {
   function requiredScopeForApproval(approval: { requestedAction: string }): string | undefined {
     return (
       Object.values(IDENTITY_R3_ACTIONS).find((entry) => entry.action === approval.requestedAction)?.scope ??
-      Object.values(CREDENTIAL_R3_ACTIONS).find((entry) => entry.action === approval.requestedAction)?.scope
+      Object.values(CREDENTIAL_R3_ACTIONS).find((entry) => entry.action === approval.requestedAction)?.scope ??
+      paymentAdapterApprovalScope(approval)
     );
   }
 
@@ -1975,6 +2166,13 @@ export function createManagementRouter(deps: ManagementRouterDeps): Router {
         // (Governance never stored it); it must reproduce the digest bound at
         // request time. Kind/overlap/endpoint come from the approval itself —
         // any executor-supplied values for them are ignored.
+        if (isPaymentAdapterApproval(current)) {
+          // 1A.14 — adapter approvals bind their whole safe diff; nothing is
+          // accepted from the executor beyond the idempotency key.
+          const adapterResult = await executePaymentAdapterApproval(approvalDeps, executeParams);
+          res.status(200).json({ operation: adapterResult.operation, approval: adapterResult.approval, replay: adapterResult.replay });
+          return;
+        }
         const result = isCredentialR3Approval(current)
           ? await executeCredentialR3Approval(approvalDeps, {
               ...executeParams,
