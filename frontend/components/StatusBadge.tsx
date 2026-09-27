@@ -31,6 +31,15 @@ const TONE_BY_VALUE: Record<string, "success" | "warning" | "danger" | "neutral"
   confirmed: "success",
   reset_required: "warning",
   force_change_password: "warning",
+  // 1A.15 AI state.
+  uncertified: "warning",
+  synthetic_certified: "neutral",
+  provider_certified: "success",
+  deprecated: "warning",
+  retired: "danger",
+  normal: "success",
+  at_risk: "warning",
+  hard_reached: "danger",
 };
 
 const LABEL_BY_VALUE: Record<string, string> = {
