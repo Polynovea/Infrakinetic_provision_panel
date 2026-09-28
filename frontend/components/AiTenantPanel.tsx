@@ -18,15 +18,22 @@ interface Window { since: string; totalTokens: number; estimatedCost: number; cu
 
 interface TenantAiState {
   moduleAi: { entitled: boolean; explicitRow: boolean; platformEngineState: string };
-  emergency: NotModelled;
-  planes: Array<{ plane: string; desired: NotModelled; effective: boolean; mismatchReason?: string }>;
+  rootPolicy: { source: string; policyVersion: number; allowedPlanes: string[]; commissioningMode: string; billingAnchorDay: number };
+  emergency: { state: "none" | "suspended"; reason: string | null; recoveryIntent: string | null; since: string | null };
+  planes: Array<{ plane: string; desired: { allowed: boolean; source: string }; effective: boolean; mismatchReason?: string }>;
   capabilities: Array<{
     capabilityKey: string; ownerEngine: string; plane: string; effective: boolean; mismatchReason?: string;
+    commissioning: { mode: string; commissioned: boolean };
     featureFlag: { key: string; explicitRow: boolean; enabled: boolean } | null; providerKey: string | null; modelKey: string | null;
   }>;
-  quotas: Array<{ policyId: string; scope: { type: string; key: string | null; plane: string | null }; period: string; limitType: string; hard: number; used: number | null; state: string }>;
+  quotas: Array<{
+    policyId: string; origin: string; scope: { type: string; key: string | null; plane: string | null }; period: string;
+    window: { start: string; end: string }; limitType: string; hard: number; warningPct: number | null; softLimit: number | null;
+    overage: { mode: string; graceActiveForWindow: boolean; graceLimit: number | null; graceExpiresAt: string | null };
+    used: number | null; state: string;
+  }>;
   usage: {
-    commercial: { day: Window; week: Window; month: Window; billingPeriod: NotModelled };
+    commercial: { day: Window; week: Window; month: Window; billingPeriod: Window };
     telemetry: {
       attempts: { total: number; logicalRequests: number; success: number; failed: number; retries: number; timeouts: number; providerFailures: number };
       evidence: { requests: number; open: number };
@@ -68,9 +75,18 @@ export function AiTenantPanel({ tenantId, request }: { tenantId: string; request
           <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap", alignItems: "center", fontSize: "0.85rem" }}>
             <span>module_ai: <StatusBadge value={state.moduleAi.entitled ? "active" : "disabled"} /> {state.moduleAi.explicitRow ? "" : "(default)"}</span>
             <span>Platform state: <StatusBadge value={state.moduleAi.platformEngineState} /></span>
-            <span>Emergency suspension: <NotModelledNote value={state.emergency} /></span>
+            <span>Emergency: <StatusBadge value={state.emergency.state === "suspended" ? "suspended" : "active"} /></span>
+            <span>Root policy: {state.rootPolicy.source === "default" ? "default (compatibility)" : `v${state.rootPolicy.policyVersion}`} · {state.rootPolicy.commissioningMode} · billing anchor day {state.rootPolicy.billingAnchorDay}</span>
             <span className="overlay-note" style={{ marginTop: 0 }}>Observed {when(state.observedAt)}</span>
           </div>
+
+          {state.emergency.state === "suspended" && (
+            <div className="card" style={{ margin: "0.5rem 0", fontSize: "0.85rem", borderColor: "var(--danger-fg)" }}>
+              <strong>Tenant AI is under emergency suspension</strong> since {when(state.emergency.since)} — no AI provider call is made for this tenant.
+              <div>Reason: {state.emergency.reason}</div>
+              <div>Recovery intent: {state.emergency.recoveryIntent}</div>
+            </div>
+          )}
 
           <h4 style={section}>Planes</h4>
           <table className="data-table">
@@ -79,7 +95,7 @@ export function AiTenantPanel({ tenantId, request }: { tenantId: string; request
               {state.planes.map((p) => (
                 <tr key={p.plane}>
                   <td>{p.plane}</td>
-                  <td>{isNotModelled(p.desired) ? <NotModelledNote value={p.desired} /> : "—"}</td>
+                  <td>{p.desired.allowed ? "allowed" : "not allowed"}{p.desired.source === "default" ? " (default)" : ""}</td>
                   <td><StatusBadge value={p.effective ? "active" : "disabled"} /></td>
                   <td>{p.mismatchReason ? MISMATCH_LABELS[p.mismatchReason] ?? p.mismatchReason : "—"}</td>
                 </tr>
@@ -89,12 +105,13 @@ export function AiTenantPanel({ tenantId, request }: { tenantId: string; request
 
           <h4 style={section}>Capabilities</h4>
           <table className="data-table">
-            <thead><tr><th>Capability</th><th>Provider / model</th><th>Feature flag</th><th>Effective</th><th>Reason</th></tr></thead>
+            <thead><tr><th>Capability</th><th>Provider / model</th><th>Commissioning</th><th>Feature flag</th><th>Effective</th><th>Reason</th></tr></thead>
             <tbody>
               {state.capabilities.map((c) => (
                 <tr key={c.capabilityKey}>
                   <td style={{ fontFamily: "monospace" }}>{c.capabilityKey}</td>
                   <td>{c.providerKey ?? "—"}{c.modelKey ? ` / ${c.modelKey}` : ""}</td>
+                  <td>{c.commissioning.mode === "explicit" ? (c.commissioning.commissioned ? "commissioned" : "not commissioned") : "legacy additive"}</td>
                   <td>{c.featureFlag ? `${c.featureFlag.enabled ? "on" : "off"}${c.featureFlag.explicitRow ? "" : " (default)"}` : "—"}</td>
                   <td><StatusBadge value={c.effective ? "active" : "disabled"} /></td>
                   <td>{c.mismatchReason ? MISMATCH_LABELS[c.mismatchReason] ?? c.mismatchReason : "—"}</td>
@@ -108,14 +125,19 @@ export function AiTenantPanel({ tenantId, request }: { tenantId: string; request
             <p className="overlay-note">No quota policies — the runtime applies no tenant limit.</p>
           ) : (
             <table className="data-table">
-              <thead><tr><th>Scope</th><th>Period</th><th>Metric</th><th>Used / hard</th><th>State</th></tr></thead>
+              <thead><tr><th>Scope</th><th>Period (UTC window)</th><th>Metric</th><th>Used / hard</th><th>Thresholds</th><th>State</th></tr></thead>
               <tbody>
                 {state.quotas.map((q) => (
                   <tr key={q.policyId}>
                     <td>{q.scope.type}{q.scope.key ? `=${q.scope.key}` : ""}{q.scope.plane ? ` (${q.scope.plane})` : ""}</td>
-                    <td>{q.period}</td>
+                    <td>{q.period}<div className="overlay-note" style={{ marginTop: 0 }}>{when(q.window.start)} → {when(q.window.end)}</div></td>
                     <td>{q.limitType}</td>
                     <td>{q.used === null ? "—" : fmtNumber(q.used)} / {fmtNumber(q.hard)}</td>
+                    <td style={{ fontSize: "0.8rem" }}>
+                      {q.warningPct !== null ? `warn ${Math.round(q.warningPct * 100)}%` : "no warning"}
+                      {q.softLimit !== null ? ` · soft ${fmtNumber(q.softLimit)}` : ""}
+                      {q.overage.graceActiveForWindow ? ` · grace +${fmtNumber(q.overage.graceLimit ?? 0)} until ${when(q.overage.graceExpiresAt)}` : ""}
+                    </td>
                     <td><StatusBadge value={q.state} /></td>
                   </tr>
                 ))}
@@ -134,7 +156,11 @@ export function AiTenantPanel({ tenantId, request }: { tenantId: string; request
                   <td>{fmtCost(state.usage.commercial[k].estimatedCost, state.usage.commercial[k].currency)}</td>
                 </tr>
               ))}
-              <tr><td>Billing period</td><td colSpan={2}><NotModelledNote value={state.usage.commercial.billingPeriod} /></td></tr>
+              <tr>
+                <td>Billing period (from {when(state.usage.commercial.billingPeriod.since)})</td>
+                <td>{fmtNumber(state.usage.commercial.billingPeriod.totalTokens)}</td>
+                <td>{fmtCost(state.usage.commercial.billingPeriod.estimatedCost, state.usage.commercial.billingPeriod.currency)}</td>
+              </tr>
             </tbody>
           </table>
 

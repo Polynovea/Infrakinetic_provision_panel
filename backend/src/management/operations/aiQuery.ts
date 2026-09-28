@@ -60,7 +60,7 @@ export interface TenantAiCapabilityState {
   capabilityKey: string;
   ownerEngine: string;
   plane: string;
-  commissioning: NotModelled;
+  commissioning: { mode: "legacy_additive" | "explicit"; commissioned: boolean };
   featureFlag: { key: string; explicitRow: boolean; enabled: boolean } | null;
   providerKey: string | null;
   modelKey: string | null;
@@ -92,29 +92,44 @@ export interface AiProviderState {
   models: AiModelState[];
 }
 
+export type AiQuotaState = "normal" | "warning" | "soft_exceeded" | "hard_reached" | "grace_active" | "grace_exhausted" | "disabled";
+
 export interface TenantAiQuotaState {
   policyId: string;
+  origin: "root" | "technology";
   scope: { type: string; key: string | null; plane: string | null };
-  period: string;
+  period: "daily" | "weekly" | "monthly" | "billing_period";
+  window: { start: string; end: string };
   limitType: string;
   hard: number;
+  warningPct: number | null;
+  softLimit: number | null;
+  overage: { mode: "none" | "grace"; graceActiveForWindow: boolean; graceLimit: number | null; graceExpiresAt: string | null };
   enabled: boolean;
   used: number | null;
-  state: string;
+  state: AiQuotaState;
+  recordedState: { state: AiQuotaState; updatedAt: string } | null;
 }
 
 export interface TenantAiState {
   contractVersion: string;
   tenantId: string;
   moduleAi: { entitled: boolean; explicitRow: boolean; source: string; writer: string; platformEngineState: string };
-  emergency: NotModelled;
-  planes: Array<{ plane: string; desired: NotModelled; effective: boolean; mismatchReason?: string }>;
+  rootPolicy: {
+    source: "default" | "root_policy";
+    policyVersion: number;
+    allowedPlanes: string[];
+    commissioningMode: "legacy_additive" | "explicit";
+    billingAnchorDay: number;
+  };
+  emergency: { state: "none" | "suspended"; reason: string | null; recoveryIntent: string | null; operationId: string | null; since: string | null };
+  planes: Array<{ plane: string; desired: { allowed: boolean; source: string }; effective: boolean; mismatchReason?: string }>;
   capabilities: TenantAiCapabilityState[];
   providersModels: AiProviderState[];
   credentialRefs: NotModelled;
   quotas: TenantAiQuotaState[];
   usage: {
-    commercial: { day: AiCommercialWindow; week: AiCommercialWindow; month: AiCommercialWindow; billingPeriod: NotModelled; lifetime: NotModelled };
+    commercial: { day: AiCommercialWindow; week: AiCommercialWindow; month: AiCommercialWindow; billingPeriod: AiCommercialWindow; lifetime: NotModelled };
     telemetry: {
       since: string;
       attempts: { total: number; logicalRequests: number; success: number; failed: number; retries: number; timeouts: number; providerFailures: number };

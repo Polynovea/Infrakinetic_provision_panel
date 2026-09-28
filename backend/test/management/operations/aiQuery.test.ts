@@ -64,6 +64,15 @@ describe("secret-shaped owner responses are refused (A2)", () => {
     })).toBeNull();
   });
 
+  it("the Slice 2 tenant DTO shape (root policy, emergency, quota v2) passes the guard", () => {
+    expect(findSecretShapedField({
+      rootPolicy: { source: "root_policy", policyVersion: 2, allowedPlanes: ["embedded_managed"], commissioningMode: "explicit", billingAnchorDay: 15 },
+      emergency: { state: "suspended", reason: "r", recoveryIntent: "i", operationId: "o", since: "2026-09-28T00:00:00Z" },
+      capabilities: [{ commissioning: { mode: "explicit", commissioned: true } }],
+      quotas: [{ origin: "root", window: { start: "a", end: "b" }, warningPct: 0.8, softLimit: 9, overage: { mode: "grace", graceActiveForWindow: true, graceLimit: 1, graceExpiresAt: "x" }, recordedState: null }],
+    })).toBeNull();
+  });
+
   it("a tenant state carrying a secret-shaped field never reaches the caller", async () => {
     const { d } = await deps({ [STATE_PATH]: { status: 200, body: { tenantId: TENANT_ID, providersModels: [{ token: "leak" }] } } });
     await expect(getTenantAiState(d, { ...CALLER, tenantId: TENANT_ID })).rejects.toBeInstanceOf(UnsafeAiOwnerResponseError);
