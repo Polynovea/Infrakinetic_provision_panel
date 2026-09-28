@@ -70,3 +70,16 @@ describe("payment adapter route scopes", () => {
     expect(res.status).toBe(403);
   });
 });
+
+// 1A.15 Slice 1 — AI reads are gated by ai.read; no other read scope implies it.
+describe("AI operator read route scopes", () => {
+  it.each(["/management/v1/ai/fleet/summary", "/management/v1/ai/catalog", "/management/v1/ai/tenants/bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb/state"])(
+    "%s requires ai.read",
+    async (path) => {
+      const { app, token } = await appFor(["platform_viewer"], ["tenants.read", "integrations.read", "finops.read"]);
+      const res = await request(app).get(path).set("authorization", `Bearer ${token}`);
+      expect(res.status).toBe(403);
+      expect(res.body.error).toBe("SCOPE_REQUIRED");
+    },
+  );
+});

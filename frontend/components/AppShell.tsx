@@ -11,6 +11,7 @@ const NAV_ITEMS = [
   { href: "/tenants", label: "Tenants", icon: "domain" },
   { href: "/engine-state", label: "Platform", icon: "dns" },
   { href: "/reconciliation", label: "Reconciliation", icon: "fact_check" },
+  { href: "/ai", label: "AI", icon: "smart_toy" },
   { href: "/payment-adapters", label: "Payment adapters", icon: "payments" },
   { href: "/global-config", label: "Global config", icon: "settings_backup_restore" },
 ] as const;

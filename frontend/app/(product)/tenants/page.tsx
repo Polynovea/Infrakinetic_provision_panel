@@ -13,6 +13,7 @@ import { SkeletonTableRows } from "../../../components/Skeleton";
 import { IdentityPanel } from "../../../components/IdentityPanel";
 import { CredentialPanel } from "../../../components/CredentialPanel";
 import { IntegrationsPanel } from "../../../components/IntegrationsPanel";
+import { AiTenantPanel } from "../../../components/AiTenantPanel";
 
 interface TenantRegistryUser {
   id: string;
@@ -950,6 +951,10 @@ function TenantDetailDrawer({
 
       {operatorScopes.includes("integrations.read") && !isPlatformTenant && (
         <IntegrationsPanel tenantId={tenant.id} request={request} />
+      )}
+
+      {operatorScopes.includes("ai.read") && !isPlatformTenant && (
+        <AiTenantPanel tenantId={tenant.id} request={request} />
       )}
 
       {canReadCredentials && selectedCredential && (

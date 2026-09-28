@@ -41,6 +41,7 @@ import {
   type PaymentAdapterApprovalActionKey,
 } from "../../management/operations/paymentAdapterOperation.js";
 import { listTenantIntegrations } from "../../management/operations/integrationQuery.js";
+import { getAiCatalog, getFleetAiSummary, getTenantAiState, UnsafeAiOwnerResponseError } from "../../management/operations/aiQuery.js";
 import {
   GlobalConfigRestoreStore,
   GlobalConfigPackageRejectedError,
@@ -1870,6 +1871,48 @@ export function createManagementRouter(deps: ManagementRouterDeps): Router {
     } catch (err) {
       if (err instanceof UnknownTenantError) { res.status(404).json({ error: "UNKNOWN_TENANT", message: err.message }); return; }
       if (adapterOperationErrorResponse(err, res)) return;
+      next(err);
+    }
+  });
+
+  // 1A.15 Slice 1 — AI operator reads (R0, ai.read). Owner-composed live by
+  // module_ai; Governance stores nothing and refuses secret-shaped owner
+  // responses (aiQuery.ts findSecretShapedField).
+  function aiReadErrorResponse(err: unknown, res: import("express").Response): boolean {
+    if (err instanceof UnknownTenantError) { res.status(404).json({ error: "UNKNOWN_TENANT", message: err.message }); return true; }
+    if (err instanceof UnsafeAiOwnerResponseError) { res.status(err.httpStatus).json({ error: err.code, message: err.message }); return true; }
+    return adapterOperationErrorResponse(err, res);
+  }
+
+  router.get("/ai/tenants/:tenantId/state", requireScope("ai.read", deps.auditSink), async (req, res, next) => {
+    try {
+      const ctx = req.operatorContext;
+      if (!ctx) { res.status(403).json({ error: "NOT_AUTHENTICATED" }); return; }
+      res.status(200).json(await getTenantAiState(await adapterDeps(), { tenantId: req.params.tenantId, ...operatorParams(ctx) }));
+    } catch (err) {
+      if (aiReadErrorResponse(err, res)) return;
+      next(err);
+    }
+  });
+
+  router.get("/ai/fleet/summary", requireScope("ai.read", deps.auditSink), async (req, res, next) => {
+    try {
+      const ctx = req.operatorContext;
+      if (!ctx) { res.status(403).json({ error: "NOT_AUTHENTICATED" }); return; }
+      res.status(200).json(await getFleetAiSummary(await adapterDeps(), operatorParams(ctx)));
+    } catch (err) {
+      if (aiReadErrorResponse(err, res)) return;
+      next(err);
+    }
+  });
+
+  router.get("/ai/catalog", requireScope("ai.read", deps.auditSink), async (req, res, next) => {
+    try {
+      const ctx = req.operatorContext;
+      if (!ctx) { res.status(403).json({ error: "NOT_AUTHENTICATED" }); return; }
+      res.status(200).json(await getAiCatalog(await adapterDeps(), operatorParams(ctx)));
+    } catch (err) {
+      if (aiReadErrorResponse(err, res)) return;
       next(err);
     }
   });

@@ -157,6 +157,9 @@ export const ROLE_SCOPE_CEILING: Readonly<Record<Role, readonly Scope[]>> = {
     "credentials.submit",
     "credentials.rotate",
     "credentials.revoke",
+    // 1A.15 Q5 — an operator who can suspend AI must be able to see the
+    // AI state they are suspending (D16).
+    "ai.read",
     "ai.emergency_suspend",
     "payments.adapters.revoke",
     "integrations.manage",
@@ -166,6 +169,9 @@ export const ROLE_SCOPE_CEILING: Readonly<Record<Role, readonly Scope[]>> = {
     "finops.read",
     "finops.policy.write",
     "ai.read",
+    // 1A.15 Q5 — AI budgets/quotas are a FinOps authority (D16). No route
+    // consumes it until Slice 2's quota commands.
+    "ai.quota.write",
     "audit.read",
   ],
   platform_admin: SCOPES,
