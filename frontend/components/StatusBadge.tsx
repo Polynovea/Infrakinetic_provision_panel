@@ -40,6 +40,11 @@ const TONE_BY_VALUE: Record<string, "success" | "warning" | "danger" | "neutral"
   normal: "success",
   at_risk: "warning",
   hard_reached: "danger",
+  // 1A.15 Slice 2 quota states.
+  warning: "warning",
+  soft_exceeded: "warning",
+  grace_active: "warning",
+  grace_exhausted: "danger",
 };
 
 const LABEL_BY_VALUE: Record<string, string> = {

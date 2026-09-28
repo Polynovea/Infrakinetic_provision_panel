@@ -37,8 +37,8 @@ export const fmtNumber = (n: number) => n.toLocaleString();
 export const fmtCost = (n: number, currency: string | null = "USD") => `${n.toFixed(4)} ${currency ?? ""}`.trim();
 
 const GAP_LABELS: Array<[keyof AiEnforcementFacts, string]> = [
-  ["platformEngineStateEnforcedOnExecution", "A platform-level module_ai disable does not yet stop AI execution (D2, fixed in Slice 2)."],
-  ["quotaConcurrencySafe", "Hard quotas can be overshot by concurrent requests (D8, reservations in Slice 2)."],
+  ["platformEngineStateEnforcedOnExecution", "A platform-level module_ai disable does not stop AI execution (D2)."],
+  ["quotaConcurrencySafe", "Hard quotas can be overshot by concurrent requests (D8)."],
   ["usageAttributionComplete", "Denials and lost metering rows are not yet recorded (D1/D7, Slice 3)."],
 ];
 
@@ -75,4 +75,10 @@ export const MISMATCH_LABELS: Record<string, string> = {
   legacy_kill_switch_disabled: "Legacy kill switch off",
   no_capability_for_plane: "No capability on this plane",
   no_effective_capability: "No effective capability",
+  no_feature_binding: "Capability declares no feature gate",
+  platform_engine_disabled: "module_ai disabled platform-wide",
+  emergency_suspended: "Tenant AI emergency-suspended",
+  plane_not_allowed_by_root: "Plane not allowed by root policy",
+  capability_not_commissioned: "Not commissioned",
+  model_denied_for_tenant: "Model denied for tenant",
 };
