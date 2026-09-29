@@ -1,0 +1,4393 @@
+{
+  "contractVersion": "ai-management/v1",
+  "description": "module_ai operator contract served on /management/v1 (owner: Infrakinetic). Generated from src/ai/aiManagementContract.js — do not edit.",
+  "scopes": [
+    "ai.read",
+    "ai.entitlement.write",
+    "ai.quota.write",
+    "ai.provider_policy.write",
+    "ai.emergency_suspend",
+    "credentials.revoke",
+    "finops.policy.write"
+  ],
+  "actions": {
+    "TENANT_SUSPEND": "ai.tenant.emergency.suspend",
+    "TENANT_RESUME": "ai.tenant.emergency.resume",
+    "PLANES_SET": "ai.tenant.planes.set",
+    "CAPABILITY_COMMISSION": "ai.tenant.capability.commission",
+    "COMMISSIONING_MODE_SET": "ai.tenant.commissioning-mode.set",
+    "QUOTA_SET": "ai.tenant.quota.set",
+    "QUOTA_REMOVE": "ai.tenant.quota.remove",
+    "QUOTA_GRACE_GRANT": "ai.tenant.quota.grace.grant",
+    "BILLING_ANCHOR_SET": "ai.tenant.billing-anchor.set",
+    "MODEL_POLICY_SET": "ai.tenant.model-policy.set",
+    "PROVIDER_STATE_SET": "ai.provider.state.set",
+    "MODEL_LIFECYCLE_SET": "ai.model.lifecycle.set",
+    "MODEL_CERTIFICATION_SET": "ai.model.certification.set",
+    "CREDENTIAL_REVOKE": "ai.credential.revoke",
+    "METERING_EXCEPTION_RESOLVE": "ai.metering-exception.resolve",
+    "RECONCILIATION_RESOLVE": "ai.reconciliation.resolve"
+  },
+  "r3Actions": [
+    "ai.tenant.emergency.resume",
+    "ai.model.lifecycle.set",
+    "ai.model.certification.set"
+  ],
+  "commandResultEnvelope": [
+    "commandId",
+    "action",
+    "replay",
+    "commandStatus",
+    "operatorId",
+    "approvalId",
+    "correlationId",
+    "executedAt"
+  ],
+  "enums": {
+    "planes": [
+      "embedded_managed",
+      "extended"
+    ],
+    "commissioningModes": [
+      "legacy_additive",
+      "explicit"
+    ],
+    "commissionStates": [
+      "commissioned",
+      "decommissioned"
+    ],
+    "modelDecisions": [
+      "allow",
+      "deny"
+    ],
+    "providerStatuses": [
+      "active",
+      "disabled",
+      "deprecated"
+    ],
+    "modelLifecycles": [
+      "active",
+      "deprecated",
+      "retired"
+    ],
+    "modelCertifications": [
+      "uncertified",
+      "synthetic_certified",
+      "provider_certified"
+    ],
+    "quotaScopeTypes": [
+      "tenant",
+      "ai_plane",
+      "engine",
+      "capability",
+      "user",
+      "provider",
+      "model"
+    ],
+    "quotaLimitTypes": [
+      "tokens",
+      "requests",
+      "cost",
+      "units"
+    ],
+    "quotaPeriods": [
+      "daily",
+      "weekly",
+      "monthly",
+      "billing_period"
+    ],
+    "reconciliationOutcomes": [
+      "reconciled",
+      "undercount",
+      "overcount",
+      "pricing_mismatch",
+      "credential_mismatch",
+      "unknown_model",
+      "unknown_tenant",
+      "unknown_capability",
+      "unmatched",
+      "late_provider_record"
+    ]
+  },
+  "bounds": {
+    "maxGraceDays": 31,
+    "graceMaxFractionOfHard": 1
+  },
+  "routes": [
+    {
+      "kind": "read",
+      "risk": "R0",
+      "approval": "none",
+      "id": "tenant.state.read",
+      "method": "GET",
+      "path": "/ai/tenants/:tenantId/state",
+      "scope": "ai.read",
+      "action": "ai.tenant.state.read",
+      "binding": {
+        "tenant": "tenantId",
+        "resource": null
+      },
+      "response": "TenantAiState",
+      "registeredBy": "index.js"
+    },
+    {
+      "kind": "read",
+      "risk": "R0",
+      "approval": "none",
+      "id": "fleet.summary.read",
+      "method": "GET",
+      "path": "/ai/fleet/summary",
+      "scope": "ai.read",
+      "action": "ai.fleet.read",
+      "binding": {
+        "tenant": null,
+        "resource": {
+          "type": "ai_fleet",
+          "id": {
+            "constant": "ai_fleet"
+          }
+        }
+      },
+      "response": "FleetAiSummary",
+      "registeredBy": "index.js"
+    },
+    {
+      "kind": "read",
+      "risk": "R0",
+      "approval": "none",
+      "id": "catalog.read",
+      "method": "GET",
+      "path": "/ai/catalog",
+      "scope": "ai.read",
+      "action": "ai.catalog.read",
+      "binding": {
+        "tenant": null,
+        "resource": {
+          "type": "ai_catalog",
+          "id": {
+            "constant": "ai_catalog"
+          }
+        }
+      },
+      "response": "AiCatalog",
+      "registeredBy": "index.js"
+    },
+    {
+      "kind": "read",
+      "risk": "R0",
+      "approval": "none",
+      "id": "tenant.credentials.read",
+      "method": "GET",
+      "path": "/ai/tenants/:tenantId/credentials",
+      "scope": "ai.read",
+      "action": "ai.tenant.credentials.read",
+      "binding": {
+        "tenant": "tenantId",
+        "resource": null
+      },
+      "response": "AiCredentialMetadata"
+    },
+    {
+      "kind": "read",
+      "risk": "R0",
+      "approval": "none",
+      "id": "metering-exceptions.read",
+      "method": "GET",
+      "path": "/ai/metering-exceptions",
+      "scope": "ai.read",
+      "action": "ai.metering-exceptions.read",
+      "binding": {
+        "tenant": null,
+        "resource": {
+          "type": "ai_fleet",
+          "id": {
+            "constant": "ai_fleet"
+          }
+        }
+      },
+      "query": {
+        "state": [
+          "open",
+          "resolved"
+        ],
+        "tenantId": "uuid",
+        "limit": "integer"
+      },
+      "response": "AiMeteringExceptions"
+    },
+    {
+      "kind": "read",
+      "risk": "R0",
+      "approval": "none",
+      "id": "reconciliation.read",
+      "method": "GET",
+      "path": "/ai/reconciliation",
+      "scope": "ai.read",
+      "action": "ai.reconciliation.read",
+      "binding": {
+        "tenant": null,
+        "resource": {
+          "type": "ai_fleet",
+          "id": {
+            "constant": "ai_fleet"
+          }
+        }
+      },
+      "query": {
+        "outcome": [
+          "reconciled",
+          "undercount",
+          "overcount",
+          "pricing_mismatch",
+          "credential_mismatch",
+          "unknown_model",
+          "unknown_tenant",
+          "unknown_capability",
+          "unmatched",
+          "late_provider_record"
+        ],
+        "state": [
+          "open",
+          "resolved"
+        ],
+        "providerKey": "string",
+        "limit": "integer"
+      },
+      "response": "AiReconciliation"
+    },
+    {
+      "kind": "read",
+      "risk": "R0",
+      "approval": "none",
+      "id": "admin-command.read",
+      "method": "GET",
+      "path": "/ai-admin-commands/:idempotencyKey",
+      "scope": "ai.read",
+      "action": "ai.admin-commands.read",
+      "binding": {
+        "tenant": "receipt",
+        "resource": "receipt"
+      },
+      "response": "AiAdminCommandReceipt",
+      "registeredBy": "aiRoutes.js"
+    },
+    {
+      "kind": "mutation",
+      "id": "tenant.planes.set",
+      "method": "PUT",
+      "path": "/ai/tenants/:tenantId/planes",
+      "scope": "ai.entitlement.write",
+      "action": "ai.tenant.planes.set",
+      "risk": "R2",
+      "approval": "none",
+      "binding": {
+        "tenant": "tenantId",
+        "resource": {
+          "type": "tenant",
+          "id": {
+            "param": "tenantId"
+          }
+        }
+      },
+      "requestSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "idempotencyKey",
+          "reason",
+          "planes"
+        ],
+        "properties": {
+          "idempotencyKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          },
+          "planes": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 2,
+            "items": {
+              "type": "string",
+              "enum": [
+                "embedded_managed",
+                "extended"
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "kind": "mutation",
+      "id": "tenant.capability.commission",
+      "method": "PUT",
+      "path": "/ai/tenants/:tenantId/capabilities/:capabilityKey",
+      "scope": "ai.entitlement.write",
+      "action": "ai.tenant.capability.commission",
+      "risk": "R2",
+      "approval": "none",
+      "binding": {
+        "tenant": "tenantId",
+        "resource": {
+          "type": "ai_capability",
+          "id": {
+            "param": "capabilityKey"
+          }
+        }
+      },
+      "requestSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "idempotencyKey",
+          "reason",
+          "plane",
+          "state"
+        ],
+        "properties": {
+          "idempotencyKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          },
+          "plane": {
+            "type": "string",
+            "enum": [
+              "embedded_managed",
+              "extended"
+            ]
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "commissioned",
+              "decommissioned"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "kind": "mutation",
+      "id": "tenant.commissioning-mode.preview",
+      "method": "POST",
+      "path": "/ai/tenants/:tenantId/commissioning-mode/preview",
+      "scope": "ai.entitlement.write",
+      "action": "ai.tenant.commissioning-mode.preview",
+      "risk": "R0",
+      "approval": "none",
+      "receipted": false,
+      "binding": {
+        "tenant": "tenantId",
+        "resource": {
+          "type": "tenant",
+          "id": {
+            "param": "tenantId"
+          }
+        }
+      },
+      "response": "AiCommissioningModePreview",
+      "requestSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "mode"
+        ],
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": [
+              "legacy_additive",
+              "explicit"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "kind": "mutation",
+      "id": "tenant.commissioning-mode.set",
+      "method": "PUT",
+      "path": "/ai/tenants/:tenantId/commissioning-mode",
+      "scope": "ai.entitlement.write",
+      "action": "ai.tenant.commissioning-mode.set",
+      "risk": "R2",
+      "approval": "none",
+      "requiresDryRunHash": true,
+      "binding": {
+        "tenant": "tenantId",
+        "resource": {
+          "type": "tenant",
+          "id": {
+            "param": "tenantId"
+          }
+        }
+      },
+      "requestSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "idempotencyKey",
+          "reason",
+          "mode"
+        ],
+        "properties": {
+          "idempotencyKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "legacy_additive",
+              "explicit"
+            ]
+          },
+          "expectedDiffHash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        }
+      }
+    },
+    {
+      "kind": "mutation",
+      "id": "tenant.quota.set",
+      "method": "PUT",
+      "path": "/ai/tenants/:tenantId/quotas/:policyKey",
+      "scope": "ai.quota.write",
+      "action": "ai.tenant.quota.set",
+      "risk": "R2",
+      "approval": "none",
+      "binding": {
+        "tenant": "tenantId",
+        "resource": {
+          "type": "ai_quota_policy",
+          "id": {
+            "param": "policyKey"
+          }
+        }
+      },
+      "requestSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "idempotencyKey",
+          "reason",
+          "policy"
+        ],
+        "properties": {
+          "idempotencyKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          },
+          "policy": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "scopeType",
+              "period",
+              "limitType",
+              "hardLimit"
+            ],
+            "properties": {
+              "scopeType": {
+                "type": "string",
+                "enum": [
+                  "tenant",
+                  "ai_plane",
+                  "engine",
+                  "capability",
+                  "user",
+                  "provider",
+                  "model"
+                ]
+              },
+              "scopeKey": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "aiPlane": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "enum": [
+                  "embedded_managed",
+                  "extended"
+                ]
+              },
+              "period": {
+                "type": "string",
+                "enum": [
+                  "daily",
+                  "weekly",
+                  "monthly",
+                  "billing_period"
+                ]
+              },
+              "limitType": {
+                "type": "string",
+                "enum": [
+                  "tokens",
+                  "requests",
+                  "cost",
+                  "units"
+                ]
+              },
+              "hardLimit": {
+                "type": "number",
+                "minimum": 0
+              },
+              "warningPct": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "exclusiveMinimum": 0,
+                "exclusiveMaximum": 1
+              },
+              "softLimit": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "minimum": 0
+              },
+              "usageUnit": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "minLength": 1,
+                "maxLength": 64
+              },
+              "enabled": {
+                "type": "boolean"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "kind": "mutation",
+      "id": "tenant.quota.remove",
+      "method": "DELETE",
+      "path": "/ai/tenants/:tenantId/quotas/:policyKey",
+      "scope": "ai.quota.write",
+      "action": "ai.tenant.quota.remove",
+      "risk": "R2",
+      "approval": "none",
+      "binding": {
+        "tenant": "tenantId",
+        "resource": {
+          "type": "ai_quota_policy",
+          "id": {
+            "param": "policyKey"
+          }
+        }
+      },
+      "requestSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "idempotencyKey",
+          "reason"
+        ],
+        "properties": {
+          "idempotencyKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          }
+        }
+      }
+    },
+    {
+      "kind": "mutation",
+      "id": "tenant.quota.grace.grant",
+      "method": "POST",
+      "path": "/ai/tenants/:tenantId/quotas/:policyKey/grace",
+      "scope": "ai.quota.write",
+      "action": "ai.tenant.quota.grace.grant",
+      "risk": "R2",
+      "approval": "none",
+      "binding": {
+        "tenant": "tenantId",
+        "resource": {
+          "type": "ai_quota_policy",
+          "id": {
+            "param": "policyKey"
+          }
+        }
+      },
+      "requestSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "idempotencyKey",
+          "reason",
+          "graceLimit",
+          "expiresAt"
+        ],
+        "properties": {
+          "idempotencyKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          },
+          "graceLimit": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "expiresAt": {
+            "type": "string",
+            "minLength": 20,
+            "maxLength": 40
+          }
+        }
+      }
+    },
+    {
+      "kind": "mutation",
+      "id": "tenant.billing-anchor.set",
+      "method": "PUT",
+      "path": "/ai/tenants/:tenantId/billing-anchor",
+      "scope": "ai.quota.write",
+      "action": "ai.tenant.billing-anchor.set",
+      "risk": "R2",
+      "approval": "none",
+      "binding": {
+        "tenant": "tenantId",
+        "resource": {
+          "type": "tenant",
+          "id": {
+            "param": "tenantId"
+          }
+        }
+      },
+      "requestSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "idempotencyKey",
+          "reason",
+          "billingAnchorDay"
+        ],
+        "properties": {
+          "idempotencyKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          },
+          "billingAnchorDay": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 28
+          }
+        }
+      }
+    },
+    {
+      "kind": "mutation",
+      "id": "tenant.model-policy.set",
+      "method": "PUT",
+      "path": "/ai/tenants/:tenantId/model-policy",
+      "scope": "ai.provider_policy.write",
+      "action": "ai.tenant.model-policy.set",
+      "risk": "R2",
+      "approval": "none",
+      "binding": {
+        "tenant": "tenantId",
+        "resource": {
+          "type": "ai_model_policy",
+          "id": {
+            "derived": "providerKey/(modelKey|*)"
+          }
+        }
+      },
+      "requestSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "idempotencyKey",
+          "reason",
+          "providerKey",
+          "decision"
+        ],
+        "properties": {
+          "idempotencyKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          },
+          "providerKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "modelKey": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "decision": {
+            "type": "string",
+            "enum": [
+              "allow",
+              "deny"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "kind": "mutation",
+      "id": "provider.state.set",
+      "method": "PUT",
+      "path": "/ai/providers/:providerKey/state",
+      "scope": "ai.provider_policy.write",
+      "action": "ai.provider.state.set",
+      "risk": "R2",
+      "riskNarrowing": "R4",
+      "approval": "none",
+      "recoveryIntentWhenNarrowing": true,
+      "binding": {
+        "tenant": null,
+        "resource": {
+          "type": "ai_provider",
+          "id": {
+            "param": "providerKey"
+          }
+        }
+      },
+      "requestSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "idempotencyKey",
+          "reason",
+          "status"
+        ],
+        "properties": {
+          "idempotencyKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "disabled",
+              "deprecated"
+            ]
+          },
+          "recoveryIntent": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          }
+        }
+      }
+    },
+    {
+      "kind": "mutation",
+      "id": "model.lifecycle.set",
+      "method": "PUT",
+      "path": "/ai/models/:modelId/lifecycle",
+      "scope": "ai.provider_policy.write",
+      "action": "ai.model.lifecycle.set",
+      "risk": "R3",
+      "approval": "maker_checker",
+      "binding": {
+        "tenant": null,
+        "resource": {
+          "type": "ai_model",
+          "id": {
+            "param": "modelId"
+          }
+        }
+      },
+      "requestSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "idempotencyKey",
+          "reason",
+          "lifecycle"
+        ],
+        "properties": {
+          "idempotencyKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          },
+          "lifecycle": {
+            "type": "string",
+            "enum": [
+              "active",
+              "deprecated",
+              "retired"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "kind": "mutation",
+      "id": "model.certification.set",
+      "method": "PUT",
+      "path": "/ai/models/:modelId/certification",
+      "scope": "ai.provider_policy.write",
+      "action": "ai.model.certification.set",
+      "risk": "R3",
+      "approval": "maker_checker",
+      "requiresEvidenceRef": true,
+      "binding": {
+        "tenant": null,
+        "resource": {
+          "type": "ai_model",
+          "id": {
+            "param": "modelId"
+          }
+        }
+      },
+      "requestSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "idempotencyKey",
+          "reason",
+          "certification",
+          "evidenceRef"
+        ],
+        "properties": {
+          "idempotencyKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          },
+          "certification": {
+            "type": "string",
+            "enum": [
+              "uncertified",
+              "synthetic_certified",
+              "provider_certified"
+            ]
+          },
+          "evidenceRef": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          }
+        }
+      }
+    },
+    {
+      "kind": "mutation",
+      "id": "tenant.suspend",
+      "method": "POST",
+      "path": "/ai/tenants/:tenantId/suspend",
+      "scope": "ai.emergency_suspend",
+      "action": "ai.tenant.emergency.suspend",
+      "risk": "R4",
+      "approval": "none",
+      "stepUp": true,
+      "recoveryIntent": true,
+      "binding": {
+        "tenant": "tenantId",
+        "resource": {
+          "type": "tenant",
+          "id": {
+            "param": "tenantId"
+          }
+        }
+      },
+      "requestSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "idempotencyKey",
+          "reason",
+          "recoveryIntent"
+        ],
+        "properties": {
+          "idempotencyKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          },
+          "recoveryIntent": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          }
+        }
+      }
+    },
+    {
+      "kind": "mutation",
+      "id": "tenant.resume",
+      "method": "POST",
+      "path": "/ai/tenants/:tenantId/resume",
+      "scope": "ai.emergency_suspend",
+      "action": "ai.tenant.emergency.resume",
+      "risk": "R3",
+      "approval": "maker_checker",
+      "binding": {
+        "tenant": "tenantId",
+        "resource": {
+          "type": "tenant",
+          "id": {
+            "param": "tenantId"
+          }
+        }
+      },
+      "requestSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "idempotencyKey",
+          "reason"
+        ],
+        "properties": {
+          "idempotencyKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          }
+        }
+      }
+    },
+    {
+      "kind": "mutation",
+      "id": "tenant.credential.revoke",
+      "method": "POST",
+      "path": "/ai/tenants/:tenantId/credentials/:refId/revoke",
+      "scope": "credentials.revoke",
+      "action": "ai.credential.revoke",
+      "risk": "R2",
+      "riskNote": "security fast path",
+      "approval": "none",
+      "binding": {
+        "tenant": "tenantId",
+        "resource": {
+          "type": "ai_credential",
+          "id": {
+            "param": "refId"
+          }
+        }
+      },
+      "requestSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "idempotencyKey",
+          "reason"
+        ],
+        "properties": {
+          "idempotencyKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          }
+        }
+      }
+    },
+    {
+      "kind": "mutation",
+      "id": "metering-exception.resolve",
+      "method": "POST",
+      "path": "/ai/metering-exceptions/:exceptionId/resolve",
+      "scope": "ai.quota.write",
+      "action": "ai.metering-exception.resolve",
+      "risk": "R1",
+      "approval": "none",
+      "binding": {
+        "tenant": null,
+        "resource": {
+          "type": "ai_metering_exception",
+          "id": {
+            "param": "exceptionId"
+          }
+        }
+      },
+      "requestSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "idempotencyKey",
+          "reason"
+        ],
+        "properties": {
+          "idempotencyKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          }
+        }
+      }
+    },
+    {
+      "kind": "mutation",
+      "id": "reconciliation.line.resolve",
+      "method": "POST",
+      "path": "/ai/reconciliation/lines/:reconciliationId/resolve",
+      "scope": "finops.policy.write",
+      "action": "ai.reconciliation.resolve",
+      "risk": "R1",
+      "approval": "none",
+      "binding": {
+        "tenant": null,
+        "resource": {
+          "type": "ai_reconciliation_line",
+          "id": {
+            "param": "reconciliationId"
+          }
+        }
+      },
+      "requestSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "idempotencyKey",
+          "reason"
+        ],
+        "properties": {
+          "idempotencyKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          }
+        }
+      }
+    }
+  ],
+  "schemaVectors": [
+    {
+      "routeId": "tenant.planes.set",
+      "name": "valid-minimal",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "planes": [
+          "embedded_managed"
+        ]
+      },
+      "valid": true
+    },
+    {
+      "routeId": "tenant.planes.set",
+      "name": "valid-full",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "planes": [
+          "embedded_managed"
+        ]
+      },
+      "valid": true
+    },
+    {
+      "routeId": "tenant.planes.set",
+      "name": "empty-object",
+      "body": {},
+      "valid": false
+    },
+    {
+      "routeId": "tenant.planes.set",
+      "name": "missing:idempotencyKey",
+      "body": {
+        "reason": "x",
+        "planes": [
+          "embedded_managed"
+        ]
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.planes.set",
+      "name": "missing:reason",
+      "body": {
+        "idempotencyKey": "x",
+        "planes": [
+          "embedded_managed"
+        ]
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.planes.set",
+      "name": "missing:planes",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.planes.set",
+      "name": "unknown-property:$",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "planes": [
+          "embedded_managed"
+        ],
+        "smuggledField": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.planes.set",
+      "name": "wrong-type:idempotencyKey",
+      "body": {
+        "idempotencyKey": 12345,
+        "reason": "x",
+        "planes": [
+          "embedded_managed"
+        ]
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.planes.set",
+      "name": "too-long:idempotencyKey",
+      "body": {
+        "idempotencyKey": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "reason": "x",
+        "planes": [
+          "embedded_managed"
+        ]
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.planes.set",
+      "name": "empty:idempotencyKey",
+      "body": {
+        "idempotencyKey": "",
+        "reason": "x",
+        "planes": [
+          "embedded_managed"
+        ]
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.planes.set",
+      "name": "wrong-type:reason",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": 12345,
+        "planes": [
+          "embedded_managed"
+        ]
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.planes.set",
+      "name": "too-long:reason",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "planes": [
+          "embedded_managed"
+        ]
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.planes.set",
+      "name": "empty:reason",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "",
+        "planes": [
+          "embedded_managed"
+        ]
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.planes.set",
+      "name": "wrong-type:planes",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "planes": "not-a-structure"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.planes.set",
+      "name": "too-few-items:planes",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "planes": []
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.planes.set",
+      "name": "too-many-items:planes",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "planes": [
+          "embedded_managed",
+          "embedded_managed",
+          "embedded_managed"
+        ]
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.capability.commission",
+      "name": "valid-minimal",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "plane": "embedded_managed",
+        "state": "commissioned"
+      },
+      "valid": true
+    },
+    {
+      "routeId": "tenant.capability.commission",
+      "name": "valid-full",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "plane": "embedded_managed",
+        "state": "commissioned"
+      },
+      "valid": true
+    },
+    {
+      "routeId": "tenant.capability.commission",
+      "name": "empty-object",
+      "body": {},
+      "valid": false
+    },
+    {
+      "routeId": "tenant.capability.commission",
+      "name": "missing:idempotencyKey",
+      "body": {
+        "reason": "x",
+        "plane": "embedded_managed",
+        "state": "commissioned"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.capability.commission",
+      "name": "missing:reason",
+      "body": {
+        "idempotencyKey": "x",
+        "plane": "embedded_managed",
+        "state": "commissioned"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.capability.commission",
+      "name": "missing:plane",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "state": "commissioned"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.capability.commission",
+      "name": "missing:state",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "plane": "embedded_managed"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.capability.commission",
+      "name": "unknown-property:$",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "plane": "embedded_managed",
+        "state": "commissioned",
+        "smuggledField": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.capability.commission",
+      "name": "wrong-type:idempotencyKey",
+      "body": {
+        "idempotencyKey": 12345,
+        "reason": "x",
+        "plane": "embedded_managed",
+        "state": "commissioned"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.capability.commission",
+      "name": "too-long:idempotencyKey",
+      "body": {
+        "idempotencyKey": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "reason": "x",
+        "plane": "embedded_managed",
+        "state": "commissioned"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.capability.commission",
+      "name": "empty:idempotencyKey",
+      "body": {
+        "idempotencyKey": "",
+        "reason": "x",
+        "plane": "embedded_managed",
+        "state": "commissioned"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.capability.commission",
+      "name": "wrong-type:reason",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": 12345,
+        "plane": "embedded_managed",
+        "state": "commissioned"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.capability.commission",
+      "name": "too-long:reason",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "plane": "embedded_managed",
+        "state": "commissioned"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.capability.commission",
+      "name": "empty:reason",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "",
+        "plane": "embedded_managed",
+        "state": "commissioned"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.capability.commission",
+      "name": "wrong-type:plane",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "plane": 12345,
+        "state": "commissioned"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.capability.commission",
+      "name": "bad-enum:plane",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "plane": "zzz-not-an-option",
+        "state": "commissioned"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.capability.commission",
+      "name": "wrong-type:state",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "plane": "embedded_managed",
+        "state": 12345
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.capability.commission",
+      "name": "bad-enum:state",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "plane": "embedded_managed",
+        "state": "zzz-not-an-option"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.commissioning-mode.preview",
+      "name": "valid-minimal",
+      "body": {
+        "mode": "legacy_additive"
+      },
+      "valid": true
+    },
+    {
+      "routeId": "tenant.commissioning-mode.preview",
+      "name": "valid-full",
+      "body": {
+        "mode": "legacy_additive"
+      },
+      "valid": true
+    },
+    {
+      "routeId": "tenant.commissioning-mode.preview",
+      "name": "empty-object",
+      "body": {},
+      "valid": false
+    },
+    {
+      "routeId": "tenant.commissioning-mode.preview",
+      "name": "missing:mode",
+      "body": {},
+      "valid": false
+    },
+    {
+      "routeId": "tenant.commissioning-mode.preview",
+      "name": "unknown-property:$",
+      "body": {
+        "mode": "legacy_additive",
+        "smuggledField": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.commissioning-mode.preview",
+      "name": "wrong-type:mode",
+      "body": {
+        "mode": 12345
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.commissioning-mode.preview",
+      "name": "bad-enum:mode",
+      "body": {
+        "mode": "zzz-not-an-option"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.commissioning-mode.set",
+      "name": "valid-minimal",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "mode": "legacy_additive"
+      },
+      "valid": true
+    },
+    {
+      "routeId": "tenant.commissioning-mode.set",
+      "name": "valid-full",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "mode": "legacy_additive",
+        "expectedDiffHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "valid": true
+    },
+    {
+      "routeId": "tenant.commissioning-mode.set",
+      "name": "empty-object",
+      "body": {},
+      "valid": false
+    },
+    {
+      "routeId": "tenant.commissioning-mode.set",
+      "name": "missing:idempotencyKey",
+      "body": {
+        "reason": "x",
+        "mode": "legacy_additive",
+        "expectedDiffHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.commissioning-mode.set",
+      "name": "missing:reason",
+      "body": {
+        "idempotencyKey": "x",
+        "mode": "legacy_additive",
+        "expectedDiffHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.commissioning-mode.set",
+      "name": "missing:mode",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "expectedDiffHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.commissioning-mode.set",
+      "name": "unknown-property:$",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "mode": "legacy_additive",
+        "expectedDiffHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "smuggledField": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.commissioning-mode.set",
+      "name": "wrong-type:idempotencyKey",
+      "body": {
+        "idempotencyKey": 12345,
+        "reason": "x",
+        "mode": "legacy_additive",
+        "expectedDiffHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.commissioning-mode.set",
+      "name": "too-long:idempotencyKey",
+      "body": {
+        "idempotencyKey": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "reason": "x",
+        "mode": "legacy_additive",
+        "expectedDiffHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.commissioning-mode.set",
+      "name": "empty:idempotencyKey",
+      "body": {
+        "idempotencyKey": "",
+        "reason": "x",
+        "mode": "legacy_additive",
+        "expectedDiffHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.commissioning-mode.set",
+      "name": "wrong-type:reason",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": 12345,
+        "mode": "legacy_additive",
+        "expectedDiffHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.commissioning-mode.set",
+      "name": "too-long:reason",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "mode": "legacy_additive",
+        "expectedDiffHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.commissioning-mode.set",
+      "name": "empty:reason",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "",
+        "mode": "legacy_additive",
+        "expectedDiffHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.commissioning-mode.set",
+      "name": "wrong-type:mode",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "mode": 12345,
+        "expectedDiffHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.commissioning-mode.set",
+      "name": "bad-enum:mode",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "mode": "zzz-not-an-option",
+        "expectedDiffHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.commissioning-mode.set",
+      "name": "wrong-type:expectedDiffHash",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "mode": "legacy_additive",
+        "expectedDiffHash": 12345
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.commissioning-mode.set",
+      "name": "pattern-violation:expectedDiffHash",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "mode": "legacy_additive",
+        "expectedDiffHash": "not matching"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.quota.set",
+      "name": "valid-minimal",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "policy": {
+          "scopeType": "tenant",
+          "period": "daily",
+          "limitType": "tokens",
+          "hardLimit": 0
+        }
+      },
+      "valid": true
+    },
+    {
+      "routeId": "tenant.quota.set",
+      "name": "valid-full",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "policy": {
+          "scopeType": "tenant",
+          "scopeKey": "x",
+          "aiPlane": "embedded_managed",
+          "period": "daily",
+          "limitType": "tokens",
+          "hardLimit": 0,
+          "warningPct": 0.5,
+          "softLimit": 0,
+          "usageUnit": "x",
+          "enabled": true
+        }
+      },
+      "valid": true
+    },
+    {
+      "routeId": "tenant.quota.set",
+      "name": "empty-object",
+      "body": {},
+      "valid": false
+    },
+    {
+      "routeId": "tenant.quota.set",
+      "name": "missing:idempotencyKey",
+      "body": {
+        "reason": "x",
+        "policy": {
+          "scopeType": "tenant",
+          "scopeKey": "x",
+          "aiPlane": "embedded_managed",
+          "period": "daily",
+          "limitType": "tokens",
+          "hardLimit": 0,
+          "warningPct": 0.5,
+          "softLimit": 0,
+          "usageUnit": "x",
+          "enabled": true
+        }
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.quota.set",
+      "name": "missing:reason",
+      "body": {
+        "idempotencyKey": "x",
+        "policy": {
+          "scopeType": "tenant",
+          "scopeKey": "x",
+          "aiPlane": "embedded_managed",
+          "period": "daily",
+          "limitType": "tokens",
+          "hardLimit": 0,
+          "warningPct": 0.5,
+          "softLimit": 0,
+          "usageUnit": "x",
+          "enabled": true
+        }
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.quota.set",
+      "name": "missing:policy",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.quota.set",
+      "name": "unknown-property:$",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "policy": {
+          "scopeType": "tenant",
+          "scopeKey": "x",
+          "aiPlane": "embedded_managed",
+          "period": "daily",
+          "limitType": "tokens",
+          "hardLimit": 0,
+          "warningPct": 0.5,
+          "softLimit": 0,
+          "usageUnit": "x",
+          "enabled": true
+        },
+        "smuggledField": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.quota.set",
+      "name": "wrong-type:idempotencyKey",
+      "body": {
+        "idempotencyKey": 12345,
+        "reason": "x",
+        "policy": {
+          "scopeType": "tenant",
+          "scopeKey": "x",
+          "aiPlane": "embedded_managed",
+          "period": "daily",
+          "limitType": "tokens",
+          "hardLimit": 0,
+          "warningPct": 0.5,
+          "softLimit": 0,
+          "usageUnit": "x",
+          "enabled": true
+        }
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.quota.set",
+      "name": "too-long:idempotencyKey",
+      "body": {
+        "idempotencyKey": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "reason": "x",
+        "policy": {
+          "scopeType": "tenant",
+          "scopeKey": "x",
+          "aiPlane": "embedded_managed",
+          "period": "daily",
+          "limitType": "tokens",
+          "hardLimit": 0,
+          "warningPct": 0.5,
+          "softLimit": 0,
+          "usageUnit": "x",
+          "enabled": true
+        }
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.quota.set",
+      "name": "empty:idempotencyKey",
+      "body": {
+        "idempotencyKey": "",
+        "reason": "x",
+        "policy": {
+          "scopeType": "tenant",
+          "scopeKey": "x",
+          "aiPlane": "embedded_managed",
+          "period": "daily",
+          "limitType": "tokens",
+          "hardLimit": 0,
+          "warningPct": 0.5,
+          "softLimit": 0,
+          "usageUnit": "x",
+          "enabled": true
+        }
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.quota.set",
+      "name": "wrong-type:reason",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": 12345,
+        "policy": {
+          "scopeType": "tenant",
+          "scopeKey": "x",
+          "aiPlane": "embedded_managed",
+          "period": "daily",
+          "limitType": "tokens",
+          "hardLimit": 0,
+          "warningPct": 0.5,
+          "softLimit": 0,
+          "usageUnit": "x",
+          "enabled": true
+        }
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.quota.set",
+      "name": "too-long:reason",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "policy": {
+          "scopeType": "tenant",
+          "scopeKey": "x",
+          "aiPlane": "embedded_managed",
+          "period": "daily",
+          "limitType": "tokens",
+          "hardLimit": 0,
+          "warningPct": 0.5,
+          "softLimit": 0,
+          "usageUnit": "x",
+          "enabled": true
+        }
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.quota.set",
+      "name": "empty:reason",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "",
+        "policy": {
+          "scopeType": "tenant",
+          "scopeKey": "x",
+          "aiPlane": "embedded_managed",
+          "period": "daily",
+          "limitType": "tokens",
+          "hardLimit": 0,
+          "warningPct": 0.5,
+          "softLimit": 0,
+          "usageUnit": "x",
+          "enabled": true
+        }
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.quota.set",
+      "name": "wrong-type:policy",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "policy": "not-a-structure"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.quota.set",
+      "name": "missing:policy.scopeType",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "policy": {
+          "scopeKey": "x",
+          "aiPlane": "embedded_managed",
+          "period": "daily",
+          "limitType": "tokens",
+          "hardLimit": 0,
+          "warningPct": 0.5,
+          "softLimit": 0,
+          "usageUnit": "x",
+          "enabled": true
+        }
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.quota.set",
+      "name": "missing:policy.period",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "policy": {
+          "scopeType": "tenant",
+          "scopeKey": "x",
+          "aiPlane": "embedded_managed",
+          "limitType": "tokens",
+          "hardLimit": 0,
+          "warningPct": 0.5,
+          "softLimit": 0,
+          "usageUnit": "x",
+          "enabled": true
+        }
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.quota.set",
+      "name": "missing:policy.limitType",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "policy": {
+          "scopeType": "tenant",
+          "scopeKey": "x",
+          "aiPlane": "embedded_managed",
+          "period": "daily",
+          "hardLimit": 0,
+          "warningPct": 0.5,
+          "softLimit": 0,
+          "usageUnit": "x",
+          "enabled": true
+        }
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.quota.set",
+      "name": "missing:policy.hardLimit",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "policy": {
+          "scopeType": "tenant",
+          "scopeKey": "x",
+          "aiPlane": "embedded_managed",
+          "period": "daily",
+          "limitType": "tokens",
+          "warningPct": 0.5,
+          "softLimit": 0,
+          "usageUnit": "x",
+          "enabled": true
+        }
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.quota.set",
+      "name": "unknown-property:policy",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "policy": {
+          "scopeType": "tenant",
+          "scopeKey": "x",
+          "aiPlane": "embedded_managed",
+          "period": "daily",
+          "limitType": "tokens",
+          "hardLimit": 0,
+          "warningPct": 0.5,
+          "softLimit": 0,
+          "usageUnit": "x",
+          "enabled": true,
+          "smuggledField": "x"
+        }
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.quota.set",
+      "name": "wrong-type:policy.scopeType",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "policy": {
+          "scopeType": 12345,
+          "scopeKey": "x",
+          "aiPlane": "embedded_managed",
+          "period": "daily",
+          "limitType": "tokens",
+          "hardLimit": 0,
+          "warningPct": 0.5,
+          "softLimit": 0,
+          "usageUnit": "x",
+          "enabled": true
+        }
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.quota.set",
+      "name": "bad-enum:policy.scopeType",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "policy": {
+          "scopeType": "zzz-not-an-option",
+          "scopeKey": "x",
+          "aiPlane": "embedded_managed",
+          "period": "daily",
+          "limitType": "tokens",
+          "hardLimit": 0,
+          "warningPct": 0.5,
+          "softLimit": 0,
+          "usageUnit": "x",
+          "enabled": true
+        }
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.quota.set",
+      "name": "wrong-type:policy.scopeKey",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "policy": {
+          "scopeType": "tenant",
+          "scopeKey": 12345,
+          "aiPlane": "embedded_managed",
+          "period": "daily",
+          "limitType": "tokens",
+          "hardLimit": 0,
+          "warningPct": 0.5,
+          "softLimit": 0,
+          "usageUnit": "x",
+          "enabled": true
+        }
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.quota.set",
+      "name": "too-long:policy.scopeKey",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "policy": {
+          "scopeType": "tenant",
+          "scopeKey": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "aiPlane": "embedded_managed",
+          "period": "daily",
+          "limitType": "tokens",
+          "hardLimit": 0,
+          "warningPct": 0.5,
+          "softLimit": 0,
+          "usageUnit": "x",
+          "enabled": true
+        }
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.quota.set",
+      "name": "empty:policy.scopeKey",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "policy": {
+          "scopeType": "tenant",
+          "scopeKey": "",
+          "aiPlane": "embedded_managed",
+          "period": "daily",
+          "limitType": "tokens",
+          "hardLimit": 0,
+          "warningPct": 0.5,
+          "softLimit": 0,
+          "usageUnit": "x",
+          "enabled": true
+        }
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.quota.set",
+      "name": "wrong-type:policy.aiPlane",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "policy": {
+          "scopeType": "tenant",
+          "scopeKey": "x",
+          "aiPlane": 12345,
+          "period": "daily",
+          "limitType": "tokens",
+          "hardLimit": 0,
+          "warningPct": 0.5,
+          "softLimit": 0,
+          "usageUnit": "x",
+          "enabled": true
+        }
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.quota.set",
+      "name": "bad-enum:policy.aiPlane",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "policy": {
+          "scopeType": "tenant",
+          "scopeKey": "x",
+          "aiPlane": "zzz-not-an-option",
+          "period": "daily",
+          "limitType": "tokens",
+          "hardLimit": 0,
+          "warningPct": 0.5,
+          "softLimit": 0,
+          "usageUnit": "x",
+          "enabled": true
+        }
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.quota.set",
+      "name": "wrong-type:policy.period",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "policy": {
+          "scopeType": "tenant",
+          "scopeKey": "x",
+          "aiPlane": "embedded_managed",
+          "period": 12345,
+          "limitType": "tokens",
+          "hardLimit": 0,
+          "warningPct": 0.5,
+          "softLimit": 0,
+          "usageUnit": "x",
+          "enabled": true
+        }
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.quota.set",
+      "name": "bad-enum:policy.period",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "policy": {
+          "scopeType": "tenant",
+          "scopeKey": "x",
+          "aiPlane": "embedded_managed",
+          "period": "zzz-not-an-option",
+          "limitType": "tokens",
+          "hardLimit": 0,
+          "warningPct": 0.5,
+          "softLimit": 0,
+          "usageUnit": "x",
+          "enabled": true
+        }
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.quota.set",
+      "name": "wrong-type:policy.limitType",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "policy": {
+          "scopeType": "tenant",
+          "scopeKey": "x",
+          "aiPlane": "embedded_managed",
+          "period": "daily",
+          "limitType": 12345,
+          "hardLimit": 0,
+          "warningPct": 0.5,
+          "softLimit": 0,
+          "usageUnit": "x",
+          "enabled": true
+        }
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.quota.set",
+      "name": "bad-enum:policy.limitType",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "policy": {
+          "scopeType": "tenant",
+          "scopeKey": "x",
+          "aiPlane": "embedded_managed",
+          "period": "daily",
+          "limitType": "zzz-not-an-option",
+          "hardLimit": 0,
+          "warningPct": 0.5,
+          "softLimit": 0,
+          "usageUnit": "x",
+          "enabled": true
+        }
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.quota.set",
+      "name": "wrong-type:policy.hardLimit",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "policy": {
+          "scopeType": "tenant",
+          "scopeKey": "x",
+          "aiPlane": "embedded_managed",
+          "period": "daily",
+          "limitType": "tokens",
+          "hardLimit": "not-a-number-or-boolean",
+          "warningPct": 0.5,
+          "softLimit": 0,
+          "usageUnit": "x",
+          "enabled": true
+        }
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.quota.set",
+      "name": "below-minimum:policy.hardLimit",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "policy": {
+          "scopeType": "tenant",
+          "scopeKey": "x",
+          "aiPlane": "embedded_managed",
+          "period": "daily",
+          "limitType": "tokens",
+          "hardLimit": -1,
+          "warningPct": 0.5,
+          "softLimit": 0,
+          "usageUnit": "x",
+          "enabled": true
+        }
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.quota.set",
+      "name": "wrong-type:policy.warningPct",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "policy": {
+          "scopeType": "tenant",
+          "scopeKey": "x",
+          "aiPlane": "embedded_managed",
+          "period": "daily",
+          "limitType": "tokens",
+          "hardLimit": 0,
+          "warningPct": "not-a-number-or-boolean",
+          "softLimit": 0,
+          "usageUnit": "x",
+          "enabled": true
+        }
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.quota.set",
+      "name": "at-exclusive-minimum:policy.warningPct",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "policy": {
+          "scopeType": "tenant",
+          "scopeKey": "x",
+          "aiPlane": "embedded_managed",
+          "period": "daily",
+          "limitType": "tokens",
+          "hardLimit": 0,
+          "warningPct": 0,
+          "softLimit": 0,
+          "usageUnit": "x",
+          "enabled": true
+        }
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.quota.set",
+      "name": "at-exclusive-maximum:policy.warningPct",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "policy": {
+          "scopeType": "tenant",
+          "scopeKey": "x",
+          "aiPlane": "embedded_managed",
+          "period": "daily",
+          "limitType": "tokens",
+          "hardLimit": 0,
+          "warningPct": 1,
+          "softLimit": 0,
+          "usageUnit": "x",
+          "enabled": true
+        }
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.quota.set",
+      "name": "wrong-type:policy.softLimit",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "policy": {
+          "scopeType": "tenant",
+          "scopeKey": "x",
+          "aiPlane": "embedded_managed",
+          "period": "daily",
+          "limitType": "tokens",
+          "hardLimit": 0,
+          "warningPct": 0.5,
+          "softLimit": "not-a-number-or-boolean",
+          "usageUnit": "x",
+          "enabled": true
+        }
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.quota.set",
+      "name": "below-minimum:policy.softLimit",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "policy": {
+          "scopeType": "tenant",
+          "scopeKey": "x",
+          "aiPlane": "embedded_managed",
+          "period": "daily",
+          "limitType": "tokens",
+          "hardLimit": 0,
+          "warningPct": 0.5,
+          "softLimit": -1,
+          "usageUnit": "x",
+          "enabled": true
+        }
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.quota.set",
+      "name": "wrong-type:policy.usageUnit",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "policy": {
+          "scopeType": "tenant",
+          "scopeKey": "x",
+          "aiPlane": "embedded_managed",
+          "period": "daily",
+          "limitType": "tokens",
+          "hardLimit": 0,
+          "warningPct": 0.5,
+          "softLimit": 0,
+          "usageUnit": 12345,
+          "enabled": true
+        }
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.quota.set",
+      "name": "too-long:policy.usageUnit",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "policy": {
+          "scopeType": "tenant",
+          "scopeKey": "x",
+          "aiPlane": "embedded_managed",
+          "period": "daily",
+          "limitType": "tokens",
+          "hardLimit": 0,
+          "warningPct": 0.5,
+          "softLimit": 0,
+          "usageUnit": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "enabled": true
+        }
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.quota.set",
+      "name": "empty:policy.usageUnit",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "policy": {
+          "scopeType": "tenant",
+          "scopeKey": "x",
+          "aiPlane": "embedded_managed",
+          "period": "daily",
+          "limitType": "tokens",
+          "hardLimit": 0,
+          "warningPct": 0.5,
+          "softLimit": 0,
+          "usageUnit": "",
+          "enabled": true
+        }
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.quota.set",
+      "name": "wrong-type:policy.enabled",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "policy": {
+          "scopeType": "tenant",
+          "scopeKey": "x",
+          "aiPlane": "embedded_managed",
+          "period": "daily",
+          "limitType": "tokens",
+          "hardLimit": 0,
+          "warningPct": 0.5,
+          "softLimit": 0,
+          "usageUnit": "x",
+          "enabled": "not-a-number-or-boolean"
+        }
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.quota.remove",
+      "name": "valid-minimal",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x"
+      },
+      "valid": true
+    },
+    {
+      "routeId": "tenant.quota.remove",
+      "name": "valid-full",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x"
+      },
+      "valid": true
+    },
+    {
+      "routeId": "tenant.quota.remove",
+      "name": "empty-object",
+      "body": {},
+      "valid": false
+    },
+    {
+      "routeId": "tenant.quota.remove",
+      "name": "missing:idempotencyKey",
+      "body": {
+        "reason": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.quota.remove",
+      "name": "missing:reason",
+      "body": {
+        "idempotencyKey": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.quota.remove",
+      "name": "unknown-property:$",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "smuggledField": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.quota.remove",
+      "name": "wrong-type:idempotencyKey",
+      "body": {
+        "idempotencyKey": 12345,
+        "reason": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.quota.remove",
+      "name": "too-long:idempotencyKey",
+      "body": {
+        "idempotencyKey": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "reason": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.quota.remove",
+      "name": "empty:idempotencyKey",
+      "body": {
+        "idempotencyKey": "",
+        "reason": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.quota.remove",
+      "name": "wrong-type:reason",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": 12345
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.quota.remove",
+      "name": "too-long:reason",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.quota.remove",
+      "name": "empty:reason",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": ""
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.quota.grace.grant",
+      "name": "valid-minimal",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "graceLimit": 1,
+        "expiresAt": "xxxxxxxxxxxxxxxxxxxx"
+      },
+      "valid": true
+    },
+    {
+      "routeId": "tenant.quota.grace.grant",
+      "name": "valid-full",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "graceLimit": 1,
+        "expiresAt": "xxxxxxxxxxxxxxxxxxxx"
+      },
+      "valid": true
+    },
+    {
+      "routeId": "tenant.quota.grace.grant",
+      "name": "empty-object",
+      "body": {},
+      "valid": false
+    },
+    {
+      "routeId": "tenant.quota.grace.grant",
+      "name": "missing:idempotencyKey",
+      "body": {
+        "reason": "x",
+        "graceLimit": 1,
+        "expiresAt": "xxxxxxxxxxxxxxxxxxxx"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.quota.grace.grant",
+      "name": "missing:reason",
+      "body": {
+        "idempotencyKey": "x",
+        "graceLimit": 1,
+        "expiresAt": "xxxxxxxxxxxxxxxxxxxx"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.quota.grace.grant",
+      "name": "missing:graceLimit",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "expiresAt": "xxxxxxxxxxxxxxxxxxxx"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.quota.grace.grant",
+      "name": "missing:expiresAt",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "graceLimit": 1
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.quota.grace.grant",
+      "name": "unknown-property:$",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "graceLimit": 1,
+        "expiresAt": "xxxxxxxxxxxxxxxxxxxx",
+        "smuggledField": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.quota.grace.grant",
+      "name": "wrong-type:idempotencyKey",
+      "body": {
+        "idempotencyKey": 12345,
+        "reason": "x",
+        "graceLimit": 1,
+        "expiresAt": "xxxxxxxxxxxxxxxxxxxx"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.quota.grace.grant",
+      "name": "too-long:idempotencyKey",
+      "body": {
+        "idempotencyKey": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "reason": "x",
+        "graceLimit": 1,
+        "expiresAt": "xxxxxxxxxxxxxxxxxxxx"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.quota.grace.grant",
+      "name": "empty:idempotencyKey",
+      "body": {
+        "idempotencyKey": "",
+        "reason": "x",
+        "graceLimit": 1,
+        "expiresAt": "xxxxxxxxxxxxxxxxxxxx"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.quota.grace.grant",
+      "name": "wrong-type:reason",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": 12345,
+        "graceLimit": 1,
+        "expiresAt": "xxxxxxxxxxxxxxxxxxxx"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.quota.grace.grant",
+      "name": "too-long:reason",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "graceLimit": 1,
+        "expiresAt": "xxxxxxxxxxxxxxxxxxxx"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.quota.grace.grant",
+      "name": "empty:reason",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "",
+        "graceLimit": 1,
+        "expiresAt": "xxxxxxxxxxxxxxxxxxxx"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.quota.grace.grant",
+      "name": "wrong-type:graceLimit",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "graceLimit": "not-a-number-or-boolean",
+        "expiresAt": "xxxxxxxxxxxxxxxxxxxx"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.quota.grace.grant",
+      "name": "at-exclusive-minimum:graceLimit",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "graceLimit": 0,
+        "expiresAt": "xxxxxxxxxxxxxxxxxxxx"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.quota.grace.grant",
+      "name": "wrong-type:expiresAt",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "graceLimit": 1,
+        "expiresAt": 12345
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.quota.grace.grant",
+      "name": "too-long:expiresAt",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "graceLimit": 1,
+        "expiresAt": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.quota.grace.grant",
+      "name": "empty:expiresAt",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "graceLimit": 1,
+        "expiresAt": ""
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.billing-anchor.set",
+      "name": "valid-minimal",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "billingAnchorDay": 15
+      },
+      "valid": true
+    },
+    {
+      "routeId": "tenant.billing-anchor.set",
+      "name": "valid-full",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "billingAnchorDay": 15
+      },
+      "valid": true
+    },
+    {
+      "routeId": "tenant.billing-anchor.set",
+      "name": "empty-object",
+      "body": {},
+      "valid": false
+    },
+    {
+      "routeId": "tenant.billing-anchor.set",
+      "name": "missing:idempotencyKey",
+      "body": {
+        "reason": "x",
+        "billingAnchorDay": 15
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.billing-anchor.set",
+      "name": "missing:reason",
+      "body": {
+        "idempotencyKey": "x",
+        "billingAnchorDay": 15
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.billing-anchor.set",
+      "name": "missing:billingAnchorDay",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.billing-anchor.set",
+      "name": "unknown-property:$",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "billingAnchorDay": 15,
+        "smuggledField": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.billing-anchor.set",
+      "name": "wrong-type:idempotencyKey",
+      "body": {
+        "idempotencyKey": 12345,
+        "reason": "x",
+        "billingAnchorDay": 15
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.billing-anchor.set",
+      "name": "too-long:idempotencyKey",
+      "body": {
+        "idempotencyKey": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "reason": "x",
+        "billingAnchorDay": 15
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.billing-anchor.set",
+      "name": "empty:idempotencyKey",
+      "body": {
+        "idempotencyKey": "",
+        "reason": "x",
+        "billingAnchorDay": 15
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.billing-anchor.set",
+      "name": "wrong-type:reason",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": 12345,
+        "billingAnchorDay": 15
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.billing-anchor.set",
+      "name": "too-long:reason",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "billingAnchorDay": 15
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.billing-anchor.set",
+      "name": "empty:reason",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "",
+        "billingAnchorDay": 15
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.billing-anchor.set",
+      "name": "wrong-type:billingAnchorDay",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "billingAnchorDay": "not-a-number-or-boolean"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.billing-anchor.set",
+      "name": "below-minimum:billingAnchorDay",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "billingAnchorDay": 0
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.billing-anchor.set",
+      "name": "above-maximum:billingAnchorDay",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "billingAnchorDay": 29
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.model-policy.set",
+      "name": "valid-minimal",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "providerKey": "x",
+        "decision": "allow"
+      },
+      "valid": true
+    },
+    {
+      "routeId": "tenant.model-policy.set",
+      "name": "valid-full",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "providerKey": "x",
+        "modelKey": "x",
+        "decision": "allow"
+      },
+      "valid": true
+    },
+    {
+      "routeId": "tenant.model-policy.set",
+      "name": "empty-object",
+      "body": {},
+      "valid": false
+    },
+    {
+      "routeId": "tenant.model-policy.set",
+      "name": "missing:idempotencyKey",
+      "body": {
+        "reason": "x",
+        "providerKey": "x",
+        "modelKey": "x",
+        "decision": "allow"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.model-policy.set",
+      "name": "missing:reason",
+      "body": {
+        "idempotencyKey": "x",
+        "providerKey": "x",
+        "modelKey": "x",
+        "decision": "allow"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.model-policy.set",
+      "name": "missing:providerKey",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "modelKey": "x",
+        "decision": "allow"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.model-policy.set",
+      "name": "missing:decision",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "providerKey": "x",
+        "modelKey": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.model-policy.set",
+      "name": "unknown-property:$",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "providerKey": "x",
+        "modelKey": "x",
+        "decision": "allow",
+        "smuggledField": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.model-policy.set",
+      "name": "wrong-type:idempotencyKey",
+      "body": {
+        "idempotencyKey": 12345,
+        "reason": "x",
+        "providerKey": "x",
+        "modelKey": "x",
+        "decision": "allow"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.model-policy.set",
+      "name": "too-long:idempotencyKey",
+      "body": {
+        "idempotencyKey": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "reason": "x",
+        "providerKey": "x",
+        "modelKey": "x",
+        "decision": "allow"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.model-policy.set",
+      "name": "empty:idempotencyKey",
+      "body": {
+        "idempotencyKey": "",
+        "reason": "x",
+        "providerKey": "x",
+        "modelKey": "x",
+        "decision": "allow"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.model-policy.set",
+      "name": "wrong-type:reason",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": 12345,
+        "providerKey": "x",
+        "modelKey": "x",
+        "decision": "allow"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.model-policy.set",
+      "name": "too-long:reason",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "providerKey": "x",
+        "modelKey": "x",
+        "decision": "allow"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.model-policy.set",
+      "name": "empty:reason",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "",
+        "providerKey": "x",
+        "modelKey": "x",
+        "decision": "allow"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.model-policy.set",
+      "name": "wrong-type:providerKey",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "providerKey": 12345,
+        "modelKey": "x",
+        "decision": "allow"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.model-policy.set",
+      "name": "too-long:providerKey",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "providerKey": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "modelKey": "x",
+        "decision": "allow"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.model-policy.set",
+      "name": "empty:providerKey",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "providerKey": "",
+        "modelKey": "x",
+        "decision": "allow"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.model-policy.set",
+      "name": "wrong-type:modelKey",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "providerKey": "x",
+        "modelKey": 12345,
+        "decision": "allow"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.model-policy.set",
+      "name": "too-long:modelKey",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "providerKey": "x",
+        "modelKey": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "decision": "allow"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.model-policy.set",
+      "name": "empty:modelKey",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "providerKey": "x",
+        "modelKey": "",
+        "decision": "allow"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.model-policy.set",
+      "name": "wrong-type:decision",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "providerKey": "x",
+        "modelKey": "x",
+        "decision": 12345
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.model-policy.set",
+      "name": "bad-enum:decision",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "providerKey": "x",
+        "modelKey": "x",
+        "decision": "zzz-not-an-option"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "provider.state.set",
+      "name": "valid-minimal",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "status": "active"
+      },
+      "valid": true
+    },
+    {
+      "routeId": "provider.state.set",
+      "name": "valid-full",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "status": "active",
+        "recoveryIntent": "x"
+      },
+      "valid": true
+    },
+    {
+      "routeId": "provider.state.set",
+      "name": "empty-object",
+      "body": {},
+      "valid": false
+    },
+    {
+      "routeId": "provider.state.set",
+      "name": "missing:idempotencyKey",
+      "body": {
+        "reason": "x",
+        "status": "active",
+        "recoveryIntent": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "provider.state.set",
+      "name": "missing:reason",
+      "body": {
+        "idempotencyKey": "x",
+        "status": "active",
+        "recoveryIntent": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "provider.state.set",
+      "name": "missing:status",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "recoveryIntent": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "provider.state.set",
+      "name": "unknown-property:$",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "status": "active",
+        "recoveryIntent": "x",
+        "smuggledField": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "provider.state.set",
+      "name": "wrong-type:idempotencyKey",
+      "body": {
+        "idempotencyKey": 12345,
+        "reason": "x",
+        "status": "active",
+        "recoveryIntent": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "provider.state.set",
+      "name": "too-long:idempotencyKey",
+      "body": {
+        "idempotencyKey": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "reason": "x",
+        "status": "active",
+        "recoveryIntent": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "provider.state.set",
+      "name": "empty:idempotencyKey",
+      "body": {
+        "idempotencyKey": "",
+        "reason": "x",
+        "status": "active",
+        "recoveryIntent": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "provider.state.set",
+      "name": "wrong-type:reason",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": 12345,
+        "status": "active",
+        "recoveryIntent": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "provider.state.set",
+      "name": "too-long:reason",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "status": "active",
+        "recoveryIntent": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "provider.state.set",
+      "name": "empty:reason",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "",
+        "status": "active",
+        "recoveryIntent": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "provider.state.set",
+      "name": "wrong-type:status",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "status": 12345,
+        "recoveryIntent": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "provider.state.set",
+      "name": "bad-enum:status",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "status": "zzz-not-an-option",
+        "recoveryIntent": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "provider.state.set",
+      "name": "wrong-type:recoveryIntent",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "status": "active",
+        "recoveryIntent": 12345
+      },
+      "valid": false
+    },
+    {
+      "routeId": "provider.state.set",
+      "name": "too-long:recoveryIntent",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "status": "active",
+        "recoveryIntent": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "provider.state.set",
+      "name": "empty:recoveryIntent",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "status": "active",
+        "recoveryIntent": ""
+      },
+      "valid": false
+    },
+    {
+      "routeId": "model.lifecycle.set",
+      "name": "valid-minimal",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "lifecycle": "active"
+      },
+      "valid": true
+    },
+    {
+      "routeId": "model.lifecycle.set",
+      "name": "valid-full",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "lifecycle": "active"
+      },
+      "valid": true
+    },
+    {
+      "routeId": "model.lifecycle.set",
+      "name": "empty-object",
+      "body": {},
+      "valid": false
+    },
+    {
+      "routeId": "model.lifecycle.set",
+      "name": "missing:idempotencyKey",
+      "body": {
+        "reason": "x",
+        "lifecycle": "active"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "model.lifecycle.set",
+      "name": "missing:reason",
+      "body": {
+        "idempotencyKey": "x",
+        "lifecycle": "active"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "model.lifecycle.set",
+      "name": "missing:lifecycle",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "model.lifecycle.set",
+      "name": "unknown-property:$",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "lifecycle": "active",
+        "smuggledField": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "model.lifecycle.set",
+      "name": "wrong-type:idempotencyKey",
+      "body": {
+        "idempotencyKey": 12345,
+        "reason": "x",
+        "lifecycle": "active"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "model.lifecycle.set",
+      "name": "too-long:idempotencyKey",
+      "body": {
+        "idempotencyKey": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "reason": "x",
+        "lifecycle": "active"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "model.lifecycle.set",
+      "name": "empty:idempotencyKey",
+      "body": {
+        "idempotencyKey": "",
+        "reason": "x",
+        "lifecycle": "active"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "model.lifecycle.set",
+      "name": "wrong-type:reason",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": 12345,
+        "lifecycle": "active"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "model.lifecycle.set",
+      "name": "too-long:reason",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "lifecycle": "active"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "model.lifecycle.set",
+      "name": "empty:reason",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "",
+        "lifecycle": "active"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "model.lifecycle.set",
+      "name": "wrong-type:lifecycle",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "lifecycle": 12345
+      },
+      "valid": false
+    },
+    {
+      "routeId": "model.lifecycle.set",
+      "name": "bad-enum:lifecycle",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "lifecycle": "zzz-not-an-option"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "model.certification.set",
+      "name": "valid-minimal",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "certification": "uncertified",
+        "evidenceRef": "x"
+      },
+      "valid": true
+    },
+    {
+      "routeId": "model.certification.set",
+      "name": "valid-full",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "certification": "uncertified",
+        "evidenceRef": "x"
+      },
+      "valid": true
+    },
+    {
+      "routeId": "model.certification.set",
+      "name": "empty-object",
+      "body": {},
+      "valid": false
+    },
+    {
+      "routeId": "model.certification.set",
+      "name": "missing:idempotencyKey",
+      "body": {
+        "reason": "x",
+        "certification": "uncertified",
+        "evidenceRef": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "model.certification.set",
+      "name": "missing:reason",
+      "body": {
+        "idempotencyKey": "x",
+        "certification": "uncertified",
+        "evidenceRef": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "model.certification.set",
+      "name": "missing:certification",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "evidenceRef": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "model.certification.set",
+      "name": "missing:evidenceRef",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "certification": "uncertified"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "model.certification.set",
+      "name": "unknown-property:$",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "certification": "uncertified",
+        "evidenceRef": "x",
+        "smuggledField": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "model.certification.set",
+      "name": "wrong-type:idempotencyKey",
+      "body": {
+        "idempotencyKey": 12345,
+        "reason": "x",
+        "certification": "uncertified",
+        "evidenceRef": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "model.certification.set",
+      "name": "too-long:idempotencyKey",
+      "body": {
+        "idempotencyKey": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "reason": "x",
+        "certification": "uncertified",
+        "evidenceRef": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "model.certification.set",
+      "name": "empty:idempotencyKey",
+      "body": {
+        "idempotencyKey": "",
+        "reason": "x",
+        "certification": "uncertified",
+        "evidenceRef": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "model.certification.set",
+      "name": "wrong-type:reason",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": 12345,
+        "certification": "uncertified",
+        "evidenceRef": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "model.certification.set",
+      "name": "too-long:reason",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "certification": "uncertified",
+        "evidenceRef": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "model.certification.set",
+      "name": "empty:reason",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "",
+        "certification": "uncertified",
+        "evidenceRef": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "model.certification.set",
+      "name": "wrong-type:certification",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "certification": 12345,
+        "evidenceRef": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "model.certification.set",
+      "name": "bad-enum:certification",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "certification": "zzz-not-an-option",
+        "evidenceRef": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "model.certification.set",
+      "name": "wrong-type:evidenceRef",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "certification": "uncertified",
+        "evidenceRef": 12345
+      },
+      "valid": false
+    },
+    {
+      "routeId": "model.certification.set",
+      "name": "too-long:evidenceRef",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "certification": "uncertified",
+        "evidenceRef": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "model.certification.set",
+      "name": "empty:evidenceRef",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "certification": "uncertified",
+        "evidenceRef": ""
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.suspend",
+      "name": "valid-minimal",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "recoveryIntent": "x"
+      },
+      "valid": true
+    },
+    {
+      "routeId": "tenant.suspend",
+      "name": "valid-full",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "recoveryIntent": "x"
+      },
+      "valid": true
+    },
+    {
+      "routeId": "tenant.suspend",
+      "name": "empty-object",
+      "body": {},
+      "valid": false
+    },
+    {
+      "routeId": "tenant.suspend",
+      "name": "missing:idempotencyKey",
+      "body": {
+        "reason": "x",
+        "recoveryIntent": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.suspend",
+      "name": "missing:reason",
+      "body": {
+        "idempotencyKey": "x",
+        "recoveryIntent": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.suspend",
+      "name": "missing:recoveryIntent",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.suspend",
+      "name": "unknown-property:$",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "recoveryIntent": "x",
+        "smuggledField": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.suspend",
+      "name": "wrong-type:idempotencyKey",
+      "body": {
+        "idempotencyKey": 12345,
+        "reason": "x",
+        "recoveryIntent": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.suspend",
+      "name": "too-long:idempotencyKey",
+      "body": {
+        "idempotencyKey": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "reason": "x",
+        "recoveryIntent": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.suspend",
+      "name": "empty:idempotencyKey",
+      "body": {
+        "idempotencyKey": "",
+        "reason": "x",
+        "recoveryIntent": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.suspend",
+      "name": "wrong-type:reason",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": 12345,
+        "recoveryIntent": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.suspend",
+      "name": "too-long:reason",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "recoveryIntent": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.suspend",
+      "name": "empty:reason",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "",
+        "recoveryIntent": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.suspend",
+      "name": "wrong-type:recoveryIntent",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "recoveryIntent": 12345
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.suspend",
+      "name": "too-long:recoveryIntent",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "recoveryIntent": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.suspend",
+      "name": "empty:recoveryIntent",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "recoveryIntent": ""
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.resume",
+      "name": "valid-minimal",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x"
+      },
+      "valid": true
+    },
+    {
+      "routeId": "tenant.resume",
+      "name": "valid-full",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x"
+      },
+      "valid": true
+    },
+    {
+      "routeId": "tenant.resume",
+      "name": "empty-object",
+      "body": {},
+      "valid": false
+    },
+    {
+      "routeId": "tenant.resume",
+      "name": "missing:idempotencyKey",
+      "body": {
+        "reason": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.resume",
+      "name": "missing:reason",
+      "body": {
+        "idempotencyKey": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.resume",
+      "name": "unknown-property:$",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "smuggledField": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.resume",
+      "name": "wrong-type:idempotencyKey",
+      "body": {
+        "idempotencyKey": 12345,
+        "reason": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.resume",
+      "name": "too-long:idempotencyKey",
+      "body": {
+        "idempotencyKey": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "reason": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.resume",
+      "name": "empty:idempotencyKey",
+      "body": {
+        "idempotencyKey": "",
+        "reason": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.resume",
+      "name": "wrong-type:reason",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": 12345
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.resume",
+      "name": "too-long:reason",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.resume",
+      "name": "empty:reason",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": ""
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.credential.revoke",
+      "name": "valid-minimal",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x"
+      },
+      "valid": true
+    },
+    {
+      "routeId": "tenant.credential.revoke",
+      "name": "valid-full",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x"
+      },
+      "valid": true
+    },
+    {
+      "routeId": "tenant.credential.revoke",
+      "name": "empty-object",
+      "body": {},
+      "valid": false
+    },
+    {
+      "routeId": "tenant.credential.revoke",
+      "name": "missing:idempotencyKey",
+      "body": {
+        "reason": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.credential.revoke",
+      "name": "missing:reason",
+      "body": {
+        "idempotencyKey": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.credential.revoke",
+      "name": "unknown-property:$",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "smuggledField": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.credential.revoke",
+      "name": "wrong-type:idempotencyKey",
+      "body": {
+        "idempotencyKey": 12345,
+        "reason": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.credential.revoke",
+      "name": "too-long:idempotencyKey",
+      "body": {
+        "idempotencyKey": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "reason": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.credential.revoke",
+      "name": "empty:idempotencyKey",
+      "body": {
+        "idempotencyKey": "",
+        "reason": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.credential.revoke",
+      "name": "wrong-type:reason",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": 12345
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.credential.revoke",
+      "name": "too-long:reason",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "tenant.credential.revoke",
+      "name": "empty:reason",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": ""
+      },
+      "valid": false
+    },
+    {
+      "routeId": "metering-exception.resolve",
+      "name": "valid-minimal",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x"
+      },
+      "valid": true
+    },
+    {
+      "routeId": "metering-exception.resolve",
+      "name": "valid-full",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x"
+      },
+      "valid": true
+    },
+    {
+      "routeId": "metering-exception.resolve",
+      "name": "empty-object",
+      "body": {},
+      "valid": false
+    },
+    {
+      "routeId": "metering-exception.resolve",
+      "name": "missing:idempotencyKey",
+      "body": {
+        "reason": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "metering-exception.resolve",
+      "name": "missing:reason",
+      "body": {
+        "idempotencyKey": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "metering-exception.resolve",
+      "name": "unknown-property:$",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "smuggledField": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "metering-exception.resolve",
+      "name": "wrong-type:idempotencyKey",
+      "body": {
+        "idempotencyKey": 12345,
+        "reason": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "metering-exception.resolve",
+      "name": "too-long:idempotencyKey",
+      "body": {
+        "idempotencyKey": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "reason": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "metering-exception.resolve",
+      "name": "empty:idempotencyKey",
+      "body": {
+        "idempotencyKey": "",
+        "reason": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "metering-exception.resolve",
+      "name": "wrong-type:reason",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": 12345
+      },
+      "valid": false
+    },
+    {
+      "routeId": "metering-exception.resolve",
+      "name": "too-long:reason",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "metering-exception.resolve",
+      "name": "empty:reason",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": ""
+      },
+      "valid": false
+    },
+    {
+      "routeId": "reconciliation.line.resolve",
+      "name": "valid-minimal",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x"
+      },
+      "valid": true
+    },
+    {
+      "routeId": "reconciliation.line.resolve",
+      "name": "valid-full",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x"
+      },
+      "valid": true
+    },
+    {
+      "routeId": "reconciliation.line.resolve",
+      "name": "empty-object",
+      "body": {},
+      "valid": false
+    },
+    {
+      "routeId": "reconciliation.line.resolve",
+      "name": "missing:idempotencyKey",
+      "body": {
+        "reason": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "reconciliation.line.resolve",
+      "name": "missing:reason",
+      "body": {
+        "idempotencyKey": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "reconciliation.line.resolve",
+      "name": "unknown-property:$",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "smuggledField": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "reconciliation.line.resolve",
+      "name": "wrong-type:idempotencyKey",
+      "body": {
+        "idempotencyKey": 12345,
+        "reason": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "reconciliation.line.resolve",
+      "name": "too-long:idempotencyKey",
+      "body": {
+        "idempotencyKey": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "reason": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "reconciliation.line.resolve",
+      "name": "empty:idempotencyKey",
+      "body": {
+        "idempotencyKey": "",
+        "reason": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "reconciliation.line.resolve",
+      "name": "wrong-type:reason",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": 12345
+      },
+      "valid": false
+    },
+    {
+      "routeId": "reconciliation.line.resolve",
+      "name": "too-long:reason",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "reconciliation.line.resolve",
+      "name": "empty:reason",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": ""
+      },
+      "valid": false
+    }
+  ]
+}
