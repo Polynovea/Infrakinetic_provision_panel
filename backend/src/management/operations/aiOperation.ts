@@ -1,7 +1,5 @@
 import { randomUUID } from "node:crypto";
 
-import type { ManagementSigningKeySet } from "../managementSigningKeys.js";
-import type { ManagementTransportConfig } from "../managementConfig.js";
 import { mintManagementAssertion, ScopeNotGrantedError } from "../managementAssertionIssuer.js";
 import { callInfrakineticManagementApi, isNeverDispatchedNetworkError } from "../managementApiClient.js";
 import type { ManagementOperationLedger, ManagementOperationRecord } from "./managementOperationLedger.js";

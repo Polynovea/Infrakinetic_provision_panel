@@ -32,7 +32,9 @@ const pathParamsFor = (routeId: string) =>
 function sampleFields(routeId: string): Record<string, unknown> {
   const vector = AI_CONTRACT.schemaVectors.find((entry) => entry.routeId === routeId && entry.name === "valid-full");
   if (!vector) return {};
-  const { idempotencyKey: _k, reason: _r, ...fields } = vector.body as Record<string, unknown>;
+  const fields = { ...(vector.body as Record<string, unknown>) };
+  delete fields.idempotencyKey;
+  delete fields.reason;
   return fields;
 }
 
@@ -312,7 +314,7 @@ describe("failure classification and independent observation", () => {
     const original = owner.fetchImpl;
     owner.fetchImpl = (async (input: string | URL, init?: RequestInit) => {
       const response = await original(input, init);
-      if ((init?.method ?? "GET") === "PUT") return { status: 200, json: async () => ({ ...(await response.json()), apiKey: "sk-should-never-be-here" }) } as Response;
+      if ((init?.method ?? "GET") === "PUT") return { status: 200, json: async () => ({ ...((await response.json()) as Record<string, unknown>), apiKey: "sk-should-never-be-here" }) } as Response;
       return response;
     }) as typeof fetch;
     const leaky = { ...deps, fetchImpl: owner.fetchImpl };

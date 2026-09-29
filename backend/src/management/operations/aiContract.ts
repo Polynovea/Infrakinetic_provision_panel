@@ -1,4 +1,4 @@
-import contractJson from "../contracts/aiManagement.contract.json" with { type: "json" };
+import { createRequire } from "node:module";
 
 // Phase 1A.15 final closure — Governance's typed view of the module_ai operator contract.
 //
@@ -72,7 +72,10 @@ export interface AiManagementContract {
   schemaVectors: AiSchemaVector[];
 }
 
-export const AI_CONTRACT = contractJson as unknown as AiManagementContract;
+// Loaded with createRequire (not a JSON import attribute) so the compiled service runs on any supported Node
+// without an experimental-feature dependency; tsconfig includes the JSON so `npm run build` emits it beside this module.
+const nodeRequire = createRequire(import.meta.url);
+export const AI_CONTRACT = nodeRequire("../contracts/aiManagement.contract.json") as AiManagementContract;
 export const AI_CONTRACT_VERSION = AI_CONTRACT.contractVersion;
 
 export class UnknownAiRouteError extends Error {
@@ -211,6 +214,7 @@ export function validateAiBody(route: AiContractRoute, body: unknown): string[] 
  */
 export function requestSchemaWithoutIdempotency(route: AiContractRoute): AiSchema {
   const schema = route.requestSchema as AiSchema;
-  const { idempotencyKey: _dropped, ...properties } = schema.properties ?? {};
+  const properties = { ...(schema.properties ?? {}) };
+  delete properties.idempotencyKey;
   return { ...schema, required: (schema.required ?? []).filter((key) => key !== "idempotencyKey"), properties };
 }

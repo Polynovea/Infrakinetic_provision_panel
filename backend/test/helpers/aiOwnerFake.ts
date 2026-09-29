@@ -1,7 +1,7 @@
 import { generateKeyPairSync } from "node:crypto";
 import { decodeJwt, exportJWK } from "jose";
 
-import examplesJson from "../../src/management/contracts/aiManagement.examples.json" with { type: "json" };
+import { createRequire } from "node:module";
 import { AI_CONTRACT, validateAiBody, type AiContractRoute } from "../../src/management/operations/aiContract.js";
 import type { ManagementSigningKeySet } from "../../src/management/managementSigningKeys.js";
 import type { AiOperationDeps } from "../../src/management/operations/aiOperation.js";
@@ -34,7 +34,7 @@ export async function seedAiOperators(client: DbClient): Promise<void> {
   }
 }
 
-const examples = (examplesJson as { examples: Record<string, Record<string, unknown>> }).examples;
+const examples = (createRequire(import.meta.url)("../../src/management/contracts/aiManagement.examples.json") as { examples: Record<string, Record<string, unknown>> }).examples;
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 
 export interface OwnerCall { method: string; path: string; routeId?: string; body?: Record<string, unknown>; claims: Record<string, unknown> }

@@ -4,7 +4,7 @@ import type { ManagementSigningKeySet } from "../managementSigningKeys.js";
 import type { ManagementTransportConfig } from "../managementConfig.js";
 import { mintManagementAssertion } from "../managementAssertionIssuer.js";
 import { callInfrakineticManagementApi } from "../managementApiClient.js";
-import { MANAGEMENT_V1_PREFIX, UnexpectedManagementApiResponseError } from "./engineStateOperation.js";
+import { UnexpectedManagementApiResponseError } from "./engineStateOperation.js";
 import { UnknownTenantError } from "./tenantRegistryQuery.js";
 import { aiRoute, ownerPath, resolveTarget, type AiTarget } from "./aiContract.js";
 
