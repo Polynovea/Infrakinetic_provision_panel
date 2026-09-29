@@ -16,6 +16,8 @@ export interface AiEnforcementFacts {
   quotaConcurrencySafe: boolean;
   usageAttributionComplete: boolean;
   fingerprintSecretPosture: "configured" | "migration_env_only" | "dev_fallback" | "missing";
+  /** Presence/version posture of the tenant-credential (BYOAI) keyring only — never key material. */
+  byoaiKeyringPosture?: "configured" | "missing" | "dev_fallback" | string;
 }
 
 export function isNotModelled(value: unknown): value is NotModelled {
@@ -50,6 +52,9 @@ export function EnforcementGaps({ facts }: { facts: AiEnforcementFacts }) {
   if (posture === "missing") gaps.push("AI metering secret is not configured — AI provider calls are refused (D15).");
   if (posture === "dev_fallback") gaps.push("AI metering is using the development fingerprint key (non-production host).");
   if (posture === "migration_env_only") gaps.push("Provider key fingerprints use the legacy Migration-named secret — migrate to AI_METERING_FINGERPRINT_SECRET (D15).");
+  const keyring = facts.byoaiKeyringPosture;
+  if (keyring === "missing") gaps.push("The tenant-credential (BYOAI) keyring is not configured on the owner host — tenants cannot submit provider keys and extended-plane calls are refused.");
+  if (keyring === "dev_fallback") gaps.push("The tenant-credential (BYOAI) keyring is using a development fallback (non-production host).");
   if (gaps.length === 0) return null;
   return (
     <div className="card" style={{ marginBottom: "1rem", fontSize: "0.85rem", borderColor: "var(--warning-fg)" }}>
