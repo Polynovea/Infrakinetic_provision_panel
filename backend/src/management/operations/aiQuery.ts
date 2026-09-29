@@ -135,7 +135,8 @@ export interface AiCredentialRef {
   status: "active" | "revoked" | string;
   maskedHint: string | null;
   createdAt: string;
-  revokedAt: string | null;
+  /** Present (and non-null) only once revoked; the owner omits it for an active credential. */
+  revokedAt?: string | null;
 }
 
 export interface AiDelegationAllocation {
