@@ -632,6 +632,11 @@ export async function executeAiApproval(deps: AiApprovalDeps, params: ExecuteAiA
   const approval = await deps.approvals.getApproval(params.approvalId);
   const route = aiRouteByAction(approval.requestedAction);
   if (!route || route.approval !== "maker_checker") throw new AiOperationRefusedError("AI_ROUTE_NOT_APPROVAL_GATED", "This approval is not an AI maker-checker action", 400);
+  // The owner accepts an R3 execution only from a party to the approval (contract: approvalExecutor). Refused here,
+  // before the single-use approval is consumed, so a wrong executor cannot burn an approval the owner would refuse.
+  if (route.approvalExecutor === "maker_or_checker" && ![approval.makerOperatorId, approval.checkerOperatorId].includes(params.operatorId)) {
+    throw new AiOperationRefusedError("AI_EXECUTOR_NOT_PARTY", "Only the operator who requested this approval or the operator who approved it can execute it", 403);
+  }
   const summary = approval.safeRequestSummary;
   if (!summary) throw new AiOperationRefusedError("AI_APPROVAL_SUMMARY_MISSING", "The approval carries no approved safe diff", 409);
   const pathParams: Record<string, string> = route.id === "tenant.resume" ? { tenantId: approval.targetResourceId } : { modelId: approval.targetResourceId };

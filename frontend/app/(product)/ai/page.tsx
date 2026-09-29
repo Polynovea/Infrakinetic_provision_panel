@@ -331,6 +331,7 @@ export default function AiFleetPage() {
               refreshKey={refresh}
               onExecuted={done}
               renderSummary={(a) => <AiApprovalSummary approval={a} />}
+              canExecute={(a) => a.makerOperatorId === operator.operatorId || a.checkerOperatorId === operator.operatorId}
             />
           )}
 

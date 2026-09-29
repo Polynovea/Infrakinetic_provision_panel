@@ -47,6 +47,40 @@ describe("which actions are AI approvals", () => {
   });
 });
 
+describe("who may execute an approval", () => {
+  it("only the maker or the checker: a third party is refused before the owner is read or the approval consumed", async () => {
+    const { deps, owner, approvals } = await setup();
+    suspended(owner);
+    const approval = await requestAiApproval(deps, { ...operator(MAKER), ...RESUME, reason: "r" });
+    await decide(approvals, approval.approvalId);
+    const readsBefore = owner.calls.length;
+    await expect(executeAiApproval(deps, { ...operator(EXECUTOR), approvalId: approval.approvalId, idempotencyKey: "third-1" })).rejects.toMatchObject({ code: "AI_EXECUTOR_NOT_PARTY", httpStatus: 403 });
+    expect(owner.calls.length).toBe(readsBefore);
+    expect((await approvals.getApproval(approval.approvalId)).executedAt).toBeUndefined();
+
+    // The checker may execute what they approved (the owner accepts either party), signed as themselves.
+    const result = await executeAiApproval(deps, { ...operator(CHECKER), approvalId: approval.approvalId, idempotencyKey: "checker-exec" });
+    expect(result.operation.status).toBe("completed");
+    expect(owner.mutations()[0]!.claims).toMatchObject({ operator_id: CHECKER, approval: { approval_id: approval.approvalId, maker_operator_id: MAKER, checker_operator_id: CHECKER } });
+  });
+
+  it("the contract declares the rule for exactly the R3 routes, and the owner fake refuses a non-party the way the real owner does", async () => {
+    for (const route of AI_APPROVAL_ROUTES) expect(route.approvalExecutor, route.id).toBe("maker_or_checker");
+    const { owner } = await setup();
+    // Bypass Governance's own gate: a signed non-party assertion straight at the owner.
+    const { mintManagementAssertion } = await import("../../../src/management/managementAssertionIssuer.js");
+    const { testSigningKeys } = await import("../../helpers/aiOwnerFake.js");
+    const assertion = await mintManagementAssertion(await testSigningKeys(), { issuer: "i", audience: "a" }, {
+      operatorId: EXECUTOR, operatorSessionId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", operatorRoles: ["platform_admin"], operatorGrantedScopes: ["ai.emergency_suspend"], requestedScopes: ["ai.emergency_suspend"],
+      targetTenantId: TENANT, targetResourceType: "tenant", targetResourceId: TENANT, requestedAction: "ai.tenant.emergency.resume",
+      approvalEvidence: { approvalId: "44444444-4444-4444-8444-444444444444", makerOperatorId: MAKER, checkerOperatorId: CHECKER },
+    });
+    const res = await owner.fetchImpl(`https://x.test/management/v1/ai/tenants/${TENANT}/resume`, { method: "POST", headers: { authorization: `Bearer ${assertion}` }, body: JSON.stringify({ idempotencyKey: "k", reason: "r" }) });
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: "APPROVAL_OPERATOR_MISMATCH" });
+  });
+});
+
 describe("tenant resume (R3)", () => {
   it("binds the owner's current suspension into the approval; execution carries the signed checker and the fresh state proves the result", async () => {
     const { deps, owner, approvals, ledger } = await setup();
@@ -60,7 +94,7 @@ describe("tenant resume (R3)", () => {
     expect(owner.mutations()).toHaveLength(0);
 
     await decide(approvals, approval.approvalId);
-    const result = await executeAiApproval(deps, { ...operator(EXECUTOR), approvalId: approval.approvalId, idempotencyKey: "resume-1" });
+    const result = await executeAiApproval(deps, { ...operator(MAKER), approvalId: approval.approvalId, idempotencyKey: "resume-1" });
     expect(result.operation.status).toBe("completed");
     expect(result.operation.riskClass).toBe("R3");
     expect(result.operation.approvalEvidence).toMatchObject({ approvalId: approval.approvalId, checkerOperatorId: CHECKER });
@@ -70,7 +104,7 @@ describe("tenant resume (R3)", () => {
     expect(call).toMatchObject({ method: "POST", path: `/management/v1/ai/tenants/${TENANT}/resume` });
     expect(call!.body).toEqual({ idempotencyKey: "resume-1", reason: "key rotated, customer verified" });
     expect(call!.claims).toMatchObject({
-      operator_id: EXECUTOR, scopes: ["ai.emergency_suspend"], requested_action: "ai.tenant.emergency.resume", target_tenant_id: TENANT,
+      operator_id: MAKER, scopes: ["ai.emergency_suspend"], requested_action: "ai.tenant.emergency.resume", target_tenant_id: TENANT,
       approval: { approval_id: approval.approvalId, maker_operator_id: MAKER, checker_operator_id: CHECKER },
     });
     expect(await ledger.getByIdempotencyKey("resume-1")).toMatchObject({ requestedAction: "ai.tenant.emergency.resume" });
@@ -94,9 +128,9 @@ describe("tenant resume (R3)", () => {
     suspended(owner);
     const approval = await requestAiApproval(deps, { ...operator(MAKER), ...RESUME, reason: "r" });
     const readsBefore = owner.calls.length;
-    await expect(executeAiApproval(deps, { ...operator(EXECUTOR), approvalId: approval.approvalId, idempotencyKey: "e0" })).rejects.toBeInstanceOf(ApprovalNotApprovedError);
+    await expect(executeAiApproval(deps, { ...operator(MAKER), approvalId: approval.approvalId, idempotencyKey: "e0" })).rejects.toBeInstanceOf(ApprovalNotApprovedError);
     await decide(approvals, approval.approvalId, "rejected");
-    await expect(executeAiApproval(deps, { ...operator(EXECUTOR), approvalId: approval.approvalId, idempotencyKey: "e0" })).rejects.toBeInstanceOf(ApprovalNotApprovedError);
+    await expect(executeAiApproval(deps, { ...operator(MAKER), approvalId: approval.approvalId, idempotencyKey: "e0" })).rejects.toBeInstanceOf(ApprovalNotApprovedError);
     expect(owner.calls.length).toBe(readsBefore);
     expect(owner.mutations()).toHaveLength(0);
   });
@@ -106,12 +140,12 @@ describe("tenant resume (R3)", () => {
     suspended(owner);
     const approval = await requestAiApproval(deps, { ...operator(MAKER), ...RESUME, reason: "r" });
     await decide(approvals, approval.approvalId);
-    const first = await executeAiApproval(deps, { ...operator(EXECUTOR), approvalId: approval.approvalId, idempotencyKey: "once-1" });
+    const first = await executeAiApproval(deps, { ...operator(MAKER), approvalId: approval.approvalId, idempotencyKey: "once-1" });
     // The owner state has since changed (the tenant IS resumed now) — a replay must not trip over the freshness gate.
-    const replay = await executeAiApproval(deps, { ...operator(EXECUTOR), approvalId: approval.approvalId, idempotencyKey: "once-1" });
+    const replay = await executeAiApproval(deps, { ...operator(MAKER), approvalId: approval.approvalId, idempotencyKey: "once-1" });
     expect(replay.replay).toBe(true);
     expect(replay.operation.operationId).toBe(first.operation.operationId);
-    await expect(executeAiApproval(deps, { ...operator(EXECUTOR), approvalId: approval.approvalId, idempotencyKey: "once-2" })).rejects.toBeInstanceOf(ApprovalAlreadyExecutedError);
+    await expect(executeAiApproval(deps, { ...operator(MAKER), approvalId: approval.approvalId, idempotencyKey: "once-2" })).rejects.toBeInstanceOf(ApprovalAlreadyExecutedError);
     expect(owner.mutations()).toHaveLength(1);
   });
 
@@ -123,7 +157,7 @@ describe("tenant resume (R3)", () => {
 
     // Someone re-suspended the tenant with a new recovery plan (a different suspension event).
     owner.state.emergency = { ...SUSPENSION, operationId: "00000000-0000-4000-8000-0000000000ff", since: "2026-02-03T00:00:00.000Z" };
-    await expect(executeAiApproval(deps, { ...operator(EXECUTOR), approvalId: approval.approvalId, idempotencyKey: "stale-1" })).rejects.toMatchObject({
+    await expect(executeAiApproval(deps, { ...operator(MAKER), approvalId: approval.approvalId, idempotencyKey: "stale-1" })).rejects.toMatchObject({
       code: "AI_APPROVAL_TARGET_CHANGED", httpStatus: 409,
     });
     expect(owner.mutations()).toHaveLength(0);
@@ -131,11 +165,11 @@ describe("tenant resume (R3)", () => {
 
     // Or already resumed by another path.
     owner.state.emergency = { state: "none", reason: null, recoveryIntent: null, operationId: null, since: null };
-    await expect(executeAiApproval(deps, { ...operator(EXECUTOR), approvalId: approval.approvalId, idempotencyKey: "stale-2" })).rejects.toMatchObject({ code: "AI_APPROVAL_TARGET_CHANGED" });
+    await expect(executeAiApproval(deps, { ...operator(MAKER), approvalId: approval.approvalId, idempotencyKey: "stale-2" })).rejects.toMatchObject({ code: "AI_APPROVAL_TARGET_CHANGED" });
 
     // The facts return to what was approved: the same approval still works, proving it was never consumed.
     suspended(owner);
-    const result = await executeAiApproval(deps, { ...operator(EXECUTOR), approvalId: approval.approvalId, idempotencyKey: "stale-3" });
+    const result = await executeAiApproval(deps, { ...operator(MAKER), approvalId: approval.approvalId, idempotencyKey: "stale-3" });
     expect(result.operation.status).toBe("completed");
   });
 
@@ -145,7 +179,7 @@ describe("tenant resume (R3)", () => {
     const approval = await requestAiApproval(deps, { ...operator(MAKER), ...RESUME, reason: "r" });
     await decide(approvals, approval.approvalId);
     await client.query(`UPDATE governance.management_approvals SET safe_request_summary = $2::jsonb WHERE approval_id = $1`, [approval.approvalId, JSON.stringify({ ...approval.safeRequestSummary, resumesTo: "something-else" })]);
-    await expect(executeAiApproval(deps, { ...operator(EXECUTOR), approvalId: approval.approvalId, idempotencyKey: "t-1" })).rejects.toBeInstanceOf(ApprovalPayloadMismatchError);
+    await expect(executeAiApproval(deps, { ...operator(MAKER), approvalId: approval.approvalId, idempotencyKey: "t-1" })).rejects.toBeInstanceOf(ApprovalPayloadMismatchError);
     expect(owner.mutations()).toHaveLength(0);
   });
 
@@ -168,7 +202,7 @@ describe("model lifecycle (R3)", () => {
     });
 
     await decide(approvals, approval.approvalId);
-    const result = await executeAiApproval(deps, { ...operator(EXECUTOR), approvalId: approval.approvalId, idempotencyKey: "lc-1" });
+    const result = await executeAiApproval(deps, { ...operator(MAKER), approvalId: approval.approvalId, idempotencyKey: "lc-1" });
     expect(result.operation.status).toBe("completed");
     expect((result.operation.result as { observation: { via: string; status: string } }).observation).toMatchObject({ via: "catalog", status: "verified" });
     const call = owner.mutations()[0]!;
@@ -195,7 +229,7 @@ describe("model lifecycle (R3)", () => {
     const approval = await requestAiApproval(deps, { ...operator(MAKER), ...LIFECYCLE, reason: "r" });
     await decide(approvals, approval.approvalId);
     owner.catalog.providers[0].models[0].lifecycle = "deprecated"; // another operator got there first
-    await expect(executeAiApproval(deps, { ...operator(EXECUTOR), approvalId: approval.approvalId, idempotencyKey: "lc-stale" })).rejects.toMatchObject({ code: "AI_APPROVAL_TARGET_CHANGED" });
+    await expect(executeAiApproval(deps, { ...operator(MAKER), approvalId: approval.approvalId, idempotencyKey: "lc-stale" })).rejects.toMatchObject({ code: "AI_APPROVAL_TARGET_CHANGED" });
     expect(owner.mutations()).toHaveLength(0);
     expect((await approvals.getApproval(approval.approvalId)).executedAt).toBeUndefined();
   });
@@ -204,7 +238,7 @@ describe("model lifecycle (R3)", () => {
     const { deps, approvals } = await setup({ applyEffects: false });
     const approval = await requestAiApproval(deps, { ...operator(MAKER), ...LIFECYCLE, reason: "r" });
     await decide(approvals, approval.approvalId);
-    const result = await executeAiApproval(deps, { ...operator(EXECUTOR), approvalId: approval.approvalId, idempotencyKey: "lc-mm" });
+    const result = await executeAiApproval(deps, { ...operator(MAKER), approvalId: approval.approvalId, idempotencyKey: "lc-mm" });
     expect(result.operation.status).toBe("partially_completed");
     expect(result.operation.partialFailureState).toMatchObject({ stage: "effective-mismatch", via: "catalog", expected: "deprecated", observed: "active" });
   });
@@ -217,7 +251,7 @@ describe("model certification (R3)", () => {
     expect(approval.safeRequestSummary).toMatchObject({ modelId: MODEL_ID, certificationAtRequest: "synthetic_certified", requestedCertification: "provider_certified", evidenceRef: "cert-run-2026-10-05" });
 
     await decide(approvals, approval.approvalId);
-    const result = await executeAiApproval(deps, { ...operator(EXECUTOR), approvalId: approval.approvalId, idempotencyKey: "cert-1" });
+    const result = await executeAiApproval(deps, { ...operator(MAKER), approvalId: approval.approvalId, idempotencyKey: "cert-1" });
     expect(result.operation.status).toBe("completed");
     expect(owner.mutations()[0]!.body).toEqual({ certification: "provider_certified", evidenceRef: "cert-run-2026-10-05", idempotencyKey: "cert-1", reason: "certification run passed" });
     expect(owner.catalog.providers[0].models[0]).toMatchObject({ certification: "provider_certified", certificationEvidenceRef: "cert-run-2026-10-05" });
@@ -237,7 +271,7 @@ describe("model certification (R3)", () => {
     const approval = await requestAiApproval(deps, { ...operator(MAKER), ...CERTIFY, reason: "r" });
     await decide(approvals, approval.approvalId);
     owner.catalog.providers[0].models[0].certification = "uncertified";
-    await expect(executeAiApproval(deps, { ...operator(EXECUTOR), approvalId: approval.approvalId, idempotencyKey: "cert-stale" })).rejects.toMatchObject({ code: "AI_APPROVAL_TARGET_CHANGED" });
+    await expect(executeAiApproval(deps, { ...operator(MAKER), approvalId: approval.approvalId, idempotencyKey: "cert-stale" })).rejects.toMatchObject({ code: "AI_APPROVAL_TARGET_CHANGED" });
     expect(owner.mutations()).toHaveLength(0);
   });
 });
@@ -254,6 +288,6 @@ describe("misuse of the approval pair", () => {
       approvalId: "44444444-4444-4444-8444-444444444444", requestedAction: "payment.adapter.approve", targetResourceType: "payment_adapter_release", targetResourceId: "r",
       safePayloadHash: "h", safeRequestSummary: {}, riskClass: "R3", reason: "r", makerOperatorId: MAKER, correlationId: "55555555-5555-4555-8555-555555555555", ttlSeconds: 60,
     });
-    await expect(executeAiApproval(deps, { ...operator(EXECUTOR), approvalId: foreign.approvalId, idempotencyKey: "x" })).rejects.toMatchObject({ code: "AI_ROUTE_NOT_APPROVAL_GATED" });
+    await expect(executeAiApproval(deps, { ...operator(MAKER), approvalId: foreign.approvalId, idempotencyKey: "x" })).rejects.toMatchObject({ code: "AI_ROUTE_NOT_APPROVAL_GATED" });
   });
 });

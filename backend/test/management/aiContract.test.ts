@@ -152,6 +152,8 @@ describe("risk classes, scopes, approvals and step-up are the approved ones", ()
     expect(AI_APPROVAL_ROUTES.map((route) => route.action).sort()).toEqual(AI_CONTRACT.r3Actions.slice().sort());
     for (const route of AI_CONTRACT.routes.filter((r) => r.kind === "mutation")) {
       expect(route.approval === "maker_checker", route.id).toBe(route.risk === "R3");
+      // Only a party to the approval (its maker or checker) may execute: the owner refuses anyone else (APPROVAL_OPERATOR_MISMATCH).
+      expect(route.approvalExecutor, route.id).toBe(route.approval === "maker_checker" ? "maker_or_checker" : undefined);
     }
   });
 

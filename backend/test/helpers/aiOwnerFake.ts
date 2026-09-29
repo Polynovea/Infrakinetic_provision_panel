@@ -154,6 +154,11 @@ export function createFakeOwner(options: FakeOwnerOptions = {}): FakeOwner {
     const violations = validateAiBody(route, body ?? {});
     if (violations.length > 0) return json(400, { error: "INVALID_REQUEST", details: violations });
     if (route.approval === "maker_checker" && !claims.approval) return json(403, { error: "APPROVAL_REQUIRED" });
+    // The real owner (requireMakerChecker): the executing operator must be the maker or the checker of the approval.
+    if (route.approval === "maker_checker") {
+      const approval = claims.approval as { maker_operator_id: string; checker_operator_id: string };
+      if (![approval.maker_operator_id, approval.checker_operator_id].includes(claims.operator_id as string)) return json(403, { error: "APPROVAL_OPERATOR_MISMATCH" });
+    }
     if (route.id === "tenant.commissioning-mode.preview") return json(200, { ...clone(examples.AiCommissioningModePreview), tenantId: params.tenantId, targetMode: body?.mode });
     const forced = options.failMutation?.[route.id];
     if (forced) return json(forced.status, forced.body);

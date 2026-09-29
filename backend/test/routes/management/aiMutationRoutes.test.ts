@@ -192,7 +192,7 @@ describe("fresh step-up", () => {
     expect((await approvals.getApproval(id)).status).toBe("pending");
 
     await (await as("checker", { stepUp: true }))("post", `/approvals/${id}/approve`).send({});
-    const execNoStepUp = await (await as("executor"))("post", `/approvals/${id}/execute`).send({ idempotencyKey: "ex-0" });
+    const execNoStepUp = await (await as("admin"))("post", `/approvals/${id}/execute`).send({ idempotencyKey: "ex-0" });
     expect(execNoStepUp.body.error).toBe("STEP_UP_REQUIRED");
     expect(owner.mutations()).toHaveLength(0);
   });
@@ -264,20 +264,27 @@ describe("R3 maker-checker over HTTP", () => {
     const decided = await (await as("checker", { stepUp: true }))("post", `/approvals/${id}/approve`).send({});
     expect(decided.body.approval).toMatchObject({ status: "approved", checkerOperatorId: CHECKER });
 
-    const executed = await (await as("executor", { stepUp: true }))("post", `/approvals/${id}/execute`).send({ idempotencyKey: "res-1" });
+    // A scoped operator who is neither the maker nor the checker cannot execute it (the owner would refuse; Governance refuses first).
+    const third = await (await as("executor", { stepUp: true }))("post", `/approvals/${id}/execute`).send({ idempotencyKey: "res-third" });
+    expect(third.status).toBe(403);
+    expect(third.body.error).toBe("AI_EXECUTOR_NOT_PARTY");
+    expect(owner.mutations()).toHaveLength(0);
+    expect((await approvals.getApproval(id)).executedAt).toBeUndefined();
+
+    const executed = await (await as("admin", { stepUp: true }))("post", `/approvals/${id}/execute`).send({ idempotencyKey: "res-1" });
     expect(executed.status).toBe(200);
     expect(executed.body.operation).toMatchObject({ status: "completed", riskClass: "R3", requestedAction: "ai.tenant.emergency.resume" });
     expect(executed.body.approval.executedAt).toBeTruthy();
     expect(owner.mutations()).toHaveLength(1);
     expect(owner.mutations()[0]!.claims).toMatchObject({
-      operator_id: EXECUTOR, scopes: ["ai.emergency_suspend"],
+      operator_id: MAKER, scopes: ["ai.emergency_suspend"],
       approval: { approval_id: id, maker_operator_id: MAKER, checker_operator_id: CHECKER },
     });
 
-    const again = await (await as("executor", { stepUp: true }))("post", `/approvals/${id}/execute`).send({ idempotencyKey: "res-2" });
+    const again = await (await as("admin", { stepUp: true }))("post", `/approvals/${id}/execute`).send({ idempotencyKey: "res-2" });
     expect(again.status).toBe(409);
     expect(again.body.error).toBe("APPROVAL_ALREADY_EXECUTED");
-    const replay = await (await as("executor", { stepUp: true }))("post", `/approvals/${id}/execute`).send({ idempotencyKey: "res-1" });
+    const replay = await (await as("admin", { stepUp: true }))("post", `/approvals/${id}/execute`).send({ idempotencyKey: "res-1" });
     expect(replay.body.replay).toBe(true);
     expect(owner.mutations()).toHaveLength(1);
     expect((await approvals.getApproval(id)).status).toBe("approved");
@@ -300,7 +307,7 @@ describe("R3 maker-checker over HTTP", () => {
     await (await as("checker", { stepUp: true }))("post", `/approvals/${id}/approve`).send({});
 
     owner.catalog.providers[0].models[0].lifecycle = "deprecated";
-    const stale = await (await as("executor", { stepUp: true }))("post", `/approvals/${id}/execute`).send({ idempotencyKey: "lc-x" });
+    const stale = await (await as("admin", { stepUp: true }))("post", `/approvals/${id}/execute`).send({ idempotencyKey: "lc-x" });
     expect(stale.status).toBe(409);
     expect(stale.body.error).toBe("AI_APPROVAL_TARGET_CHANGED");
     expect(owner.mutations()).toHaveLength(0);

@@ -45,6 +45,8 @@ export interface AiContractRoute {
   risk: AiRisk;
   riskNarrowing?: AiRisk;
   approval: "none" | "maker_checker";
+  /** Who may execute an approved R3 command: only a party to the approval (its maker or its checker). */
+  approvalExecutor?: "maker_or_checker";
   receipted?: boolean;
   stepUp?: boolean;
   recoveryIntent?: boolean;

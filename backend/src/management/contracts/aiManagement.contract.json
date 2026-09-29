@@ -849,6 +849,7 @@
     },
     {
       "kind": "mutation",
+      "approvalExecutor": "maker_or_checker",
       "id": "model.lifecycle.set",
       "method": "PUT",
       "path": "/ai/models/:modelId/lifecycle",
@@ -897,6 +898,7 @@
     },
     {
       "kind": "mutation",
+      "approvalExecutor": "maker_or_checker",
       "id": "model.certification.set",
       "method": "PUT",
       "path": "/ai/models/:modelId/certification",
@@ -999,6 +1001,7 @@
     },
     {
       "kind": "mutation",
+      "approvalExecutor": "maker_or_checker",
       "id": "tenant.resume",
       "method": "POST",
       "path": "/ai/tenants/:tenantId/resume",
