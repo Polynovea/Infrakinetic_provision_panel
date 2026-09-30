@@ -14,5 +14,5 @@
     "declaration": false,
     "sourceMap": true
   },
-  "include": ["src"]
+  "include": ["src", "src/management/contracts/aiManagement.contract.json"]
 }

@@ -1,0 +1,1638 @@
+{
+  "contractVersion": "ai-management/v1",
+  "examples": {
+    "AiCommandResult.tenant.suspend": {
+      "commandId": "00000000-0000-4000-8000-000000000001",
+      "action": "ai.tenant.emergency.suspend",
+      "tenantId": "00000000-0000-4000-8000-000000000002",
+      "emergencyState": "suspended",
+      "previousState": "none",
+      "policyVersion": 1,
+      "effectiveAt": "2026-01-01T00:00:00.000Z",
+      "replay": false,
+      "commandStatus": "completed",
+      "operatorId": "00000000-0000-4000-8000-000000000003",
+      "approvalId": null,
+      "correlationId": "00000000-0000-4000-8000-000000000004",
+      "executedAt": "2026-01-01T00:00:00.000Z"
+    },
+    "AiCommandResult.tenant.resume": {
+      "commandId": "00000000-0000-4000-8000-000000000005",
+      "action": "ai.tenant.emergency.resume",
+      "tenantId": "00000000-0000-4000-8000-000000000002",
+      "approvalId": "00000000-0000-4000-8000-000000000006",
+      "emergencyState": "none",
+      "previousState": "suspended",
+      "policyVersion": 2,
+      "effectiveAt": "2026-01-01T00:00:00.000Z",
+      "replay": false,
+      "commandStatus": "completed",
+      "operatorId": "00000000-0000-4000-8000-000000000003",
+      "correlationId": "00000000-0000-4000-8000-000000000007",
+      "executedAt": "2026-01-01T00:00:00.000Z"
+    },
+    "AiCommandResult.tenant.planes.set": {
+      "commandId": "00000000-0000-4000-8000-000000000008",
+      "action": "ai.tenant.planes.set",
+      "tenantId": "00000000-0000-4000-8000-000000000002",
+      "target": {
+        "type": "tenant",
+        "id": "00000000-0000-4000-8000-000000000002"
+      },
+      "allowedPlanes": [
+        "embedded_managed",
+        "extended"
+      ],
+      "previousPlanes": [
+        "embedded_managed"
+      ],
+      "changed": true,
+      "policyVersion": 3,
+      "replay": false,
+      "commandStatus": "completed",
+      "operatorId": "00000000-0000-4000-8000-000000000003",
+      "approvalId": null,
+      "correlationId": "00000000-0000-4000-8000-000000000009",
+      "executedAt": "2026-01-01T00:00:00.000Z"
+    },
+    "AiCommissioningModePreview": {
+      "tenantId": "00000000-0000-4000-8000-000000000002",
+      "dryRun": true,
+      "currentMode": "legacy_additive",
+      "targetMode": "explicit",
+      "changes": [
+        {
+          "capabilityKey": "finance.vendor_bill_ocr",
+          "plane": "embedded_managed",
+          "before": {
+            "effective": true
+          },
+          "after": {
+            "effective": false,
+            "mismatchReason": "capability_not_commissioned"
+          }
+        },
+        {
+          "capabilityKey": "marketing.seo_fix_draft",
+          "plane": "embedded_managed",
+          "before": {
+            "effective": true
+          },
+          "after": {
+            "effective": false,
+            "mismatchReason": "capability_not_commissioned"
+          }
+        }
+      ],
+      "losing": 2,
+      "gaining": 0,
+      "diffHash": "7df3c965a4ab17e28f8292c02d30dcdb8d0c308c2b3b5ca2ca32c6bfadedb765",
+      "operatorId": "00000000-0000-4000-8000-000000000003",
+      "approvalId": null,
+      "correlationId": "00000000-0000-4000-8000-000000000010",
+      "executedAt": "2026-01-01T00:00:00.000Z"
+    },
+    "AiCommandResult.tenant.capability.commission": {
+      "commandId": "00000000-0000-4000-8000-000000000011",
+      "action": "ai.tenant.capability.commission",
+      "tenantId": "00000000-0000-4000-8000-000000000002",
+      "target": {
+        "type": "ai_capability",
+        "id": "marketing.seo_fix_draft"
+      },
+      "capabilityKey": "marketing.seo_fix_draft",
+      "plane": "embedded_managed",
+      "state": "commissioned",
+      "previousState": "none",
+      "changed": true,
+      "enforcedNow": false,
+      "commissioningMode": "legacy_additive",
+      "replay": false,
+      "commandStatus": "completed",
+      "operatorId": "00000000-0000-4000-8000-000000000003",
+      "approvalId": null,
+      "correlationId": "00000000-0000-4000-8000-000000000012",
+      "executedAt": "2026-01-01T00:00:00.000Z"
+    },
+    "AiCommandResult.tenant.commissioning-mode.set": {
+      "commandId": "00000000-0000-4000-8000-000000000013",
+      "action": "ai.tenant.commissioning-mode.set",
+      "tenantId": "00000000-0000-4000-8000-000000000002",
+      "target": {
+        "type": "tenant",
+        "id": "00000000-0000-4000-8000-000000000002"
+      },
+      "commissioningMode": "explicit",
+      "previousMode": "legacy_additive",
+      "changed": true,
+      "policyVersion": 4,
+      "diffHash": "a8bb30bc1bd3e442337b271e0eb21eaca69d330ad06343917c734df9ff95a86e",
+      "capabilitiesLosingAccess": 0,
+      "capabilitiesGainingAccess": 0,
+      "replay": false,
+      "commandStatus": "completed",
+      "operatorId": "00000000-0000-4000-8000-000000000003",
+      "approvalId": null,
+      "correlationId": "00000000-0000-4000-8000-000000000014",
+      "executedAt": "2026-01-01T00:00:00.000Z"
+    },
+    "AiCommandResult.tenant.quota.set": {
+      "commandId": "00000000-0000-4000-8000-000000000015",
+      "action": "ai.tenant.quota.set",
+      "tenantId": "00000000-0000-4000-8000-000000000002",
+      "target": {
+        "type": "ai_quota_policy",
+        "id": "tenant:*:*:daily:requests:*"
+      },
+      "policyId": "00000000-0000-4000-8000-000000000016",
+      "policyKey": "tenant:*:*:daily:requests:*",
+      "created": true,
+      "changed": true,
+      "previous": null,
+      "current": {
+        "hard": 1,
+        "softLimit": null,
+        "warningPct": null,
+        "enabled": true
+      },
+      "replay": false,
+      "commandStatus": "completed",
+      "operatorId": "00000000-0000-4000-8000-000000000003",
+      "approvalId": null,
+      "correlationId": "00000000-0000-4000-8000-000000000017",
+      "executedAt": "2026-01-01T00:00:00.000Z"
+    },
+    "AiCommandResult.tenant.quota.remove": {
+      "commandId": "00000000-0000-4000-8000-000000000018",
+      "action": "ai.tenant.quota.remove",
+      "tenantId": "00000000-0000-4000-8000-000000000002",
+      "target": {
+        "type": "ai_quota_policy",
+        "id": "tenant:*:*:daily:requests:*"
+      },
+      "policyKey": "tenant:*:*:daily:requests:*",
+      "removed": {
+        "policyId": "00000000-0000-4000-8000-000000000016",
+        "scope": {
+          "type": "tenant",
+          "key": null,
+          "plane": null
+        },
+        "period": "daily",
+        "limitType": "requests",
+        "usageUnit": null,
+        "hard": 1,
+        "softLimit": null,
+        "warningPct": null,
+        "enabled": true,
+        "graceWasActive": false
+      },
+      "replay": false,
+      "commandStatus": "completed",
+      "operatorId": "00000000-0000-4000-8000-000000000003",
+      "approvalId": null,
+      "correlationId": "00000000-0000-4000-8000-000000000019",
+      "executedAt": "2026-01-01T00:00:00.000Z"
+    },
+    "AiCommandResult.tenant.quota.grace.grant": {
+      "commandId": "00000000-0000-4000-8000-000000000020",
+      "action": "ai.tenant.quota.grace.grant",
+      "tenantId": "00000000-0000-4000-8000-000000000002",
+      "target": {
+        "type": "ai_quota_policy",
+        "id": "tenant:*:*:monthly:requests:*"
+      },
+      "policyKey": "tenant:*:*:monthly:requests:*",
+      "policyId": "00000000-0000-4000-8000-000000000021",
+      "graceLimit": 10,
+      "windowStart": "2026-01-01T00:00:00.000Z",
+      "expiresAt": "2026-01-01T00:00:00.000Z",
+      "replay": false,
+      "commandStatus": "completed",
+      "operatorId": "00000000-0000-4000-8000-000000000003",
+      "approvalId": null,
+      "correlationId": "00000000-0000-4000-8000-000000000022",
+      "executedAt": "2026-01-01T00:00:00.000Z"
+    },
+    "AiCommandResult.tenant.billing-anchor.set": {
+      "commandId": "00000000-0000-4000-8000-000000000023",
+      "action": "ai.tenant.billing-anchor.set",
+      "tenantId": "00000000-0000-4000-8000-000000000002",
+      "target": {
+        "type": "tenant",
+        "id": "00000000-0000-4000-8000-000000000002"
+      },
+      "billingAnchorDay": 15,
+      "previousBillingAnchorDay": 1,
+      "changed": true,
+      "policyVersion": 5,
+      "replay": false,
+      "commandStatus": "completed",
+      "operatorId": "00000000-0000-4000-8000-000000000003",
+      "approvalId": null,
+      "correlationId": "00000000-0000-4000-8000-000000000024",
+      "executedAt": "2026-01-01T00:00:00.000Z"
+    },
+    "AiCommandResult.tenant.model-policy.set": {
+      "commandId": "00000000-0000-4000-8000-000000000025",
+      "action": "ai.tenant.model-policy.set",
+      "tenantId": "00000000-0000-4000-8000-000000000002",
+      "target": {
+        "type": "ai_model_policy",
+        "id": "nvidia_nim/*"
+      },
+      "providerKey": "nvidia_nim",
+      "modelKey": null,
+      "decision": "deny",
+      "previousDecision": "none",
+      "changed": true,
+      "globallyUsable": true,
+      "replay": false,
+      "commandStatus": "completed",
+      "operatorId": "00000000-0000-4000-8000-000000000003",
+      "approvalId": null,
+      "correlationId": "00000000-0000-4000-8000-000000000026",
+      "executedAt": "2026-01-01T00:00:00.000Z"
+    },
+    "AiCommandResult.provider.state.set": {
+      "commandId": "00000000-0000-4000-8000-000000000027",
+      "action": "ai.provider.state.set",
+      "target": {
+        "type": "ai_provider",
+        "id": "nvidia_ocr"
+      },
+      "providerKey": "nvidia_ocr",
+      "status": "disabled",
+      "previousStatus": "active",
+      "changed": true,
+      "riskClass": "R4",
+      "recoveryIntent": "vendor outage",
+      "legacyLibrarySynced": false,
+      "legacyLibraryEnabled": null,
+      "replay": false,
+      "commandStatus": "completed",
+      "operatorId": "00000000-0000-4000-8000-000000000003",
+      "approvalId": null,
+      "correlationId": "00000000-0000-4000-8000-000000000028",
+      "executedAt": "2026-01-01T00:00:00.000Z"
+    },
+    "AiCommandResult.model.lifecycle.set": {
+      "commandId": "00000000-0000-4000-8000-000000000029",
+      "action": "ai.model.lifecycle.set",
+      "target": {
+        "type": "ai_model",
+        "id": "00000000-0000-4000-8000-000000000030"
+      },
+      "approvalId": "00000000-0000-4000-8000-000000000006",
+      "modelId": "00000000-0000-4000-8000-000000000030",
+      "providerKey": "nvidia_nim",
+      "modelKey": "chat_default",
+      "lifecycle": "deprecated",
+      "previousLifecycle": "active",
+      "changed": true,
+      "capabilitiesLosingDefaultModel": [
+        "marketing.seo_fix_draft"
+      ],
+      "replay": false,
+      "commandStatus": "completed",
+      "operatorId": "00000000-0000-4000-8000-000000000003",
+      "correlationId": "00000000-0000-4000-8000-000000000031",
+      "executedAt": "2026-01-01T00:00:00.000Z"
+    },
+    "AiCommandResult.model.certification.set": {
+      "commandId": "00000000-0000-4000-8000-000000000032",
+      "action": "ai.model.certification.set",
+      "target": {
+        "type": "ai_model",
+        "id": "00000000-0000-4000-8000-000000000030"
+      },
+      "approvalId": "00000000-0000-4000-8000-000000000006",
+      "modelId": "00000000-0000-4000-8000-000000000030",
+      "providerKey": "nvidia_nim",
+      "modelKey": "chat_default",
+      "certification": "synthetic_certified",
+      "previousCertification": "uncertified",
+      "changed": true,
+      "evidenceRef": "cert-run-2026-10-03",
+      "replay": false,
+      "commandStatus": "completed",
+      "operatorId": "00000000-0000-4000-8000-000000000003",
+      "correlationId": "00000000-0000-4000-8000-000000000033",
+      "executedAt": "2026-01-01T00:00:00.000Z"
+    },
+    "AiCommandResult.tenant.credential.revoke": {
+      "commandId": "00000000-0000-4000-8000-000000000034",
+      "action": "ai.credential.revoke",
+      "tenantId": "00000000-0000-4000-8000-000000000002",
+      "target": {
+        "type": "ai_credential",
+        "id": "aicred_00000000-0000-4000-8000-000000000035"
+      },
+      "credential": {
+        "refId": "aicred_00000000-0000-4000-8000-000000000035",
+        "providerKey": "nvidia_nim_byo",
+        "version": 1,
+        "status": "revoked",
+        "maskedHint": "…cdef",
+        "createdAt": "2026-01-01T00:00:00.000Z",
+        "revokedAt": "2026-01-01T00:00:00.000Z"
+      },
+      "alreadyRevoked": false,
+      "changed": true,
+      "replay": false,
+      "commandStatus": "completed",
+      "operatorId": "00000000-0000-4000-8000-000000000003",
+      "approvalId": null,
+      "correlationId": "00000000-0000-4000-8000-000000000036",
+      "executedAt": "2026-01-01T00:00:00.000Z"
+    },
+    "AiCredentialMetadata": {
+      "tenantId": "00000000-0000-4000-8000-000000000002",
+      "credentials": [
+        {
+          "refId": "aicred_00000000-0000-4000-8000-000000000035",
+          "providerKey": "nvidia_nim_byo",
+          "version": 1,
+          "status": "revoked",
+          "maskedHint": "…cdef",
+          "createdAt": "2026-01-01T00:00:00.000Z",
+          "revokedAt": "2026-01-01T00:00:00.000Z"
+        }
+      ],
+      "observedAt": "2026-01-01T00:00:00.000Z",
+      "source": "infrakinetic-live",
+      "freshness": "live",
+      "correlationId": "00000000-0000-4000-8000-000000000037"
+    },
+    "AiMeteringExceptions": {
+      "state": "open",
+      "exceptions": [
+        {
+          "exceptionId": "00000000-0000-4000-8000-000000000038",
+          "tenantId": "00000000-0000-4000-8000-000000000002",
+          "logicalRequestId": "00000000-0000-4000-8000-000000000039",
+          "type": "usage_without_evidence",
+          "capabilityKey": "marketing.seo_fix_draft",
+          "providerKey": "nvidia_nim",
+          "plane": "embedded_managed",
+          "observedAttempts": 1,
+          "expectedAttempts": null,
+          "firstObservedAt": "2026-01-01T00:00:00.000Z",
+          "lastObservedAt": "2026-01-01T00:00:00.000Z",
+          "resolvedAt": null,
+          "resolutionNote": null
+        }
+      ],
+      "observedAt": "2026-01-01T00:00:00.000Z",
+      "source": "infrakinetic-live",
+      "freshness": "live",
+      "correlationId": "00000000-0000-4000-8000-000000000040"
+    },
+    "AiCommandResult.metering-exception.resolve": {
+      "commandId": "00000000-0000-4000-8000-000000000041",
+      "action": "ai.metering-exception.resolve",
+      "tenantId": "00000000-0000-4000-8000-000000000002",
+      "target": {
+        "type": "ai_metering_exception",
+        "id": "00000000-0000-4000-8000-000000000038"
+      },
+      "exceptionId": "00000000-0000-4000-8000-000000000038",
+      "exceptionType": "usage_without_evidence",
+      "capabilityKey": "marketing.seo_fix_draft",
+      "providerKey": "nvidia_nim",
+      "changed": true,
+      "alreadyResolvedByOperator": false,
+      "wasOpen": true,
+      "replay": false,
+      "commandStatus": "completed",
+      "operatorId": "00000000-0000-4000-8000-000000000003",
+      "approvalId": null,
+      "correlationId": "00000000-0000-4000-8000-000000000042",
+      "executedAt": "2026-01-01T00:00:00.000Z"
+    },
+    "AiReconciliation": {
+      "contractVersion": "ai-reconciliation/v1",
+      "statements": [
+        {
+          "statementId": "00000000-0000-4000-8000-000000000043",
+          "providerKey": "nvidia_nim",
+          "sourceKind": "synthetic_certification",
+          "sourceSha256": "6605c4a6b2905614e695bc8cdb1272bdef7023e2117362432e99abde27d8773b",
+          "sourceLabel": null,
+          "currency": "USD",
+          "periodStart": "2026-09-01",
+          "periodEnd": "2026-09-30",
+          "status": "active",
+          "supersedes": null,
+          "supersededBy": null,
+          "lineCount": 1,
+          "totalAmount": 12,
+          "importedBy": "test-suite",
+          "importedAt": "2026-01-01T00:00:00.000Z"
+        }
+      ],
+      "lines": [
+        {
+          "reconciliationId": "00000000-0000-4000-8000-000000000044",
+          "statementId": "00000000-0000-4000-8000-000000000043",
+          "sourceKind": "synthetic_certification",
+          "grainKey": "nvidia_nim|nvidia/nemotron-3-ultra-550b-a55b|managed_fingerprint:a1a1a1a1a1a1a1a1a1a1a1a1|2026-09-28|USD",
+          "providerKey": "nvidia_nim",
+          "modelKey": "chat_default",
+          "credentialKind": "managed_fingerprint",
+          "credentialIdentity": "a1a1a1a1a1a1a1a1a1a1a1a1",
+          "serviceDay": "2026-09-28",
+          "currency": "USD",
+          "outcome": "credential_mismatch",
+          "estimatedAmount": null,
+          "actualAmount": 12,
+          "variance": null,
+          "estimatedUnits": null,
+          "actualUnits": null,
+          "usageRequests": 0,
+          "tenantId": null,
+          "poolLevel": true,
+          "reason": "the key fingerprint has never been used for this provider",
+          "resolutionState": "open",
+          "resolutionNote": null,
+          "resolvedAt": null,
+          "reconciledAt": "2026-01-01T00:00:00.000Z"
+        }
+      ],
+      "observedAt": "2026-01-01T00:00:00.000Z",
+      "source": "infrakinetic-live",
+      "freshness": "live",
+      "correlationId": "00000000-0000-4000-8000-000000000045"
+    },
+    "AiCommandResult.reconciliation.line.resolve": {
+      "commandId": "00000000-0000-4000-8000-000000000046",
+      "action": "ai.reconciliation.resolve",
+      "target": {
+        "type": "ai_reconciliation_line",
+        "id": "00000000-0000-4000-8000-000000000044"
+      },
+      "reconciliationId": "00000000-0000-4000-8000-000000000044",
+      "outcome": "credential_mismatch",
+      "resolutionState": "resolved",
+      "alreadyResolved": false,
+      "changed": true,
+      "replay": false,
+      "commandStatus": "completed",
+      "operatorId": "00000000-0000-4000-8000-000000000003",
+      "approvalId": null,
+      "correlationId": "00000000-0000-4000-8000-000000000047",
+      "executedAt": "2026-01-01T00:00:00.000Z"
+    },
+    "AiAdminCommandReceipt": {
+      "command": {
+        "idempotencyKey": "route-key-46",
+        "commandId": "00000000-0000-4000-8000-000000000041",
+        "action": "ai.metering-exception.resolve",
+        "tenantId": "00000000-0000-4000-8000-000000000002",
+        "target": {
+          "type": "ai_metering_exception",
+          "id": "00000000-0000-4000-8000-000000000038"
+        },
+        "reason": "route test",
+        "operatorId": "00000000-0000-4000-8000-000000000003",
+        "approval": null,
+        "status": "completed",
+        "result": {
+          "action": "ai.metering-exception.resolve",
+          "target": {
+            "id": "00000000-0000-4000-8000-000000000038",
+            "type": "ai_metering_exception"
+          },
+          "changed": true,
+          "wasOpen": true,
+          "tenantId": "00000000-0000-4000-8000-000000000002",
+          "commandId": "00000000-0000-4000-8000-000000000041",
+          "exceptionId": "00000000-0000-4000-8000-000000000038",
+          "providerKey": "nvidia_nim",
+          "capabilityKey": "marketing.seo_fix_draft",
+          "exceptionType": "usage_without_evidence",
+          "alreadyResolvedByOperator": false
+        },
+        "createdAt": "2026-01-01T00:00:00.000Z",
+        "completedAt": "2026-01-01T00:00:00.000Z"
+      },
+      "observedAt": "2026-01-01T00:00:00.000Z",
+      "source": "infrakinetic-live",
+      "freshness": "live",
+      "correlationId": "00000000-0000-4000-8000-000000000048"
+    },
+    "TenantAiState": {
+      "contractVersion": "ai-state/v1",
+      "tenantId": "00000000-0000-4000-8000-000000000002",
+      "moduleAi": {
+        "entitled": true,
+        "explicitRow": true,
+        "source": "tenant_features",
+        "writer": "management/v1 tenant engine entitlement (1A.9)",
+        "platformEngineState": "operational"
+      },
+      "rootPolicy": {
+        "source": "root_policy",
+        "policyVersion": 5,
+        "allowedPlanes": [
+          "embedded_managed",
+          "extended"
+        ],
+        "commissioningMode": "explicit",
+        "billingAnchorDay": 15
+      },
+      "emergency": {
+        "state": "none",
+        "reason": null,
+        "recoveryIntent": null,
+        "operationId": "00000000-0000-4000-8000-000000000005",
+        "since": "2026-01-01T00:00:00.000Z"
+      },
+      "planes": [
+        {
+          "plane": "embedded_managed",
+          "desired": {
+            "allowed": true,
+            "source": "root_policy"
+          },
+          "effective": true
+        },
+        {
+          "plane": "extended",
+          "desired": {
+            "allowed": true,
+            "source": "root_policy"
+          },
+          "effective": false,
+          "mismatchReason": "no_effective_capability"
+        }
+      ],
+      "capabilities": [
+        {
+          "capabilityKey": "finance.vendor_bill_ocr",
+          "ownerEngine": "module_finance",
+          "plane": "embedded_managed",
+          "commissioning": {
+            "mode": "explicit",
+            "commissioned": true
+          },
+          "featureFlag": {
+            "key": "feature_ai_vendor_bill_ocr",
+            "explicitRow": false,
+            "enabled": true
+          },
+          "providerKey": "nvidia_ocr",
+          "modelKey": "invoice_ocr",
+          "effective": true
+        },
+        {
+          "capabilityKey": "marketing.seo_fix_draft",
+          "ownerEngine": "module_marketing",
+          "plane": "embedded_managed",
+          "commissioning": {
+            "mode": "explicit",
+            "commissioned": true
+          },
+          "featureFlag": {
+            "key": "feature_ai_seo_draft",
+            "explicitRow": false,
+            "enabled": true
+          },
+          "providerKey": "nvidia_nim",
+          "modelKey": "chat_default",
+          "effective": true
+        },
+        {
+          "capabilityKey": "platform.ai_extended_probe",
+          "ownerEngine": "module_ai",
+          "plane": "extended",
+          "commissioning": {
+            "mode": "explicit",
+            "commissioned": true
+          },
+          "featureFlag": {
+            "key": "feature_ai_extended_probe",
+            "explicitRow": false,
+            "enabled": true
+          },
+          "providerKey": "nvidia_nim_byo",
+          "modelKey": "chat_default",
+          "effective": false,
+          "mismatchReason": "no_active_credential"
+        }
+      ],
+      "providersModels": [
+        {
+          "providerKey": "nvidia_nim",
+          "displayName": "NVIDIA NIM (Free Tier)",
+          "status": "active",
+          "egressClass": "external_api",
+          "credentialSource": "env",
+          "governedVia": "ai_engine_adapter",
+          "plane": "embedded_managed",
+          "adapterRegistered": true,
+          "enforcement": {
+            "executor": "ai_execution_service",
+            "statusEnforced": "active_only",
+            "moduleAiGated": true
+          },
+          "regionClass": "global_unspecified",
+          "endpointClass": "public_saas",
+          "models": [
+            {
+              "modelId": "00000000-0000-4000-8000-000000000030",
+              "modelKey": "chat_default",
+              "providerModelIdentifier": "nvidia/nemotron-3-ultra-550b-a55b",
+              "version": null,
+              "modality": "text",
+              "capabilityClasses": [
+                "chat",
+                "reasoning"
+              ],
+              "contextTokensLimit": null,
+              "outputTokensLimit": null,
+              "lifecycle": "active",
+              "certification": "synthetic_certified",
+              "lifecycleChangedAt": "2026-01-01T00:00:00.000Z",
+              "certificationChangedAt": "2026-01-01T00:00:00.000Z",
+              "certificationEvidenceRef": "cert-run-2026-10-03",
+              "pricingVersion": {
+                "id": "00000000-0000-4000-8000-000000000049",
+                "effectiveFrom": "2026-01-01T00:00:00.000Z",
+                "currency": "USD"
+              }
+            },
+            {
+              "modelId": "00000000-0000-4000-8000-000000000050",
+              "modelKey": "chat_reasoning",
+              "providerModelIdentifier": "moonshotai/kimi-k3",
+              "version": null,
+              "modality": "text",
+              "capabilityClasses": [
+                "chat",
+                "reasoning"
+              ],
+              "contextTokensLimit": null,
+              "outputTokensLimit": null,
+              "lifecycle": "active",
+              "certification": "uncertified",
+              "lifecycleChangedAt": null,
+              "certificationChangedAt": null,
+              "certificationEvidenceRef": null,
+              "pricingVersion": {
+                "id": "00000000-0000-4000-8000-000000000051",
+                "effectiveFrom": "2026-01-01T00:00:00.000Z",
+                "currency": "USD"
+              }
+            }
+          ]
+        },
+        {
+          "providerKey": "nvidia_nim_byo",
+          "displayName": "NVIDIA NIM (tenant-supplied key)",
+          "status": "active",
+          "egressClass": "external_api",
+          "credentialSource": "tenant_reference",
+          "governedVia": "ai_engine_adapter",
+          "plane": "extended",
+          "adapterRegistered": true,
+          "enforcement": {
+            "executor": "ai_execution_service",
+            "statusEnforced": "active_only",
+            "moduleAiGated": true
+          },
+          "regionClass": "global_unspecified",
+          "endpointClass": "public_saas",
+          "models": [
+            {
+              "modelId": "00000000-0000-4000-8000-000000000052",
+              "modelKey": "chat_default",
+              "providerModelIdentifier": "nvidia/nemotron-3-ultra-550b-a55b",
+              "version": null,
+              "modality": "text",
+              "capabilityClasses": [
+                "chat"
+              ],
+              "contextTokensLimit": null,
+              "outputTokensLimit": null,
+              "lifecycle": "active",
+              "certification": "uncertified",
+              "lifecycleChangedAt": null,
+              "certificationChangedAt": null,
+              "certificationEvidenceRef": null,
+              "pricingVersion": {
+                "id": "00000000-0000-4000-8000-000000000053",
+                "effectiveFrom": "2026-01-01T00:00:00.000Z",
+                "currency": "USD"
+              }
+            }
+          ]
+        },
+        {
+          "providerKey": "nvidia_ocr",
+          "displayName": "NVIDIA Nemotron OCR",
+          "status": "active",
+          "egressClass": "external_api",
+          "credentialSource": "env",
+          "governedVia": "ai_engine_adapter",
+          "plane": "embedded_managed",
+          "adapterRegistered": true,
+          "enforcement": {
+            "executor": "ai_execution_service",
+            "statusEnforced": "active_only",
+            "moduleAiGated": true
+          },
+          "regionClass": "global_unspecified",
+          "endpointClass": "public_saas",
+          "models": [
+            {
+              "modelId": "00000000-0000-4000-8000-000000000054",
+              "modelKey": "invoice_ocr",
+              "providerModelIdentifier": "nvidia/nemotron-ocr-v2",
+              "version": null,
+              "modality": "vision",
+              "capabilityClasses": [
+                "ocr"
+              ],
+              "contextTokensLimit": null,
+              "outputTokensLimit": null,
+              "lifecycle": "active",
+              "certification": "uncertified",
+              "lifecycleChangedAt": null,
+              "certificationChangedAt": null,
+              "certificationEvidenceRef": null,
+              "pricingVersion": {
+                "id": "00000000-0000-4000-8000-000000000055",
+                "effectiveFrom": "2026-01-01T00:00:00.000Z",
+                "currency": "USD"
+              }
+            }
+          ]
+        }
+      ],
+      "credentialRefs": [
+        {
+          "refId": "aicred_00000000-0000-4000-8000-000000000035",
+          "providerKey": "nvidia_nim_byo",
+          "version": 1,
+          "status": "revoked",
+          "maskedHint": "…cdef",
+          "createdAt": "2026-01-01T00:00:00.000Z",
+          "revokedAt": "2026-01-01T00:00:00.000Z"
+        }
+      ],
+      "delegation": {
+        "tenantId": "00000000-0000-4000-8000-000000000002",
+        "allocations": [
+          {
+            "allocationId": "00000000-0000-4000-8000-000000000056",
+            "scope": {
+              "type": "tenant",
+              "key": null,
+              "plane": null
+            },
+            "period": "daily",
+            "limitType": "requests",
+            "usageUnit": null,
+            "allocated": 100,
+            "rootCeiling": 100,
+            "effective": 100,
+            "status": "active",
+            "createdAt": "2026-01-01T00:00:00.000Z"
+          }
+        ]
+      },
+      "quotas": [
+        {
+          "policyId": "00000000-0000-4000-8000-000000000057",
+          "policyKey": "tenant:*:*:daily:requests:*",
+          "origin": "root",
+          "scope": {
+            "type": "tenant",
+            "key": null,
+            "plane": null
+          },
+          "period": "daily",
+          "window": {
+            "start": "2026-01-01T00:00:00.000Z",
+            "end": "2026-01-01T00:00:00.000Z"
+          },
+          "limitType": "requests",
+          "hard": 500,
+          "warningPct": null,
+          "softLimit": null,
+          "overage": {
+            "mode": "none",
+            "graceActiveForWindow": false,
+            "graceLimit": null,
+            "graceExpiresAt": null
+          },
+          "enabled": true,
+          "used": 7,
+          "state": "normal",
+          "recordedState": null
+        },
+        {
+          "policyId": "00000000-0000-4000-8000-000000000021",
+          "policyKey": "tenant:*:*:monthly:requests:*",
+          "origin": "root",
+          "scope": {
+            "type": "tenant",
+            "key": null,
+            "plane": null
+          },
+          "period": "monthly",
+          "window": {
+            "start": "2026-01-01T00:00:00.000Z",
+            "end": "2026-01-01T00:00:00.000Z"
+          },
+          "limitType": "requests",
+          "hard": 100,
+          "warningPct": null,
+          "softLimit": null,
+          "overage": {
+            "mode": "grace",
+            "graceActiveForWindow": true,
+            "graceLimit": 10,
+            "graceExpiresAt": "2026-01-01T00:00:00.000Z"
+          },
+          "enabled": true,
+          "used": 7,
+          "state": "normal",
+          "recordedState": {
+            "state": "normal",
+            "updatedAt": "2026-01-01T00:00:00.000Z"
+          }
+        }
+      ],
+      "usage": {
+        "commercial": {
+          "day": {
+            "since": "2026-01-01T00:00:00.000Z",
+            "inputTokens": 510,
+            "outputTokens": 102,
+            "totalTokens": 612,
+            "estimatedCost": 0,
+            "currency": "USD"
+          },
+          "week": {
+            "since": "2026-01-01T00:00:00.000Z",
+            "inputTokens": 510,
+            "outputTokens": 102,
+            "totalTokens": 612,
+            "estimatedCost": 0,
+            "currency": "USD"
+          },
+          "month": {
+            "since": "2026-01-01T00:00:00.000Z",
+            "inputTokens": 510,
+            "outputTokens": 102,
+            "totalTokens": 612,
+            "estimatedCost": 0,
+            "currency": "USD"
+          },
+          "billingPeriod": {
+            "since": "2026-01-01T00:00:00.000Z",
+            "inputTokens": 510,
+            "outputTokens": 102,
+            "totalTokens": 612,
+            "estimatedCost": 0,
+            "currency": "USD"
+          },
+          "lifetime": {
+            "since": "2026-01-01T00:00:00.000Z",
+            "inputTokens": 510,
+            "outputTokens": 102,
+            "totalTokens": 612,
+            "estimatedCost": 0,
+            "currency": "USD"
+          }
+        },
+        "byEngine": [
+          {
+            "engine_key": "module_ai",
+            "request_count": 1,
+            "input_tokens": 100,
+            "output_tokens": 20,
+            "reasoning_tokens": 0,
+            "total_tokens": 120,
+            "estimated_cost": 0
+          },
+          {
+            "engine_key": "module_finance",
+            "request_count": 1,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "reasoning_tokens": 0,
+            "total_tokens": 0,
+            "estimated_cost": 0
+          },
+          {
+            "engine_key": "module_marketing",
+            "request_count": 5,
+            "input_tokens": 410,
+            "output_tokens": 82,
+            "reasoning_tokens": 0,
+            "total_tokens": 492,
+            "estimated_cost": 0
+          }
+        ],
+        "byCapability": [
+          {
+            "capability_key": "finance.vendor_bill_ocr",
+            "request_count": 1,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "reasoning_tokens": 0,
+            "total_tokens": 0,
+            "estimated_cost": 0
+          },
+          {
+            "capability_key": "marketing.seo_fix_draft",
+            "request_count": 5,
+            "input_tokens": 410,
+            "output_tokens": 82,
+            "reasoning_tokens": 0,
+            "total_tokens": 492,
+            "estimated_cost": 0
+          },
+          {
+            "capability_key": "platform.ai_extended_probe",
+            "request_count": 1,
+            "input_tokens": 100,
+            "output_tokens": 20,
+            "reasoning_tokens": 0,
+            "total_tokens": 120,
+            "estimated_cost": 0
+          }
+        ],
+        "byProvider": [
+          {
+            "provider_key": "nvidia_nim",
+            "request_count": 5,
+            "input_tokens": 410,
+            "output_tokens": 82,
+            "reasoning_tokens": 0,
+            "total_tokens": 492,
+            "estimated_cost": 0
+          },
+          {
+            "provider_key": "nvidia_nim_byo",
+            "request_count": 1,
+            "input_tokens": 100,
+            "output_tokens": 20,
+            "reasoning_tokens": 0,
+            "total_tokens": 120,
+            "estimated_cost": 0
+          },
+          {
+            "provider_key": "nvidia_ocr",
+            "request_count": 1,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "reasoning_tokens": 0,
+            "total_tokens": 0,
+            "estimated_cost": 0
+          }
+        ],
+        "telemetry": {
+          "since": "2026-01-01T00:00:00.000Z",
+          "attempts": {
+            "total": 7,
+            "logicalRequests": 7,
+            "success": 7,
+            "failed": 0,
+            "retries": 0,
+            "timeouts": 0,
+            "providerFailures": 0
+          },
+          "evidence": {
+            "requests": 6,
+            "success": 6,
+            "failed": 0,
+            "rejectedOutput": 0,
+            "open": 0
+          },
+          "policyDenials": 6,
+          "quotaDenials": 1,
+          "denialsByReason": {
+            "capability_disabled": 2,
+            "model_unavailable": 2,
+            "policy_denied": 1,
+            "provider_not_configured": 1,
+            "quota_exceeded": 1
+          },
+          "lastUsageAt": "2026-01-01T00:00:00.000Z"
+        }
+      },
+      "migrationInternal": {
+        "source": "migration_ai_usage_events",
+        "gatedBy": "module_migration",
+        "moduleAiGated": false,
+        "providerStatus": "active",
+        "providerStatusEnforced": "disabled_only",
+        "month": {
+          "since": "2026-01-01T00:00:00.000Z",
+          "requests": 0,
+          "totalTokens": 0,
+          "estimatedCost": 0,
+          "currency": null
+        }
+      },
+      "meteringExceptions": {
+        "open": 0,
+        "resolved": 1,
+        "byType": [
+          {
+            "type": "usage_without_evidence",
+            "open": 0,
+            "resolved": 1
+          }
+        ],
+        "recentOpen": []
+      },
+      "enforcement": {
+        "platformEngineStateEnforcedOnExecution": true,
+        "quotaConcurrencySafe": true,
+        "usageAttributionComplete": true,
+        "fingerprintSecretPosture": "configured",
+        "byoaiKeyringPosture": "configured"
+      },
+      "observedAt": "2026-01-01T00:00:00.000Z",
+      "source": "infrakinetic-live",
+      "freshness": "live",
+      "correlationId": "00000000-0000-4000-8000-000000000058"
+    },
+    "FleetAiSummary": {
+      "contractVersion": "ai-fleet/v1",
+      "windows": {
+        "day": "2026-01-01T00:00:00.000Z",
+        "week": "2026-01-01T00:00:00.000Z",
+        "month": "2026-01-01T00:00:00.000Z"
+      },
+      "planes": [
+        {
+          "plane": "embedded_managed",
+          "source": "ai_usage_events",
+          "tokens": {
+            "day": 492,
+            "week": 492,
+            "month": 492
+          },
+          "requests": {
+            "day": 6,
+            "week": 6,
+            "month": 6
+          },
+          "estimatedCost": {
+            "day": 0,
+            "week": 0,
+            "month": 0
+          }
+        },
+        {
+          "plane": "extended",
+          "source": "ai_usage_events",
+          "tokens": {
+            "day": 120,
+            "week": 120,
+            "month": 120
+          },
+          "requests": {
+            "day": 1,
+            "week": 1,
+            "month": 1
+          },
+          "estimatedCost": {
+            "day": 0,
+            "week": 0,
+            "month": 0
+          }
+        },
+        {
+          "plane": "migration_internal",
+          "source": "migration_ai_usage_events",
+          "gatedBy": "module_migration",
+          "tokens": {
+            "day": 0,
+            "week": 0,
+            "month": 0
+          },
+          "requests": {
+            "day": 0,
+            "week": 0,
+            "month": 0
+          },
+          "estimatedCost": {
+            "day": 0,
+            "week": 0,
+            "month": 0
+          }
+        }
+      ],
+      "top": {
+        "tenants": [
+          {
+            "tenantId": "00000000-0000-4000-8000-000000000002",
+            "totalTokens": 612,
+            "estimatedCost": 0
+          }
+        ],
+        "engines": [
+          {
+            "engineKey": "module_marketing",
+            "totalTokens": 492
+          },
+          {
+            "engineKey": "module_ai",
+            "totalTokens": 120
+          },
+          {
+            "engineKey": "module_finance",
+            "totalTokens": 0
+          }
+        ],
+        "capabilities": [
+          {
+            "capabilityKey": "marketing.seo_fix_draft",
+            "totalTokens": 492
+          },
+          {
+            "capabilityKey": "platform.ai_extended_probe",
+            "totalTokens": 120
+          },
+          {
+            "capabilityKey": "finance.vendor_bill_ocr",
+            "totalTokens": 0
+          }
+        ],
+        "models": [
+          {
+            "providerKey": "nvidia_nim",
+            "modelKey": "chat_default",
+            "totalTokens": 492
+          },
+          {
+            "providerKey": "nvidia_nim_byo",
+            "modelKey": "chat_default",
+            "totalTokens": 120
+          },
+          {
+            "providerKey": "nvidia_ocr",
+            "modelKey": "invoice_ocr",
+            "totalTokens": 0
+          }
+        ]
+      },
+      "providerHealth7d": [
+        {
+          "providerKey": "nvidia_nim",
+          "attempts": 5,
+          "failures": 0,
+          "rateLimited": 0
+        },
+        {
+          "providerKey": "nvidia_nim_byo",
+          "attempts": 1,
+          "failures": 0,
+          "rateLimited": 0
+        },
+        {
+          "providerKey": "nvidia_ocr",
+          "attempts": 1,
+          "failures": 0,
+          "rateLimited": 0
+        }
+      ],
+      "providers": [
+        {
+          "providerKey": "nvidia_nim",
+          "displayName": "NVIDIA NIM (Free Tier)",
+          "status": "active",
+          "egressClass": "external_api",
+          "credentialSource": "env",
+          "governedVia": "ai_engine_adapter",
+          "plane": "embedded_managed",
+          "adapterRegistered": true,
+          "enforcement": {
+            "executor": "ai_execution_service",
+            "statusEnforced": "active_only",
+            "moduleAiGated": true
+          },
+          "regionClass": "global_unspecified",
+          "endpointClass": "public_saas",
+          "models": [
+            {
+              "modelKey": "chat_default",
+              "lifecycle": "active",
+              "certification": "synthetic_certified"
+            },
+            {
+              "modelKey": "chat_reasoning",
+              "lifecycle": "active",
+              "certification": "uncertified"
+            }
+          ]
+        },
+        {
+          "providerKey": "nvidia_nim_byo",
+          "displayName": "NVIDIA NIM (tenant-supplied key)",
+          "status": "active",
+          "egressClass": "external_api",
+          "credentialSource": "tenant_reference",
+          "governedVia": "ai_engine_adapter",
+          "plane": "extended",
+          "adapterRegistered": true,
+          "enforcement": {
+            "executor": "ai_execution_service",
+            "statusEnforced": "active_only",
+            "moduleAiGated": true
+          },
+          "regionClass": "global_unspecified",
+          "endpointClass": "public_saas",
+          "models": [
+            {
+              "modelKey": "chat_default",
+              "lifecycle": "active",
+              "certification": "uncertified"
+            }
+          ]
+        },
+        {
+          "providerKey": "nvidia_nim_migration",
+          "displayName": "NVIDIA NIM (Migration Engine pool)",
+          "status": "active",
+          "egressClass": "external_api",
+          "credentialSource": "env",
+          "governedVia": "migration_internal_direct",
+          "plane": "migration_internal",
+          "adapterRegistered": null,
+          "enforcement": {
+            "executor": "migration_internal",
+            "statusEnforced": "disabled_only",
+            "moduleAiGated": false
+          },
+          "regionClass": "global_unspecified",
+          "endpointClass": "public_saas",
+          "models": [
+            {
+              "modelKey": "migration_default",
+              "lifecycle": "active",
+              "certification": "uncertified"
+            }
+          ]
+        },
+        {
+          "providerKey": "nvidia_ocr",
+          "displayName": "NVIDIA Nemotron OCR",
+          "status": "active",
+          "egressClass": "external_api",
+          "credentialSource": "env",
+          "governedVia": "ai_engine_adapter",
+          "plane": "embedded_managed",
+          "adapterRegistered": true,
+          "enforcement": {
+            "executor": "ai_execution_service",
+            "statusEnforced": "active_only",
+            "moduleAiGated": true
+          },
+          "regionClass": "global_unspecified",
+          "endpointClass": "public_saas",
+          "models": [
+            {
+              "modelKey": "invoice_ocr",
+              "lifecycle": "active",
+              "certification": "uncertified"
+            }
+          ]
+        }
+      ],
+      "entitlement": {
+        "moduleAiEntitledTenants": 2,
+        "moduleAiExplicitlyDisabled": 0
+      },
+      "quotaRisk": [],
+      "meteringExceptions": {
+        "open": 0,
+        "byType": []
+      },
+      "reconciliation": {
+        "byOutcome": [
+          {
+            "outcome": "credential_mismatch",
+            "lines": 1,
+            "open": 0
+          }
+        ],
+        "openExceptions": 0,
+        "latestStatements": [
+          {
+            "providerKey": "nvidia_nim",
+            "sourceKind": "synthetic_certification",
+            "currency": "USD",
+            "periodStart": "2026-09-01",
+            "periodEnd": "2026-09-30",
+            "lineCount": 1,
+            "totalAmount": 12,
+            "importedAt": "2026-01-01T00:00:00.000Z"
+          }
+        ]
+      },
+      "enforcement": {
+        "platformEngineStateEnforcedOnExecution": true,
+        "quotaConcurrencySafe": true,
+        "usageAttributionComplete": true,
+        "fingerprintSecretPosture": "configured",
+        "byoaiKeyringPosture": "configured"
+      },
+      "observedAt": "2026-01-01T00:00:00.000Z",
+      "source": "infrakinetic-live",
+      "freshness": "live",
+      "correlationId": "00000000-0000-4000-8000-000000000059"
+    },
+    "AiCatalog": {
+      "contractVersion": "ai-catalog/v1",
+      "providers": [
+        {
+          "providerKey": "nvidia_nim",
+          "displayName": "NVIDIA NIM (Free Tier)",
+          "status": "active",
+          "egressClass": "external_api",
+          "credentialSource": "env",
+          "governedVia": "ai_engine_adapter",
+          "plane": "embedded_managed",
+          "adapterRegistered": true,
+          "enforcement": {
+            "executor": "ai_execution_service",
+            "statusEnforced": "active_only",
+            "moduleAiGated": true
+          },
+          "regionClass": "global_unspecified",
+          "endpointClass": "public_saas",
+          "models": [
+            {
+              "modelId": "00000000-0000-4000-8000-000000000030",
+              "modelKey": "chat_default",
+              "providerModelIdentifier": "nvidia/nemotron-3-ultra-550b-a55b",
+              "version": null,
+              "modality": "text",
+              "capabilityClasses": [
+                "chat",
+                "reasoning"
+              ],
+              "contextTokensLimit": null,
+              "outputTokensLimit": null,
+              "lifecycle": "active",
+              "certification": "synthetic_certified",
+              "lifecycleChangedAt": "2026-01-01T00:00:00.000Z",
+              "certificationChangedAt": "2026-01-01T00:00:00.000Z",
+              "certificationEvidenceRef": "cert-run-2026-10-03",
+              "pricingVersion": {
+                "id": "00000000-0000-4000-8000-000000000049",
+                "effectiveFrom": "2026-01-01T00:00:00.000Z",
+                "currency": "USD"
+              }
+            },
+            {
+              "modelId": "00000000-0000-4000-8000-000000000050",
+              "modelKey": "chat_reasoning",
+              "providerModelIdentifier": "moonshotai/kimi-k3",
+              "version": null,
+              "modality": "text",
+              "capabilityClasses": [
+                "chat",
+                "reasoning"
+              ],
+              "contextTokensLimit": null,
+              "outputTokensLimit": null,
+              "lifecycle": "active",
+              "certification": "uncertified",
+              "lifecycleChangedAt": null,
+              "certificationChangedAt": null,
+              "certificationEvidenceRef": null,
+              "pricingVersion": {
+                "id": "00000000-0000-4000-8000-000000000051",
+                "effectiveFrom": "2026-01-01T00:00:00.000Z",
+                "currency": "USD"
+              }
+            }
+          ]
+        },
+        {
+          "providerKey": "nvidia_nim_byo",
+          "displayName": "NVIDIA NIM (tenant-supplied key)",
+          "status": "active",
+          "egressClass": "external_api",
+          "credentialSource": "tenant_reference",
+          "governedVia": "ai_engine_adapter",
+          "plane": "extended",
+          "adapterRegistered": true,
+          "enforcement": {
+            "executor": "ai_execution_service",
+            "statusEnforced": "active_only",
+            "moduleAiGated": true
+          },
+          "regionClass": "global_unspecified",
+          "endpointClass": "public_saas",
+          "models": [
+            {
+              "modelId": "00000000-0000-4000-8000-000000000052",
+              "modelKey": "chat_default",
+              "providerModelIdentifier": "nvidia/nemotron-3-ultra-550b-a55b",
+              "version": null,
+              "modality": "text",
+              "capabilityClasses": [
+                "chat"
+              ],
+              "contextTokensLimit": null,
+              "outputTokensLimit": null,
+              "lifecycle": "active",
+              "certification": "uncertified",
+              "lifecycleChangedAt": null,
+              "certificationChangedAt": null,
+              "certificationEvidenceRef": null,
+              "pricingVersion": {
+                "id": "00000000-0000-4000-8000-000000000053",
+                "effectiveFrom": "2026-01-01T00:00:00.000Z",
+                "currency": "USD"
+              }
+            }
+          ]
+        },
+        {
+          "providerKey": "nvidia_nim_migration",
+          "displayName": "NVIDIA NIM (Migration Engine pool)",
+          "status": "active",
+          "egressClass": "external_api",
+          "credentialSource": "env",
+          "governedVia": "migration_internal_direct",
+          "plane": "migration_internal",
+          "adapterRegistered": null,
+          "enforcement": {
+            "executor": "migration_internal",
+            "statusEnforced": "disabled_only",
+            "moduleAiGated": false
+          },
+          "regionClass": "global_unspecified",
+          "endpointClass": "public_saas",
+          "models": [
+            {
+              "modelId": "00000000-0000-4000-8000-000000000060",
+              "modelKey": "migration_default",
+              "providerModelIdentifier": "nvidia/nemotron-3-super-120b-a12b",
+              "version": null,
+              "modality": "text",
+              "capabilityClasses": [
+                "chat",
+                "extraction"
+              ],
+              "contextTokensLimit": null,
+              "outputTokensLimit": null,
+              "lifecycle": "active",
+              "certification": "uncertified",
+              "lifecycleChangedAt": null,
+              "certificationChangedAt": null,
+              "certificationEvidenceRef": null,
+              "pricingVersion": {
+                "id": "00000000-0000-4000-8000-000000000061",
+                "effectiveFrom": "2026-01-01T00:00:00.000Z",
+                "currency": "USD"
+              }
+            }
+          ]
+        },
+        {
+          "providerKey": "nvidia_ocr",
+          "displayName": "NVIDIA Nemotron OCR",
+          "status": "active",
+          "egressClass": "external_api",
+          "credentialSource": "env",
+          "governedVia": "ai_engine_adapter",
+          "plane": "embedded_managed",
+          "adapterRegistered": true,
+          "enforcement": {
+            "executor": "ai_execution_service",
+            "statusEnforced": "active_only",
+            "moduleAiGated": true
+          },
+          "regionClass": "global_unspecified",
+          "endpointClass": "public_saas",
+          "models": [
+            {
+              "modelId": "00000000-0000-4000-8000-000000000054",
+              "modelKey": "invoice_ocr",
+              "providerModelIdentifier": "nvidia/nemotron-ocr-v2",
+              "version": null,
+              "modality": "vision",
+              "capabilityClasses": [
+                "ocr"
+              ],
+              "contextTokensLimit": null,
+              "outputTokensLimit": null,
+              "lifecycle": "active",
+              "certification": "uncertified",
+              "lifecycleChangedAt": null,
+              "certificationChangedAt": null,
+              "certificationEvidenceRef": null,
+              "pricingVersion": {
+                "id": "00000000-0000-4000-8000-000000000055",
+                "effectiveFrom": "2026-01-01T00:00:00.000Z",
+                "currency": "USD"
+              }
+            }
+          ]
+        }
+      ],
+      "capabilities": [
+        {
+          "capabilityKey": "finance.vendor_bill_ocr",
+          "ownerEngine": "module_finance",
+          "description": "Vendor-bill field extraction (vendor name, invoice reference, invoice date, amount) from an uploaded invoice image via OCR. Extraction-only -- prefills a draft vendor_bills row (status=ocr_extracted) that a human must confirm/replace before submit-for-review; never posts a journal or approves a bill.",
+          "status": "active",
+          "allowedPlanes": [
+            "embedded_managed"
+          ],
+          "allowedProviderModelClasses": [
+            "ocr"
+          ],
+          "defaultProviderKey": "nvidia_ocr",
+          "defaultModelKey": "invoice_ocr",
+          "tenantFeatureKey": "feature_ai_vendor_bill_ocr",
+          "dataClassification": "confidential",
+          "humanReviewRequired": true,
+          "consequentialActionPolicy": "propose_only",
+          "policyVersions": {
+            "prompt": "v1",
+            "input": "v1",
+            "output": "v1"
+          }
+        },
+        {
+          "capabilityKey": "marketing.seo_fix_draft",
+          "ownerEngine": "module_marketing",
+          "description": "Bounded AEO/GEO content draft (meta description, key-takeaway callout, answer-first paragraph, or FAQ entry) for one SEO fix report finding. Draft-only -- routed through the Approval Framework before any seo_fix_reports mutation, never auto-published.",
+          "status": "active",
+          "allowedPlanes": [
+            "embedded_managed"
+          ],
+          "allowedProviderModelClasses": [
+            "chat"
+          ],
+          "defaultProviderKey": "nvidia_nim",
+          "defaultModelKey": "chat_default",
+          "tenantFeatureKey": "feature_ai_seo_draft",
+          "dataClassification": "internal",
+          "humanReviewRequired": true,
+          "consequentialActionPolicy": "propose_only",
+          "policyVersions": {
+            "prompt": "v1",
+            "input": "v1",
+            "output": "v1"
+          }
+        },
+        {
+          "capabilityKey": "platform.ai_extended_probe",
+          "ownerEngine": "module_ai",
+          "description": "Bounded certification probe for the extended (tenant-supplied credential) plane: fixed trivial prompt, 16 output tokens, no tenant data. Proves credential resolution, usage attribution, rotation and revocation without opening any product capability to the extended plane.",
+          "status": "active",
+          "allowedPlanes": [
+            "extended"
+          ],
+          "allowedProviderModelClasses": [
+            "chat"
+          ],
+          "defaultProviderKey": "nvidia_nim_byo",
+          "defaultModelKey": "chat_default",
+          "tenantFeatureKey": "feature_ai_extended_probe",
+          "dataClassification": "internal",
+          "humanReviewRequired": true,
+          "consequentialActionPolicy": "propose_only",
+          "policyVersions": {
+            "prompt": "v1",
+            "input": "v1",
+            "output": "v1"
+          }
+        }
+      ],
+      "legacyKillSwitches": [
+        {
+          "libraryKey": "nvidia_nim",
+          "enabled": true,
+          "updatedAt": "2026-01-01T00:00:00.000Z",
+          "status": "legacy_retirement_pending"
+        }
+      ],
+      "enforcement": {
+        "platformEngineStateEnforcedOnExecution": true,
+        "quotaConcurrencySafe": true,
+        "usageAttributionComplete": true,
+        "fingerprintSecretPosture": "configured",
+        "byoaiKeyringPosture": "configured"
+      },
+      "observedAt": "2026-01-01T00:00:00.000Z",
+      "source": "infrakinetic-live",
+      "freshness": "live",
+      "correlationId": "00000000-0000-4000-8000-000000000062"
+    }
+  }
+}

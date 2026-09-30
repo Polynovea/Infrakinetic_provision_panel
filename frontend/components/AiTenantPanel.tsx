@@ -1,20 +1,27 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
+import { useOperatorSession } from "../lib/session";
 import { StatusBadge } from "./StatusBadge";
 import { ErrorState } from "./States";
 import {
   type AiEnforcementFacts, EnforcementGaps, fmtCost, fmtNumber, isNotModelled, MISMATCH_LABELS, type NotModelled, NotModelledNote, when,
 } from "./AiShared";
+import {
+  AnchorDialog, CommissionDialog, GraceDialog, ModeDialog, ModelPolicyDialog, PlanesDialog, QuotaDialog, QuotaRemoveDialog,
+  ResumeDialog, RevokeCredentialDialog, SuspendDialog, type ProviderChoice, type QuotaRow,
+} from "./AiTenantActions";
 
-// Phase 1A.15 Slice 1 — per-tenant AI state, read-only (ai.read). Owner-
-// composed live by module_ai; Governance stores nothing. Commercial usage
-// (successful attempts, tokens/cost) and attempt telemetry are shown
-// separately, and Migration's own AI volume is its own section — never
-// folded into module_ai totals.
+// Phase 1A.15 — per-tenant AI state (ai.read) and the operator actions over it. Owner-composed live by
+// module_ai; Governance stores nothing. Commercial usage (successful attempts, tokens/cost) and attempt
+// telemetry are shown separately, and Migration's own AI volume is its own section — never folded into
+// module_ai totals. Action buttons appear only for the scopes the operator holds; the backend re-checks every
+// scope, step-up and the risk class, so hiding a button is convenience, not control.
 
 interface Window { since: string; totalTokens: number; estimatedCost: number; currency: string | null }
+
+interface CredentialRef { refId: string; providerKey: string; version: number; status: string; maskedHint: string | null; createdAt: string; revokedAt: string | null }
 
 interface TenantAiState {
   moduleAi: { entitled: boolean; explicitRow: boolean; platformEngineState: string };
@@ -26,9 +33,10 @@ interface TenantAiState {
     commissioning: { mode: string; commissioned: boolean };
     featureFlag: { key: string; explicitRow: boolean; enabled: boolean } | null; providerKey: string | null; modelKey: string | null;
   }>;
-  quotas: Array<{
-    policyId: string; origin: string; scope: { type: string; key: string | null; plane: string | null }; period: string;
-    window: { start: string; end: string }; limitType: string; hard: number; warningPct: number | null; softLimit: number | null;
+  providersModels: Array<{ providerKey: string; models: Array<{ modelKey: string }> }>;
+  quotas: Array<QuotaRow & {
+    policyId: string; origin: string;
+    window: { start: string; end: string };
     overage: { mode: string; graceActiveForWindow: boolean; graceLimit: number | null; graceExpiresAt: string | null };
     used: number | null; state: string;
   }>;
@@ -37,33 +45,65 @@ interface TenantAiState {
     telemetry: {
       attempts: { total: number; logicalRequests: number; success: number; failed: number; retries: number; timeouts: number; providerFailures: number };
       evidence: { requests: number; open: number };
-      policyDenials: NotModelled;
+      policyDenials: number | NotModelled;
+      quotaDenials?: number | NotModelled;
+      denialsByReason?: Record<string, number>;
       lastUsageAt: string | null;
     };
   };
   migrationInternal: { gatedBy: string; providerStatus: string | null; month: { requests: number; totalTokens: number; estimatedCost: number; currency: string | null } };
-  credentialRefs: NotModelled;
+  credentialRefs: CredentialRef[] | NotModelled;
+  delegation?: { allocations: Array<{ allocationId: string; scope: { type: string; key: string | null; plane: string | null }; period: string; limitType: string; allocated: number; rootCeiling: number; effective: number; status: string }> };
+  meteringExceptions?: { open: number; resolved?: number; byType: Array<{ type: string; open: number; resolved?: number }> } | NotModelled;
   enforcement: AiEnforcementFacts;
   observedAt: string;
 }
 
+type Dialog =
+  | { kind: "suspend" } | { kind: "resume" } | { kind: "planes" } | { kind: "mode" } | { kind: "anchor" } | { kind: "policy" } | { kind: "quotaNew" }
+  | { kind: "commission"; capabilityKey: string; plane: string; to: "commissioned" | "decommissioned" }
+  | { kind: "quotaEdit" | "quotaRemove" | "grace"; quota: QuotaRow }
+  | { kind: "revoke"; refId: string; hint: string | null };
+
 const section = { margin: "1rem 0 0.4rem", fontSize: "0.9rem" } as const;
+const small = { fontSize: "0.75rem", padding: "0.15rem 0.5rem" } as const;
 
 export function AiTenantPanel({ tenantId, request }: { tenantId: string; request: (path: string, init?: RequestInit) => Promise<Response> }) {
+  const { operator } = useOperatorSession();
+  const scopes = operator?.scopes ?? [];
+  const canEntitle = scopes.includes("ai.entitlement.write");
+  const canQuota = scopes.includes("ai.quota.write");
+  const canSuspend = scopes.includes("ai.emergency_suspend");
+  const canPolicy = scopes.includes("ai.provider_policy.write");
+  const canRevoke = scopes.includes("credentials.revoke");
+
   const [state, setState] = useState<TenantAiState | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [dialog, setDialog] = useState<Dialog | null>(null);
+  const [refresh, setRefresh] = useState(0);
+
+  const load = useCallback(async (isCancelled: () => boolean) => {
+    try {
+      const res = await request(`/management/v1/ai/tenants/${encodeURIComponent(tenantId)}/state`);
+      if (isCancelled()) return;
+      if (!res.ok) { setError("Could not load AI state."); return; }
+      setError(null);
+      setState(await res.json());
+    } catch {
+      if (!isCancelled()) setError("Could not load AI state.");
+    }
+  }, [request, tenantId]);
 
   useEffect(() => {
     let cancelled = false;
-    request(`/management/v1/ai/tenants/${encodeURIComponent(tenantId)}/state`)
-      .then(async (res) => {
-        if (cancelled) return;
-        if (!res.ok) { setError("Could not load AI state."); return; }
-        setState(await res.json());
-      })
-      .catch(() => !cancelled && setError("Could not load AI state."));
+    void load(() => cancelled);
     return () => { cancelled = true; };
-  }, [request, tenantId]);
+  }, [load, refresh]);
+
+  const close = () => setDialog(null);
+  const done = () => setRefresh((n) => n + 1);
+  const providers: ProviderChoice[] = state?.providersModels ?? [];
+  const credentials = state && Array.isArray(state.credentialRefs) ? state.credentialRefs : null;
 
   return (
     <>
@@ -79,6 +119,18 @@ export function AiTenantPanel({ tenantId, request }: { tenantId: string; request
             <span>Root policy: {state.rootPolicy.source === "default" ? "default (compatibility)" : `v${state.rootPolicy.policyVersion}`} · {state.rootPolicy.commissioningMode} · billing anchor day {state.rootPolicy.billingAnchorDay}</span>
             <span className="overlay-note" style={{ marginTop: 0 }}>Observed {when(state.observedAt)}</span>
           </div>
+
+          {(canSuspend || canEntitle || canQuota || canPolicy) && (
+            <div style={{ display: "flex", gap: "0.4rem", flexWrap: "wrap", margin: "0.6rem 0" }} aria-label="AI operator actions">
+              {canSuspend && state.emergency.state === "none" && <button className="btn btn-danger" style={small} onClick={() => setDialog({ kind: "suspend" })}>Suspend AI (R4)</button>}
+              {canSuspend && state.emergency.state === "suspended" && <button className="btn btn-primary" style={small} onClick={() => setDialog({ kind: "resume" })}>Request resume (R3)</button>}
+              {canEntitle && <button className="btn" style={small} onClick={() => setDialog({ kind: "planes" })}>Planes</button>}
+              {canEntitle && <button className="btn" style={small} onClick={() => setDialog({ kind: "mode" })}>Commissioning mode</button>}
+              {canQuota && <button className="btn" style={small} onClick={() => setDialog({ kind: "anchor" })}>Billing anchor</button>}
+              {canQuota && <button className="btn" style={small} onClick={() => setDialog({ kind: "quotaNew" })}>Add quota</button>}
+              {canPolicy && <button className="btn" style={small} onClick={() => setDialog({ kind: "policy" })}>Provider / model policy</button>}
+            </div>
+          )}
 
           {state.emergency.state === "suspended" && (
             <div className="card" style={{ margin: "0.5rem 0", fontSize: "0.85rem", borderColor: "var(--danger-fg)" }}>
@@ -105,18 +157,28 @@ export function AiTenantPanel({ tenantId, request }: { tenantId: string; request
 
           <h4 style={section}>Capabilities</h4>
           <table className="data-table">
-            <thead><tr><th>Capability</th><th>Provider / model</th><th>Commissioning</th><th>Feature flag</th><th>Effective</th><th>Reason</th></tr></thead>
+            <thead><tr><th>Capability</th><th>Provider / model</th><th>Commissioning</th><th>Feature flag</th><th>Effective</th><th>Reason</th>{canEntitle && <th />}</tr></thead>
             <tbody>
-              {state.capabilities.map((c) => (
-                <tr key={c.capabilityKey}>
-                  <td style={{ fontFamily: "monospace" }}>{c.capabilityKey}</td>
-                  <td>{c.providerKey ?? "—"}{c.modelKey ? ` / ${c.modelKey}` : ""}</td>
-                  <td>{c.commissioning.mode === "explicit" ? (c.commissioning.commissioned ? "commissioned" : "not commissioned") : "legacy additive"}</td>
-                  <td>{c.featureFlag ? `${c.featureFlag.enabled ? "on" : "off"}${c.featureFlag.explicitRow ? "" : " (default)"}` : "—"}</td>
-                  <td><StatusBadge value={c.effective ? "active" : "disabled"} /></td>
-                  <td>{c.mismatchReason ? MISMATCH_LABELS[c.mismatchReason] ?? c.mismatchReason : "—"}</td>
-                </tr>
-              ))}
+              {state.capabilities.map((c) => {
+                const commissioned = c.commissioning.commissioned;
+                return (
+                  <tr key={`${c.capabilityKey}/${c.plane}`}>
+                    <td style={{ fontFamily: "monospace" }}>{c.capabilityKey}</td>
+                    <td>{c.providerKey ?? "—"}{c.modelKey ? ` / ${c.modelKey}` : ""}</td>
+                    <td>{c.commissioning.mode === "explicit" ? (commissioned ? "commissioned" : "not commissioned") : "legacy additive"}</td>
+                    <td>{c.featureFlag ? `${c.featureFlag.enabled ? "on" : "off"}${c.featureFlag.explicitRow ? "" : " (default)"}` : "—"}</td>
+                    <td><StatusBadge value={c.effective ? "active" : "disabled"} /></td>
+                    <td>{c.mismatchReason ? MISMATCH_LABELS[c.mismatchReason] ?? c.mismatchReason : "—"}</td>
+                    {canEntitle && (
+                      <td>
+                        <button className="btn" style={small} onClick={() => setDialog({ kind: "commission", capabilityKey: c.capabilityKey, plane: c.plane, to: c.commissioning.mode === "explicit" && commissioned ? "decommissioned" : "commissioned" })}>
+                          {c.commissioning.mode === "explicit" && commissioned ? "Decommission" : "Commission"}
+                        </button>
+                      </td>
+                    )}
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
 
@@ -125,7 +187,7 @@ export function AiTenantPanel({ tenantId, request }: { tenantId: string; request
             <p className="overlay-note">No quota policies — the runtime applies no tenant limit.</p>
           ) : (
             <table className="data-table">
-              <thead><tr><th>Scope</th><th>Period (UTC window)</th><th>Metric</th><th>Used / hard</th><th>Thresholds</th><th>State</th></tr></thead>
+              <thead><tr><th>Scope</th><th>Period (UTC window)</th><th>Metric</th><th>Used / hard</th><th>Thresholds</th><th>State</th>{canQuota && <th />}</tr></thead>
               <tbody>
                 {state.quotas.map((q) => (
                   <tr key={q.policyId}>
@@ -139,10 +201,43 @@ export function AiTenantPanel({ tenantId, request }: { tenantId: string; request
                       {q.overage.graceActiveForWindow ? ` · grace +${fmtNumber(q.overage.graceLimit ?? 0)} until ${when(q.overage.graceExpiresAt)}` : ""}
                     </td>
                     <td><StatusBadge value={q.state} /></td>
+                    {canQuota && (
+                      <td style={{ whiteSpace: "nowrap" }}>
+                        {q.origin === "root" && q.policyKey ? (
+                          <>
+                            <button className="btn" style={small} onClick={() => setDialog({ kind: "quotaEdit", quota: q })}>Edit</button>{" "}
+                            <button className="btn" style={small} onClick={() => setDialog({ kind: "grace", quota: q })}>Grace</button>{" "}
+                            <button className="btn btn-danger" style={small} onClick={() => setDialog({ kind: "quotaRemove", quota: q })}>Remove</button>
+                          </>
+                        ) : (
+                          <span className="overlay-note" style={{ marginTop: 0 }}>{q.origin === "root" ? "not addressable" : "Technology-owned"}</span>
+                        )}
+                      </td>
+                    )}
                   </tr>
                 ))}
               </tbody>
             </table>
+          )}
+
+          {state.delegation && state.delegation.allocations.length > 0 && (
+            <>
+              <h4 style={section}>Delegated allocations (read-only)</h4>
+              <table className="data-table">
+                <thead><tr><th>Scope</th><th>Period</th><th>Metric</th><th>Allocated</th><th>Root ceiling</th><th>Effective</th><th>Status</th></tr></thead>
+                <tbody>
+                  {state.delegation.allocations.map((a) => (
+                    <tr key={a.allocationId}>
+                      <td>{a.scope.type}{a.scope.key ? `=${a.scope.key}` : ""}{a.scope.plane ? ` (${a.scope.plane})` : ""}</td>
+                      <td>{a.period}</td><td>{a.limitType}</td>
+                      <td>{fmtNumber(a.allocated)}</td><td>{fmtNumber(a.rootCeiling)}</td><td><strong>{fmtNumber(a.effective)}</strong></td>
+                      <td><StatusBadge value={a.status} /></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <p className="overlay-note">The effective limit is the smaller of the allocation and the root ceiling; allocations are managed by the tenant&apos;s Technology plane, not from here.</p>
+            </>
           )}
 
           <h4 style={section}>Usage — commercial (successful attempts)</h4>
@@ -171,7 +266,13 @@ export function AiTenantPanel({ tenantId, request }: { tenantId: string; request
             {state.usage.telemetry.attempts.timeouts} timeouts · {state.usage.telemetry.attempts.providerFailures} provider failures ·{" "}
             {state.usage.telemetry.evidence.open} open requests · last usage {when(state.usage.telemetry.lastUsageAt)}
           </p>
-          <p style={{ fontSize: "0.85rem", margin: "0.25rem 0 0" }}>Policy / quota denials: <NotModelledNote value={state.usage.telemetry.policyDenials} /></p>
+          <p style={{ fontSize: "0.85rem", margin: "0.25rem 0 0" }}>
+            Policy denials: {isNotModelled(state.usage.telemetry.policyDenials) ? <NotModelledNote value={state.usage.telemetry.policyDenials} /> : fmtNumber(state.usage.telemetry.policyDenials)}
+            {" · "}quota denials: {state.usage.telemetry.quotaDenials === undefined ? "—" : isNotModelled(state.usage.telemetry.quotaDenials) ? <NotModelledNote value={state.usage.telemetry.quotaDenials} /> : fmtNumber(state.usage.telemetry.quotaDenials)}
+            {state.usage.telemetry.denialsByReason && Object.keys(state.usage.telemetry.denialsByReason).length > 0 && (
+              <span className="overlay-note" style={{ marginTop: 0 }}> ({Object.entries(state.usage.telemetry.denialsByReason).map(([reason, n]) => `${reason.replace(/_/g, " ")} ${n}`).join(" · ")})</span>
+            )}
+          </p>
 
           <h4 style={section}>Migration-internal AI (separate pool)</h4>
           <p style={{ fontSize: "0.85rem", margin: 0 }}>
@@ -180,7 +281,51 @@ export function AiTenantPanel({ tenantId, request }: { tenantId: string; request
             {fmtCost(state.migrationInternal.month.estimatedCost, state.migrationInternal.month.currency)}
           </p>
 
-          <p style={{ fontSize: "0.85rem", margin: "0.75rem 0 0" }}>Credential references: <NotModelledNote value={state.credentialRefs} /></p>
+          <h4 style={section}>Metering exceptions</h4>
+          <p style={{ fontSize: "0.85rem", margin: 0 }}>
+            {state.meteringExceptions === undefined || isNotModelled(state.meteringExceptions)
+              ? <NotModelledNote value={state.meteringExceptions ?? { notModelled: true, slice: 3 }} />
+              : `${state.meteringExceptions.open} open${state.meteringExceptions.resolved !== undefined ? ` · ${state.meteringExceptions.resolved} resolved` : ""}${state.meteringExceptions.byType.length ? ` (${state.meteringExceptions.byType.map((t) => `${t.type.replace(/_/g, " ")} ${t.open}`).join(", ")})` : ""}`}
+          </p>
+
+          <h4 style={section}>Credential references (BYOAI — safe metadata only)</h4>
+          {credentials === null ? (
+            <p style={{ fontSize: "0.85rem", margin: 0 }}><NotModelledNote value={state.credentialRefs as NotModelled} /></p>
+          ) : credentials.length === 0 ? (
+            <p className="overlay-note">This tenant has not supplied any AI provider credential.</p>
+          ) : (
+            <table className="data-table">
+              <thead><tr><th>Reference</th><th>Provider</th><th>Version</th><th>Status</th><th>Hint</th><th>Created</th><th>Revoked</th>{canRevoke && <th />}</tr></thead>
+              <tbody>
+                {credentials.map((c) => (
+                  <tr key={c.refId}>
+                    <td style={{ fontFamily: "monospace", fontSize: "0.8rem" }}>{c.refId}</td>
+                    <td>{c.providerKey}</td><td>{c.version}</td>
+                    <td><StatusBadge value={c.status === "revoked" ? "revoked" : "active"} /></td>
+                    <td style={{ fontFamily: "monospace" }}>{c.maskedHint ?? "—"}</td>
+                    <td>{when(c.createdAt)}</td><td>{when(c.revokedAt)}</td>
+                    {canRevoke && (
+                      <td>{c.status !== "revoked" && <button className="btn btn-danger" style={small} onClick={() => setDialog({ kind: "revoke", refId: c.refId, hint: c.maskedHint })}>Revoke</button>}</td>
+                    )}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+          <p className="overlay-note">Governance can show this metadata and revoke a credential. Keys are submitted, rotated and used only by the tenant and the owner runtime — never through this console.</p>
+
+          {dialog?.kind === "suspend" && <SuspendDialog tenantId={tenantId} onClose={close} onDone={done} />}
+          {dialog?.kind === "resume" && <ResumeDialog tenantId={tenantId} onClose={close} onDone={done} />}
+          {dialog?.kind === "planes" && <PlanesDialog tenantId={tenantId} current={state.rootPolicy.allowedPlanes} onClose={close} onDone={done} />}
+          {dialog?.kind === "mode" && <ModeDialog tenantId={tenantId} current={state.rootPolicy.commissioningMode} onClose={close} onDone={done} />}
+          {dialog?.kind === "anchor" && <AnchorDialog tenantId={tenantId} current={state.rootPolicy.billingAnchorDay} onClose={close} onDone={done} />}
+          {dialog?.kind === "policy" && <ModelPolicyDialog tenantId={tenantId} providers={providers} onClose={close} onDone={done} />}
+          {dialog?.kind === "commission" && <CommissionDialog tenantId={tenantId} capabilityKey={dialog.capabilityKey} plane={dialog.plane} to={dialog.to} mode={state.rootPolicy.commissioningMode} onClose={close} onDone={done} />}
+          {dialog?.kind === "quotaNew" && <QuotaDialog tenantId={tenantId} onClose={close} onDone={done} />}
+          {dialog?.kind === "quotaEdit" && <QuotaDialog tenantId={tenantId} existing={dialog.quota} onClose={close} onDone={done} />}
+          {dialog?.kind === "quotaRemove" && <QuotaRemoveDialog tenantId={tenantId} quota={dialog.quota} onClose={close} onDone={done} />}
+          {dialog?.kind === "grace" && <GraceDialog tenantId={tenantId} quota={dialog.quota} onClose={close} onDone={done} />}
+          {dialog?.kind === "revoke" && <RevokeCredentialDialog tenantId={tenantId} refId={dialog.refId} hint={dialog.hint} onClose={close} onDone={done} />}
         </>
       )}
     </>

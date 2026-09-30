@@ -1,4 +1,4 @@
-import { Router, type ErrorRequestHandler } from "express";
+import { Router, type ErrorRequestHandler, type RequestHandler } from "express";
 
 import type { AuditSink } from "../../identity/auditSink.js";
 import type { BrowserAuthStore } from "../../identity/browserAuthStore.js";
@@ -41,7 +41,30 @@ import {
   type PaymentAdapterApprovalActionKey,
 } from "../../management/operations/paymentAdapterOperation.js";
 import { listTenantIntegrations } from "../../management/operations/integrationQuery.js";
-import { getAiCatalog, getFleetAiSummary, getTenantAiState, UnsafeAiOwnerResponseError } from "../../management/operations/aiQuery.js";
+import {
+  getAiAdminCommandReceipt,
+  getAiCatalog,
+  getAiReconciliation,
+  getFleetAiSummary,
+  getTenantAiCredentials,
+  getTenantAiState,
+  listAiMeteringExceptions,
+  UnknownAiAdminCommandError,
+  UnsafeAiOwnerResponseError,
+} from "../../management/operations/aiQuery.js";
+import {
+  AI_LEDGERED_ROUTES,
+  AiOperationRefusedError,
+  aiApprovalScope,
+  executeAiApproval,
+  executeAiCommand,
+  isAiApproval,
+  previewCommissioningMode,
+  requestAiApproval,
+} from "../../management/operations/aiOperation.js";
+import { AI_CONTRACT, InvalidAiRequestError } from "../../management/operations/aiContract.js";
+import { ScopeNotGrantedError } from "../../management/managementAssertionIssuer.js";
+import type { Scope } from "../../identity/roles.js";
 import {
   GlobalConfigRestoreStore,
   GlobalConfigPackageRejectedError,
@@ -1917,6 +1940,180 @@ export function createManagementRouter(deps: ManagementRouterDeps): Router {
     }
   });
 
+
+  // ───────────────────────────────────────────────────────────────────────
+  // 1A.15 final closure — the AI mutation plane. Every route below is
+  // generated from the owner's published contract (aiContract.ts), so its
+  // method, path, scope and step-up requirement cannot drift from what the
+  // owner serves. Semantics stay in module_ai; Governance ledgers the
+  // operation, enforces the risk controls and signs the owner assertion.
+  //   R1/R2  reason + idempotency key                       (ledger)
+  //   R4     suspend, provider narrowing: + fresh step-up + recovery intent
+  //   R3     resume, model lifecycle, model certification: /request (step-up)
+  //          -> /approvals/:id/approve|reject (checker, step-up) -> /approvals/:id/execute
+  // BYOAI is safe metadata read + revoke ONLY: no route below accepts
+  // credential material, and none exists for submit, rotate, decrypt or test.
+  // ───────────────────────────────────────────────────────────────────────
+
+  function aiErrorResponse(err: unknown, res: import("express").Response): boolean {
+    if (err instanceof InvalidAiRequestError) { res.status(err.httpStatus).json({ error: err.code, message: err.message, violations: err.violations }); return true; }
+    if (err instanceof AiOperationRefusedError) { res.status(err.httpStatus).json({ error: err.code, message: err.message, ...(err.details ? { details: err.details } : {}) }); return true; }
+    if (err instanceof ScopeNotGrantedError) { res.status(403).json({ error: "SCOPE_REQUIRED", message: err.message }); return true; }
+    if (err instanceof UnknownAiAdminCommandError) { res.status(404).json({ error: "UNKNOWN_AI_ADMIN_COMMAND", message: err.message }); return true; }
+    return aiReadErrorResponse(err, res);
+  }
+
+  async function aiDeps() {
+    return { ...(await adapterDeps()), fetchImpl: deps.fetchImpl };
+  }
+
+  const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  const AI_STATES = ["open", "resolved"];
+  const aiLimit = (raw: unknown): number | undefined | "invalid" => {
+    if (raw === undefined || raw === "") return undefined;
+    const parsed = Number(raw);
+    return Number.isInteger(parsed) && parsed >= 1 && parsed <= 500 ? parsed : "invalid";
+  };
+  const queryText = (raw: unknown): string | undefined => (typeof raw === "string" && raw.trim() !== "" ? raw : undefined);
+
+  router.get("/ai/tenants/:tenantId/credentials", requireScope("ai.read", deps.auditSink), async (req, res, next) => {
+    try {
+      const ctx = req.operatorContext;
+      if (!ctx) { res.status(403).json({ error: "NOT_AUTHENTICATED" }); return; }
+      res.status(200).json(await getTenantAiCredentials(await aiDeps(), { tenantId: req.params.tenantId, ...operatorParams(ctx) }));
+    } catch (err) {
+      if (aiErrorResponse(err, res)) return;
+      next(err);
+    }
+  });
+
+  router.get("/ai/metering-exceptions", requireScope("ai.read", deps.auditSink), async (req, res, next) => {
+    try {
+      const ctx = req.operatorContext;
+      if (!ctx) { res.status(403).json({ error: "NOT_AUTHENTICATED" }); return; }
+      const state = queryText(req.query.state);
+      const tenantId = queryText(req.query.tenantId);
+      const limit = aiLimit(req.query.limit);
+      if ((state !== undefined && !AI_STATES.includes(state)) || (tenantId !== undefined && !UUID_PATTERN.test(tenantId)) || limit === "invalid") {
+        res.status(400).json({ error: "AI_REQUEST_INVALID", message: "state must be open|resolved, tenantId a uuid, limit an integer 1..500" });
+        return;
+      }
+      res.status(200).json(await listAiMeteringExceptions(await aiDeps(), { ...operatorParams(ctx), state: state as "open" | "resolved" | undefined, tenantId, limit }));
+    } catch (err) {
+      if (aiErrorResponse(err, res)) return;
+      next(err);
+    }
+  });
+
+  router.get("/ai/reconciliation", requireScope("ai.read", deps.auditSink), async (req, res, next) => {
+    try {
+      const ctx = req.operatorContext;
+      if (!ctx) { res.status(403).json({ error: "NOT_AUTHENTICATED" }); return; }
+      const state = queryText(req.query.state);
+      const outcome = queryText(req.query.outcome);
+      const providerKey = queryText(req.query.providerKey);
+      const limit = aiLimit(req.query.limit);
+      if (
+        (state !== undefined && !AI_STATES.includes(state)) ||
+        (outcome !== undefined && !AI_CONTRACT.enums.reconciliationOutcomes?.includes(outcome)) ||
+        (providerKey !== undefined && !/^[A-Za-z0-9_.-]{1,128}$/.test(providerKey)) ||
+        limit === "invalid"
+      ) {
+        res.status(400).json({ error: "AI_REQUEST_INVALID", message: "invalid reconciliation filter" });
+        return;
+      }
+      res.status(200).json(await getAiReconciliation(await aiDeps(), { ...operatorParams(ctx), state: state as "open" | "resolved" | undefined, outcome, providerKey, limit }));
+    } catch (err) {
+      if (aiErrorResponse(err, res)) return;
+      next(err);
+    }
+  });
+
+  // The owner binds a receipt read to the receipt's own target, so Governance addresses it from ITS ledger row for
+  // that key — an operator can only read receipts of commands Governance itself recorded.
+  router.get("/ai-admin-commands/:idempotencyKey", requireScope("ai.read", deps.auditSink), async (req, res, next) => {
+    try {
+      const ctx = req.operatorContext;
+      if (!ctx) { res.status(403).json({ error: "NOT_AUTHENTICATED" }); return; }
+      const operation = await deps.ledger.getByIdempotencyKey(req.params.idempotencyKey);
+      if (!operation || !AI_LEDGERED_ROUTES.some((route) => route.action === operation.requestedAction)) {
+        res.status(404).json({ error: "UNKNOWN_AI_ADMIN_COMMAND" });
+        return;
+      }
+      res.status(200).json(await getAiAdminCommandReceipt(await aiDeps(), {
+        ...operatorParams(ctx),
+        idempotencyKey: req.params.idempotencyKey,
+        target: { targetTenantId: operation.targetTenantId, targetResourceType: operation.targetResourceType, targetResourceId: operation.targetResourceId },
+      }));
+    } catch (err) {
+      if (aiErrorResponse(err, res)) return;
+      next(err);
+    }
+  });
+
+  const aiStepUp = requireStepUp(300, deps.sessionStore, deps.auditSink);
+  // Provider state is R2 to activate but R4 to narrow (disable/deprecate): only the narrowing needs fresh step-up.
+  const aiStepUpWhenNarrowing: RequestHandler = (req, res, next) => {
+    const status = (req.body as { status?: unknown } | undefined)?.status;
+    if (status !== undefined && status !== "active") { aiStepUp(req, res, next); return; }
+    next();
+  };
+
+  router.post("/ai/tenants/:tenantId/commissioning-mode/preview", requireScope("ai.entitlement.write", deps.auditSink), async (req, res, next) => {
+    try {
+      const ctx = req.operatorContext;
+      if (!ctx) { res.status(403).json({ error: "NOT_AUTHENTICATED" }); return; }
+      const body = (req.body ?? {}) as Record<string, unknown>;
+      res.status(200).json(await previewCommissioningMode(await aiDeps(), { ...operatorParams(ctx), tenantId: req.params.tenantId, mode: body.mode as string }));
+    } catch (err) {
+      if (aiErrorResponse(err, res)) return;
+      next(err);
+    }
+  });
+
+  for (const route of AI_LEDGERED_ROUTES) {
+    const scope = route.scope as Scope;
+    const verb = route.method.toLowerCase() as "put" | "post" | "delete";
+
+    if (route.approval === "maker_checker") {
+      router.post(`${route.path}/request`, requireScope(scope, deps.auditSink), aiStepUp, async (req, res, next) => {
+        try {
+          const ctx = req.operatorContext;
+          if (!ctx) { res.status(403).json({ error: "NOT_AUTHENTICATED" }); return; }
+          const body = (req.body ?? {}) as Record<string, unknown>;
+          if (typeof body.reason !== "string" || body.reason.trim() === "") { res.status(400).json({ error: "REASON_REQUIRED" }); return; }
+          const { reason, ...fields } = body;
+          const approval = await requestAiApproval(await aiDeps(), { ...operatorParams(ctx), routeId: route.id, pathParams: req.params, fields, reason });
+          res.status(201).json({ approval });
+        } catch (err) {
+          if (approvalErrorResponse(err, res)) return;
+          if (aiErrorResponse(err, res)) return;
+          next(err);
+        }
+      });
+      continue;
+    }
+
+    const guards: RequestHandler[] = [requireScope(scope, deps.auditSink)];
+    if (route.stepUp) guards.push(aiStepUp);
+    else if (route.riskNarrowing) guards.push(aiStepUpWhenNarrowing);
+
+    router[verb](route.path, ...guards, async (req, res, next) => {
+      try {
+        const ctx = req.operatorContext;
+        if (!ctx) { res.status(403).json({ error: "NOT_AUTHENTICATED" }); return; }
+        const body = (req.body ?? {}) as Record<string, unknown>;
+        if (!requireReasonAndKey(body, res)) return;
+        const { idempotencyKey, reason, ...fields } = body;
+        const result = await executeAiCommand(await aiDeps(), { ...operatorParams(ctx), routeId: route.id, pathParams: req.params, fields, reason, idempotencyKey });
+        res.status(200).json({ operation: result.operation, replay: result.replay });
+      } catch (err) {
+        if (aiErrorResponse(err, res)) return;
+        next(err);
+      }
+    });
+  }
+
   router.get("/payment-adapters", requireScope("payments.adapters.read", deps.auditSink), async (req, res, next) => {
     try {
       const ctx = req.operatorContext;
@@ -2257,6 +2454,7 @@ export function createManagementRouter(deps: ManagementRouterDeps): Router {
       Object.values(IDENTITY_R3_ACTIONS).find((entry) => entry.action === approval.requestedAction)?.scope ??
       Object.values(CREDENTIAL_R3_ACTIONS).find((entry) => entry.action === approval.requestedAction)?.scope ??
       paymentAdapterApprovalScope(approval) ??
+      aiApprovalScope(approval) ??
       (isGlobalConfigRestoreApproval(approval) ? "global_config.restore.apply" : undefined)
     );
   }
@@ -2341,6 +2539,13 @@ export function createManagementRouter(deps: ManagementRouterDeps): Router {
           res.status(200).json({ operation: restoreResult.operation, restoreOperation: restoreResult.restoreOperation, approval: restoreResult.approval, replay: restoreResult.replay });
           return;
         }
+        if (isAiApproval(current)) {
+          // 1A.15 — AI approvals bind their safe diff; execution re-reads the owner's current facts and refuses
+          // (before consuming the approval) if they moved. Nothing but the idempotency key comes from the executor.
+          const aiResult = await executeAiApproval({ ...approvalDeps, fetchImpl: deps.fetchImpl }, executeParams);
+          res.status(200).json({ operation: aiResult.operation, approval: aiResult.approval, replay: aiResult.replay });
+          return;
+        }
         if (isPaymentAdapterApproval(current)) {
           // 1A.14 — adapter approvals bind their whole safe diff; nothing is
           // accepted from the executor beyond the idempotency key.
@@ -2359,6 +2564,7 @@ export function createManagementRouter(deps: ManagementRouterDeps): Router {
         res.status(200).json({ operation: result.operation, approval: result.approval, replay: result.replay });
       } catch (err) {
         if (approvalErrorResponse(err, res)) return;
+        if (aiErrorResponse(err, res)) return;
         if (err instanceof UnexpectedManagementApiResponseError || err instanceof ManagementApiUnreachableError) { res.status(502).json({ error: "MANAGEMENT_API_UPSTREAM_ERROR", message: err.message }); return; }
         if (err instanceof ManagementOperationError) { res.status(err.httpStatus).json({ error: err.code, message: err.message }); return; }
         next(err);

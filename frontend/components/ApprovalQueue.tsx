@@ -40,6 +40,7 @@ export function ApprovalQueue({
   refreshKey,
   onExecuted,
   renderSummary,
+  canExecute,
 }: {
   request: (path: string, init?: RequestInit) => Promise<Response>;
   stepUp: (returnTo?: string) => void;
@@ -49,6 +50,8 @@ export function ApprovalQueue({
   refreshKey?: number;
   onExecuted?: (body: Record<string, unknown>) => void;
   renderSummary?: (approval: ApprovalRecord) => React.ReactNode;
+  /** Narrows who is offered Execute (AI approvals: only the maker or the checker — the owner refuses anyone else). */
+  canExecute?: (approval: ApprovalRecord) => boolean;
 }) {
   const [approvals, setApprovals] = useState<ApprovalRecord[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -144,10 +147,13 @@ export function ApprovalQueue({
               {a.status === "pending" && ownRequest && (
                 <span className="overlay-note" style={{ marginTop: 0 }}>Waiting on a different operator — you cannot approve your own request.</span>
               )}
-              {a.status === "approved" && (
+              {a.status === "approved" && (canExecute ? canExecute(a) : true) && (
                 <button className="btn btn-primary" style={{ fontSize: "0.8rem" }} disabled={busy === a.approvalId} onClick={() => act(a, "execute")}>
                   {busy === a.approvalId ? "Executing…" : "Execute"}
                 </button>
+              )}
+              {a.status === "approved" && canExecute && !canExecute(a) && (
+                <span className="overlay-note" style={{ marginTop: 0 }}>Approved — only the operator who requested it or the one who approved it can execute it.</span>
               )}
             </div>
           </div>
