@@ -303,7 +303,7 @@ describe("DTOs Governance consumes exist in the owner's published examples", () 
     for (const pool of managed.pools) {
       expect(pool).toEqual(expect.objectContaining({ poolKey: expect.any(String), credentialReady: expect.any(Boolean), runtimeReady: expect.any(Boolean), runtimeSource: expect.any(String) }));
       for (const credential of [...pool.environmentCredentials, ...pool.managedCredentials]) {
-        expect(credential.credentialTag).toMatch(/^[0-9a-f]{24}$/);
+        expect(credential.credentialTag).toMatch(/^sample-credential-tag-\d{2}$/);
         expect(findSecretShapedField(credential)).toBeNull();
       }
     }
