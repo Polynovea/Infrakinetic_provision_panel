@@ -146,6 +146,7 @@ function uniqueSorted(values: (string | null | undefined)[]): string[] {
 }
 
 const ALL = "__all__";
+const DEFAULT_KIND = "customer";
 
 export default function TenantsPage() {
   const { request, operator, stepUp } = useOperatorSession();
@@ -159,7 +160,7 @@ export default function TenantsPage() {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState(ALL);
   const [planFilter, setPlanFilter] = useState(ALL);
-  const [kindFilter, setKindFilter] = useState(ALL);
+  const [kindFilter, setKindFilter] = useState(DEFAULT_KIND);
   const [countryFilter, setCountryFilter] = useState(ALL);
   const [showArchived, setShowArchived] = useState(false);
 
@@ -213,15 +214,20 @@ export default function TenantsPage() {
 
   const counts = useMemo(() => {
     if (!tenants) return null;
-    const archived = tenants.filter((t) => t.platform_access_state === "decommissioned").length;
+    const scoped = tenants.filter((t) => {
+      if (kindFilter !== ALL && t.tenant_kind !== kindFilter) return false;
+      if (!showArchived && t.platform_access_state === "decommissioned") return false;
+      return true;
+    });
+    const archived = scoped.filter((t) => t.platform_access_state === "decommissioned").length;
     return {
-      total: tenants.length,
-      operational: tenants.length - archived,
+      total: scoped.length,
+      operational: scoped.length - archived,
       archived,
-      active: tenants.filter((t) => t.platform_access_state === "active").length,
-      suspended: tenants.filter((t) => t.platform_access_state === "suspended").length,
+      active: scoped.filter((t) => t.platform_access_state === "active").length,
+      suspended: scoped.filter((t) => t.platform_access_state === "suspended").length,
     };
-  }, [tenants]);
+  }, [tenants, kindFilter, showArchived]);
 
   const statuses = useMemo(() => uniqueSorted((tenants ?? []).map((t) => t.status)), [tenants]);
   const plans = useMemo(() => uniqueSorted((tenants ?? []).map((t) => t.plan)), [tenants]);
@@ -242,13 +248,13 @@ export default function TenantsPage() {
     });
   }, [tenants, search, statusFilter, planFilter, kindFilter, countryFilter, showArchived]);
 
-  const filtersActive = statusFilter !== ALL || planFilter !== ALL || kindFilter !== ALL || countryFilter !== ALL || search.trim() !== "" || showArchived;
+  const filtersActive = statusFilter !== ALL || planFilter !== ALL || kindFilter !== DEFAULT_KIND || countryFilter !== ALL || search.trim() !== "" || showArchived;
 
   function clearFilters() {
     setSearch("");
     setStatusFilter(ALL);
     setPlanFilter(ALL);
-    setKindFilter(ALL);
+    setKindFilter(DEFAULT_KIND);
     setCountryFilter(ALL);
     setShowArchived(false);
   }
