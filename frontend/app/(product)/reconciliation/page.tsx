@@ -261,6 +261,12 @@ interface DriftLifecycleMismatch {
   observedPlatformAccessState: string;
 }
 
+interface TenantDirectoryEntry {
+  id: string;
+  name: string;
+  slug: string;
+}
+
 interface ListDriftResult {
   observedAt: string;
   projectionMissing: DriftProjectionMissing[];
@@ -282,30 +288,50 @@ function formatAge(ageSeconds: number): string {
   return `${Math.floor(hours / 24)}d`;
 }
 
+function humanize(value: string): string {
+  return value.replace(/[._-]+/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function shortId(value: string | undefined): string {
+  if (!value) return "—";
+  return value.length > 13 ? `${value.slice(0, 8)}…${value.slice(-4)}` : value;
+}
+
 export default function ReconciliationPage() {
   const { request, operator } = useOperatorSession();
   const [drift, setDrift] = useState<ListDriftResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [tenantDirectory, setTenantDirectory] = useState<Record<string, TenantDirectoryEntry>>({});
 
   const canRead = operator?.scopes.includes("runtime.read") ?? false;
   const canCommission = operator?.scopes.includes("tenants.commission") ?? false;
   const [repairTarget, setRepairTarget] = useState<string | null>(null);
 
-  const load = useCallback(() => {
+  const load = useCallback(async () => {
     setError(null);
     setLoading(true);
-    return request("/management/v1/reconciliation/drift")
-      .then(async (res) => {
-        const body = await res.json();
-        if (!res.ok) {
-          setError(body.message ?? body.error ?? "Could not load reconciliation drift.");
-          return;
-        }
-        setDrift(body);
-      })
-      .catch(() => setError("Could not load reconciliation drift."))
-      .finally(() => setLoading(false));
+    try {
+      const [driftRes, tenantsRes] = await Promise.all([
+        request("/management/v1/reconciliation/drift"),
+        request("/management/v1/tenants"),
+      ]);
+      const body = await driftRes.json();
+      if (!driftRes.ok) {
+        setError(body.message ?? body.error ?? "Could not load tenant health.");
+        return;
+      }
+      setDrift(body);
+      if (tenantsRes.ok) {
+        const tenantBody = await tenantsRes.json() as { tenants?: TenantDirectoryEntry[] };
+        const entries = tenantBody.tenants ?? [];
+        setTenantDirectory(Object.fromEntries(entries.map((tenant) => [tenant.id, tenant])));
+      }
+    } catch {
+      setError("Could not load tenant health.");
+    } finally {
+      setLoading(false);
+    }
   }, [request]);
 
   useEffect(() => {
@@ -313,13 +339,24 @@ export default function ReconciliationPage() {
     void load();
   }, [load, canRead]);
 
+  const tenantLink = (tenantId: string | undefined) => {
+    if (!tenantId) return <span>—</span>;
+    const tenant = tenantDirectory[tenantId];
+    return (
+      <a href={`/tenants?tenant=${encodeURIComponent(tenantId)}`} style={{ color: "inherit", textDecoration: "none" }} title={tenantId}>
+        <strong>{tenant?.name ?? "Unknown tenant"}</strong>
+        <div className="overlay-note" style={{ marginTop: 0 }}>{tenant?.slug ?? shortId(tenantId)}</div>
+      </a>
+    );
+  };
+
   if (!canRead) {
     return (
       <>
         <div className="page-header">
-          <h1 className="text-display">Reconciliation</h1>
+          <h1 className="text-display">Tenant health</h1>
         </div>
-        <EmptyState label="You do not have the runtime.read scope required to view reconciliation drift." icon="lock" />
+        <EmptyState label="You do not have permission to view tenant health." icon="lock" />
       </>
     );
   }
@@ -336,8 +373,8 @@ export default function ReconciliationPage() {
     <>
       <div className="page-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: "0.75rem" }}>
         <div>
-          <h1 className="text-display">Reconciliation</h1>
-          <p>{drift ? `Last observed ${formatDate(drift.observedAt)}` : "Desired, provisioned, and effective state drift across the platform."}</p>
+          <h1 className="text-display">Tenant health</h1>
+          <p>{drift ? `Last observed ${formatDate(drift.observedAt)}` : "Tenant access and control-plane consistency across the fleet."}</p>
         </div>
         <button className="btn" onClick={() => void load()} disabled={loading}>
           <Icon name="refresh" size="sm" /> {loading ? "Refreshing…" : "Refresh"}
@@ -372,11 +409,10 @@ export default function ReconciliationPage() {
           {drift.projectionMissing.length > 0 && (
             <section style={{ marginBottom: "1.5rem" }}>
               <h3 className="text-subhead" style={{ marginBottom: "0.6rem" }}>
-                Missing projections ({drift.projectionMissing.length})
+                Missing control records ({drift.projectionMissing.length})
               </h3>
               <p className="overlay-note" style={{ margin: "0 0 0.6rem" }}>
-                Customer tenants Infrakinetic reports that have no Governance-owned commissioned_tenants row yet. Open the tenant on the
-                Tenants page and use &ldquo;Recheck&rdquo; to create one.
+                Customer tenants that are missing their Governance control record. Open the tenant and run a health recheck to rebuild the projection safely.
               </p>
               <div className="card" style={{ padding: 0, overflowX: "auto" }}>
                 <table className="data-table">
@@ -384,7 +420,7 @@ export default function ReconciliationPage() {
                     <tr>
                       <th>Tenant</th>
                       <th>Platform access state</th>
-                      <th>Tenant ID</th>
+                      <th>Technical ID</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -404,11 +440,10 @@ export default function ReconciliationPage() {
           {drift.stuckOperations.length > 0 && (
             <section style={{ marginBottom: "1.5rem" }}>
               <h3 className="text-subhead" style={{ marginBottom: "0.6rem" }}>
-                Stuck operations ({drift.stuckOperations.length})
+                Operations needing recovery ({drift.stuckOperations.length})
               </h3>
               <p className="overlay-note" style={{ margin: "0 0 0.6rem" }}>
-                Operations left partially_completed, or stranded in submitted/accepted/running long past their start, classified by cause.
-                They are resolved from the owner&rsquo;s durable receipt via the tenant&rsquo;s &ldquo;Recheck&rdquo; action — never by resending.
+                Control operations that did not reach a clean terminal state. Recovery uses durable owner receipts and never blindly repeats a mutation.
               </p>
               <div className="card" style={{ padding: 0, overflowX: "auto" }}>
                 <table className="data-table">
@@ -416,28 +451,28 @@ export default function ReconciliationPage() {
                     <tr>
                       <th>Action</th>
                       <th>Class</th>
-                      <th>Target tenant</th>
+                      <th>Tenant</th>
                       <th>Target engine</th>
-                      <th>Commission request</th>
+                      <th>Recovery reference</th>
                       <th></th>
                     </tr>
                   </thead>
                   <tbody>
                     {drift.stuckOperations.map((op) => (
                       <tr key={op.operationId}>
-                        <td>{op.requestedAction}</td>
+                        <td>{humanize(op.requestedAction)}</td>
                         <td>
-                          <StatusBadge value={op.class} />
+                          <StatusBadge value={humanize(op.class)} />
                         </td>
-                        <td style={{ fontFamily: "monospace", fontSize: "0.8rem" }}>{op.targetTenantId ?? "—"}</td>
+                        <td>{tenantLink(op.targetTenantId)}</td>
                         <td>{op.targetEngine ?? "—"}</td>
                         <td style={{ fontFamily: "monospace", fontSize: "0.8rem" }}>
-                          {isCommissionRepairCandidate(op) ? op.targetResourceId : "—"}
+                          {isCommissionRepairCandidate(op) ? <span title={op.targetResourceId}>{shortId(op.targetResourceId)}</span> : "—"}
                         </td>
                         <td>
                           {canCommission && isCommissionRepairCandidate(op) && (
                             <button className="btn" style={{ fontSize: "0.8rem" }} onClick={() => setRepairTarget(op.targetResourceId ?? null)}>
-                              <Icon name="build" size="sm" /> Repair
+                              <Icon name="build" size="sm" /> Resume commissioning
                             </button>
                           )}
                         </td>
@@ -452,7 +487,7 @@ export default function ReconciliationPage() {
           {drift.staleObservations.length > 0 && (
             <section style={{ marginBottom: "1.5rem" }}>
               <h3 className="text-subhead" style={{ marginBottom: "0.6rem" }}>
-                Stale observations ({drift.staleObservations.length})
+                Stale tenant checks ({drift.staleObservations.length})
               </h3>
               <div className="card" style={{ padding: 0, overflowX: "auto" }}>
                 <table className="data-table">
@@ -466,7 +501,7 @@ export default function ReconciliationPage() {
                   <tbody>
                     {drift.staleObservations.map((s) => (
                       <tr key={s.tenantId}>
-                        <td style={{ fontFamily: "monospace", fontSize: "0.8rem" }}>{s.tenantId}</td>
+                        <td>{tenantLink(s.tenantId)}</td>
                         <td>{formatDate(s.lastObservedAt)}</td>
                         <td>{formatAge(s.ageSeconds)}</td>
                       </tr>
@@ -480,11 +515,10 @@ export default function ReconciliationPage() {
           {(drift.lifecycleMismatch?.length ?? 0) > 0 && (
             <section style={{ marginBottom: "1.5rem" }}>
               <h3 className="text-subhead" style={{ marginBottom: "0.6rem" }}>
-                Lifecycle drift ({drift.lifecycleMismatch?.length})
+                Access-state mismatch ({drift.lifecycleMismatch?.length})
               </h3>
               <p className="overlay-note" style={{ margin: "0 0 0.6rem" }}>
-                Governance&rsquo;s desired lifecycle disagrees with Infrakinetic&rsquo;s live access state. Surfaced only: owner truth is not
-                rewritten into desired state automatically — converge it with a lifecycle request or a commission repair.
+                The expected tenant access state differs from the live state. This is surfaced for review rather than silently overwritten.
               </p>
               <div className="card" style={{ padding: 0, overflowX: "auto" }}>
                 <table className="data-table">
@@ -492,13 +526,13 @@ export default function ReconciliationPage() {
                     <tr>
                       <th>Tenant ID</th>
                       <th>Desired (Governance)</th>
-                      <th>Observed (Infrakinetic)</th>
+                      <th>Live access</th>
                     </tr>
                   </thead>
                   <tbody>
                     {drift.lifecycleMismatch?.map((m) => (
                       <tr key={m.tenantId}>
-                        <td style={{ fontFamily: "monospace", fontSize: "0.8rem" }}>{m.tenantId}</td>
+                        <td>{tenantLink(m.tenantId)}</td>
                         <td>
                           <StatusBadge value={m.projectionLifecycleState} />
                         </td>
@@ -516,10 +550,10 @@ export default function ReconciliationPage() {
           {drift.desiredProvisionedMismatch.length > 0 && (
             <section style={{ marginBottom: "1.5rem" }}>
               <h3 className="text-subhead" style={{ marginBottom: "0.6rem" }}>
-                Desired / provisioned mismatches ({drift.desiredProvisionedMismatch.length})
+                Configuration mismatches ({drift.desiredProvisionedMismatch.length})
               </h3>
               <p className="overlay-note" style={{ margin: "0 0 0.6rem" }}>
-                Surfaced only — neither system currently exposes a write path to change these fields after commissioning.
+                These settings differ between Governance intent and provisioned state. They are shown for review and are not auto-mutated.
               </p>
               <div className="card" style={{ padding: 0, overflowX: "auto" }}>
                 <table className="data-table">
@@ -534,8 +568,8 @@ export default function ReconciliationPage() {
                   <tbody>
                     {drift.desiredProvisionedMismatch.map((m, i) => (
                       <tr key={`${m.tenantId}-${m.field}-${i}`}>
-                        <td style={{ fontFamily: "monospace", fontSize: "0.8rem" }}>{m.tenantId}</td>
-                        <td>{m.field}</td>
+                        <td>{tenantLink(m.tenantId)}</td>
+                        <td>{humanize(m.field)}</td>
                         <td>{m.desired}</td>
                         <td>{m.provisioned}</td>
                       </tr>

@@ -70,6 +70,7 @@ const COMPILED = AI_CONTRACT.routes.map((route) => ({ route, ...compile(route) }
 export function createFakeOwner(options: FakeOwnerOptions = {}): FakeOwner {
   const state = clone(examples.TenantAiState) as Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
   const catalog = clone(examples.AiCatalog) as Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
+  const managed = clone(examples.AiManagedCredentialPools) as Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
   const receipts = new Map<string, Record<string, unknown>>();
   const calls: OwnerCall[] = [];
   const owner: FakeOwner = { calls, mutations: () => calls.filter((call) => call.method !== "GET"), state, catalog, receipts, fetchImpl: undefined as never, options };
@@ -116,6 +117,26 @@ export function createFakeOwner(options: FakeOwnerOptions = {}): FakeOwner {
         result.credential = { refId: params.refId, providerKey: "nvidia_nim_byo", version: 1, status: "revoked", maskedHint: "…abcd", createdAt: "2026-01-01T00:00:00.000Z", revokedAt: "2026-02-01T00:00:00.000Z" };
         break;
       }
+      case "managed-credential.add": {
+        const pool = managed.pools.find((p: any) => p.poolKey === params.poolKey); // eslint-disable-line @typescript-eslint/no-explicit-any
+        const credential = { credentialId: "00000000-0000-4000-8000-000000000099", version: 1, poolKey: params.poolKey, label: body.label, status: "active", source: "managed_db", maskedHint: "••••test", credentialTag: "a".repeat(24), createdAt: "2026-02-01T00:00:00.000Z", supersededAt: null, revokedAt: null, sharedWithPools: [], usage30d: { attempts: 0, requests: 0, successes: 0, failures: 0, rateLimited: 0, totalTokens: 0, estimatedCost: 0, currency: null, lastAttemptAt: null, lastSuccessAt: null } };
+        pool.managedCredentials.push(credential); result.credentialId = credential.credentialId; result.label = body.label; result.status = "active"; break;
+      }
+      case "managed-credential.rotate": {
+        const pool = managed.pools.find((p: any) => p.poolKey === params.poolKey); // eslint-disable-line @typescript-eslint/no-explicit-any
+        const credential = pool.managedCredentials.find((c: any) => c.credentialId === params.credentialId); // eslint-disable-line @typescript-eslint/no-explicit-any
+        if (credential) credential.version = Number(credential.version ?? 1) + 1; result.credentialId = params.credentialId; result.status = "active"; break;
+      }
+      case "managed-credential.status.set": {
+        const pool = managed.pools.find((p: any) => p.poolKey === params.poolKey); // eslint-disable-line @typescript-eslint/no-explicit-any
+        let credential = pool.managedCredentials.find((c: any) => c.credentialId === params.credentialId); // eslint-disable-line @typescript-eslint/no-explicit-any
+        if (!credential) { credential = { credentialId: params.credentialId, version: 1, poolKey: params.poolKey, label: "Managed credential", status: "active", source: "managed_db", maskedHint: "••••test", credentialTag: "b".repeat(24), createdAt: "2026-02-01T00:00:00.000Z", supersededAt: null, revokedAt: null, sharedWithPools: [], usage30d: { attempts: 0, requests: 0, successes: 0, failures: 0, rateLimited: 0, totalTokens: 0, estimatedCost: 0, currency: null, lastAttemptAt: null, lastSuccessAt: null } }; pool.managedCredentials.push(credential); }
+        credential.status = body.status; result.credentialId = params.credentialId; result.status = body.status; break;
+      }
+      case "managed-credential.pool-source.set": {
+        const pool = managed.pools.find((p: any) => p.poolKey === params.poolKey); // eslint-disable-line @typescript-eslint/no-explicit-any
+        if (pool) pool.runtimeSource = body.source; result.poolKey = params.poolKey; result.runtimeSource = body.source; break;
+      }
       case "tenant.model-policy.set": result.decision = body.decision; break;
       default: break;
     }
@@ -142,6 +163,7 @@ export function createFakeOwner(options: FakeOwnerOptions = {}): FakeOwner {
     if (route.kind === "read") {
       if (route.id === "tenant.state.read") return options.stateStatus && options.stateStatus !== 200 ? json(options.stateStatus, { error: "FAIL" }) : json(200, { ...clone(state), tenantId: params.tenantId });
       if (route.id === "catalog.read") return json(200, clone(catalog));
+      if (route.id === "managed-credentials.read") return json(200, clone(managed));
       if (route.id === "tenant.credentials.read") return json(200, { tenantId: params.tenantId, credentials: clone(state.credentialRefs), observedAt: "2026-02-01T00:00:00.000Z", source: "infrakinetic-live", freshness: "live" });
       if (route.id === "admin-command.read") {
         const receipt = receipts.get(params.idempotencyKey);
@@ -194,7 +216,7 @@ export async function aiDeps(ledger: ManagementOperationLedger, owner: FakeOwner
   };
 }
 
-export const AI_SCOPES = ["ai.read", "ai.entitlement.write", "ai.quota.write", "ai.provider_policy.write", "ai.emergency_suspend", "credentials.revoke", "finops.policy.write"];
+export const AI_SCOPES = ["ai.read", "ai.entitlement.write", "ai.quota.write", "ai.provider_policy.write", "ai.emergency_suspend", "ai.credentials.manage", "credentials.revoke", "finops.policy.write"];
 
 export const operator = (operatorId = OPERATOR, scopes: readonly string[] = AI_SCOPES) => ({
   operatorId, operatorSessionId: SESSION, operatorRoles: ["platform_admin"], operatorGrantedScopes: scopes,

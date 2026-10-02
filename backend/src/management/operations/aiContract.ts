@@ -58,6 +58,8 @@ export interface AiContractRoute {
   response?: string;
   registeredBy?: string;
   query?: Record<string, unknown>;
+  /** Request fields that may transit to the owner but must never be persisted by Governance. */
+  sensitiveFields?: string[];
 }
 
 export interface AiSchemaVector { routeId: string; name: string; body: unknown; valid: boolean }

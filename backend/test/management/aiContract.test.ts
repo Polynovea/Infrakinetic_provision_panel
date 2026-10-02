@@ -20,7 +20,7 @@ import { ROLE_SCOPE_CEILING, SCOPES, isScope } from "../../src/identity/roles.js
 //   - every contract route is implemented by a Governance operation/route (a new owner route fails here),
 //   - risk, scope, approval, step-up and role-ceiling expectations are the approved ones,
 //   - the DTO fields Governance CONSUMES exist in the owner's published examples,
-//   - BYOAI is safe metadata + revoke only.
+//   - tenant BYOAI is safe metadata + revoke only; platform-managed credentials use the dedicated root scope.
 // The live agreement (Governance operations against the owner's real router) is certified separately.
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -43,7 +43,7 @@ describe("the contract copy is the one the owner published", () => {
   });
 
   it("declares the version Governance was written against, for the examples too", () => {
-    expect(AI_CONTRACT_VERSION).toBe("ai-management/v1");
+    expect(AI_CONTRACT_VERSION).toBe("ai-management/v2");
     expect((examplesJson as { contractVersion: string }).contractVersion).toBe(AI_CONTRACT_VERSION);
   });
 
@@ -84,7 +84,7 @@ describe("Governance's validator agrees with the owner's on every recorded schem
 
 describe("every contract route is implemented by Governance", () => {
   // Reads are served by aiQuery.ts / routes; the preview by previewCommissioningMode; the rest by executeAiCommand / the approval pair.
-  const READS = ["tenant.state.read", "fleet.summary.read", "catalog.read", "tenant.credentials.read", "metering-exceptions.read", "reconciliation.read", "admin-command.read"];
+  const READS = ["tenant.state.read", "fleet.summary.read", "catalog.read", "tenant.credentials.read", "managed-credentials.read", "metering-exceptions.read", "reconciliation.read", "admin-command.read"];
   const PREVIEW = ["tenant.commissioning-mode.preview"];
 
   it("a route added to the owner contract without a Governance implementation fails here", () => {
@@ -120,6 +120,10 @@ const APPROVED: Record<string, Expectation> = {
   "tenant.suspend": { risk: "R4", scope: "ai.emergency_suspend", approval: "none", stepUp: true, method: "POST" },
   "tenant.resume": { risk: "R3", scope: "ai.emergency_suspend", approval: "maker_checker", method: "POST" },
   "tenant.credential.revoke": { risk: "R2", scope: "credentials.revoke", approval: "none", method: "POST" },
+  "managed-credential.add": { risk: "R2", scope: "ai.credentials.manage", approval: "none", method: "POST" },
+  "managed-credential.rotate": { risk: "R2", scope: "ai.credentials.manage", approval: "none", method: "POST" },
+  "managed-credential.status.set": { risk: "R2", scope: "ai.credentials.manage", approval: "none", method: "PUT" },
+  "managed-credential.pool-source.set": { risk: "R3", scope: "ai.credentials.manage", approval: "maker_checker", method: "PUT" },
   "metering-exception.resolve": { risk: "R1", scope: "ai.quota.write", approval: "none", method: "POST" },
   "reconciliation.line.resolve": { risk: "R1", scope: "finops.policy.write", approval: "none", method: "POST" },
 };
@@ -147,8 +151,8 @@ describe("risk classes, scopes, approvals and step-up are the approved ones", ()
     }
   });
 
-  it("R3 is exactly the maker-checker set: resume, model lifecycle, model certification", () => {
-    expect(AI_CONTRACT.r3Actions.slice().sort()).toEqual(["ai.model.certification.set", "ai.model.lifecycle.set", "ai.tenant.emergency.resume"]);
+  it("R3 is exactly the maker-checker set: resume, model lifecycle/certification and managed-pool source cutover", () => {
+    expect(AI_CONTRACT.r3Actions.slice().sort()).toEqual(["ai.managed-credential.pool-source.set", "ai.model.certification.set", "ai.model.lifecycle.set", "ai.tenant.emergency.resume"]);
     expect(AI_APPROVAL_ROUTES.map((route) => route.action).sort()).toEqual(AI_CONTRACT.r3Actions.slice().sort());
     for (const route of AI_CONTRACT.routes.filter((r) => r.kind === "mutation")) {
       expect(route.approval === "maker_checker", route.id).toBe(route.risk === "R3");
@@ -181,6 +185,7 @@ describe("risk classes, scopes, approvals and step-up are the approved ones", ()
     expect(holders("ai.provider_policy.write")).toEqual(["break_glass", "platform_admin"]);
     expect(holders("ai.quota.write")).toEqual(["break_glass", "finops_operator", "platform_admin"]);
     expect(holders("ai.emergency_suspend")).toEqual(["break_glass", "platform_admin", "security_operator"]);
+    expect(holders("ai.credentials.manage")).toEqual(["break_glass", "platform_admin"]);
     expect(holders("credentials.revoke")).toEqual(["break_glass", "platform_admin", "security_operator"]);
     expect(holders("finops.policy.write")).toEqual(["break_glass", "finops_operator", "platform_admin"]);
     expect(holders("ai.read")).toEqual(["break_glass", "finops_operator", "platform_admin", "platform_operator", "platform_viewer", "security_operator"]);
@@ -215,7 +220,7 @@ describe("addressing: path, target binding and tenant claim", () => {
 
   it("global (non-tenant) commands carry no tenant claim", () => {
     for (const route of AI_CONTRACT.routes.filter((r: AiContractRoute) => r.binding.tenant === null)) {
-      expect(resolveTarget(route, { providerKey: "p", modelId: "m", exceptionId: "e", reconciliationId: "r" }).targetTenantId, route.id).toBeUndefined();
+      expect(resolveTarget(route, { providerKey: "p", modelId: "m", exceptionId: "e", reconciliationId: "r", poolKey: "nvidia_nim", credentialId: "00000000-0000-4000-8000-000000000099" }).targetTenantId, route.id).toBeUndefined();
     }
   });
 });
@@ -283,11 +288,25 @@ describe("DTOs Governance consumes exist in the owner's published examples", () 
     for (const credential of examples.AiCredentialMetadata.credentials) expect((credential.maskedHint as string).length).toBeLessThanOrEqual(8);
   });
 
-  it("BYOAI has no operator route beyond the metadata read and revoke", () => {
-    const routes = AI_CONTRACT.routes.filter((route) => /credential/i.test(route.id + route.path));
-    expect(routes.map((route) => `${route.method} ${route.path}`).sort()).toEqual(["GET /ai/tenants/:tenantId/credentials", "POST /ai/tenants/:tenantId/credentials/:refId/revoke"]);
+  it("tenant BYOAI has no operator route beyond metadata read and revoke; managed platform keys stay separate", () => {
+    const tenantCredentialRoutes = AI_CONTRACT.routes.filter((route) => route.path.includes("/ai/tenants/") && route.path.includes("/credentials"));
+    expect(tenantCredentialRoutes.map((route) => `${route.method} ${route.path}`).sort()).toEqual(["GET /ai/tenants/:tenantId/credentials", "POST /ai/tenants/:tenantId/credentials/:refId/revoke"]);
     expect(Object.keys(aiRoute("tenant.credential.revoke").requestSchema!.properties!).sort()).toEqual(["idempotencyKey", "reason"]);
-    expect(JSON.stringify(AI_CONTRACT.routes)).not.toMatch(/submit|rotate|decrypt|apiKey|secretValue|plaintext|ciphertext/i);
+    expect(JSON.stringify(tenantCredentialRoutes)).not.toMatch(/submit|rotate|decrypt|apiKey|secretValue|plaintext|ciphertext/i);
+    expect(aiRoute("managed-credential.add").sensitiveFields).toEqual(["secret"]);
+    expect(aiRoute("managed-credential.rotate").sensitiveFields).toEqual(["secret"]);
+  });
+
+  it("managed provider credential examples expose readiness and opaque tags, never secret-shaped fields", () => {
+    const managed = examples.AiManagedCredentialPools;
+    expect(managed.pools.length).toBeGreaterThan(0);
+    for (const pool of managed.pools) {
+      expect(pool).toEqual(expect.objectContaining({ poolKey: expect.any(String), credentialReady: expect.any(Boolean), runtimeReady: expect.any(Boolean), runtimeSource: expect.any(String) }));
+      for (const credential of [...pool.environmentCredentials, ...pool.managedCredentials]) {
+        expect(credential.credentialTag).toMatch(/^[0-9a-f]{24}$/);
+        expect(findSecretShapedField(credential)).toBeNull();
+      }
+    }
   });
 
   it("reconciliation DTOs carry statements, lines and the resolution state Governance filters on", () => {

@@ -26,6 +26,7 @@ import {
 import {
   getAiAdminCommandReceipt,
   getAiCatalog,
+  getManagedAiCredentials,
   getTenantAiCredentials,
   findSecretShapedField,
   getTenantAiState,
@@ -274,6 +275,21 @@ const OBSERVERS: Record<string, (ctx: ObserveContext) => Promise<AiObservation>>
     const metadata = await getTenantAiCredentials(ctx.deps, { ...ctx.operator, tenantId: tenantOf(ctx) });
     return compare("credentials", "revoked", metadata.credentials.find((entry) => entry.refId === ctx.pathParams.refId)?.status ?? null);
   },
+  "managed-credential.add": async (ctx) => {
+    const inventory = await getManagedAiCredentials(ctx.deps, ctx.operator);
+    const pool = inventory.pools.find((entry) => entry.poolKey === ctx.pathParams.poolKey);
+    return compare("credentials", true, Boolean(pool?.managedCredentials.some((entry) => entry.label === ctx.fields.label && entry.status === "active")));
+  },
+  "managed-credential.rotate": (ctx) => observeReceipt(ctx),
+  "managed-credential.status.set": async (ctx) => {
+    const inventory = await getManagedAiCredentials(ctx.deps, ctx.operator);
+    const pool = inventory.pools.find((entry) => entry.poolKey === ctx.pathParams.poolKey);
+    return compare("credentials", ctx.fields.status, pool?.managedCredentials.find((entry) => entry.credentialId === ctx.pathParams.credentialId)?.status ?? null);
+  },
+  "managed-credential.pool-source.set": async (ctx) => {
+    const inventory = await getManagedAiCredentials(ctx.deps, ctx.operator);
+    return compare("credentials", ctx.fields.source, inventory.pools.find((entry) => entry.poolKey === ctx.pathParams.poolKey)?.runtimeSource ?? null);
+  },
   "provider.state.set": async (ctx) => {
     const catalog = await getAiCatalog(ctx.deps, ctx.operator);
     return compare("catalog", ctx.fields.status, catalog.providers.find((entry) => entry.providerKey === ctx.pathParams.providerKey)?.status ?? null);
@@ -366,6 +382,19 @@ function evidenceSafe(body: unknown): unknown {
   return body;
 }
 
+function persistenceSafeFields(route: AiContractRoute, fields: Record<string, unknown>): Record<string, unknown> {
+  const safe = { ...fields };
+  for (const field of route.sensitiveFields ?? []) {
+    if (!(field in safe)) continue;
+    const value = safe[field];
+    safe[field] = {
+      redacted: true,
+      materialDigest: computeSafePayloadHash({ requestedAction: `sensitive:${route.id}:${field}`, payload: value }),
+    };
+  }
+  return safe;
+}
+
 async function runAiCommand(deps: AiOperationDeps, ctx: RunContext): Promise<AiOperationResult> {
   const { route } = ctx;
   // Defence in depth behind the route's requireScope: an operator without the command's scope reserves no key,
@@ -382,6 +411,7 @@ async function runAiCommand(deps: AiOperationDeps, ctx: RunContext): Promise<AiO
   const risk = effectiveRisk(route, fields);
   const correlationId = ctx.correlationId ?? randomUUID();
 
+  const persistedFields = persistenceSafeFields(route, fields);
   const { operation: submitted, replay } = await deps.ledger.createOrReplayOperation({
     idempotencyKey: ctx.idempotencyKey,
     operatorId: ctx.operatorId,
@@ -393,7 +423,7 @@ async function runAiCommand(deps: AiOperationDeps, ctx: RunContext): Promise<AiO
     reason: ctx.reason,
     riskClass: risk,
     approvalEvidence: ctx.approvalLedgerEvidence,
-    payload: { fields, reason: ctx.reason, ...(ctx.payloadExtra ?? {}) },
+    payload: { fields: persistedFields, reason: ctx.reason, ...(ctx.payloadExtra ?? {}) },
     contractVersion: MANAGEMENT_COMMAND_CONTRACT,
     correlationId,
     causationId: ctx.causationId,
@@ -561,6 +591,19 @@ async function summaryFor(deps: AiQueryDeps, operator: AiOperatorParams, route: 
       resumesTo: "none",
     };
   }
+  if (route.id === "managed-credential.pool-source.set") {
+    const inventory = await getManagedAiCredentials(deps, operator);
+    const pool = inventory.pools.find((entry) => entry.poolKey === pathParams.poolKey);
+    if (!pool) throw new AiOperationRefusedError("AI_MANAGED_POOL_NOT_FOUND", `The owner has no managed credential pool '${pathParams.poolKey}'`, 404);
+    if (pool.runtimeSource === fields.source) throw new AiOperationRefusedError("AI_NO_CHANGE", `The pool is already using '${pool.runtimeSource}'`, 409);
+    return {
+      poolKey: pool.poolKey, providerKey: pool.providerKey, workloadLabel: pool.workloadLabel,
+      currentSource: pool.runtimeSource, requestedSource: fields.source,
+      environmentCredentialCount: pool.environmentCredentials.length,
+      managedActiveCredentialCount: pool.managedCredentials.filter((entry) => entry.status === "active").length,
+      keyringPosture: inventory.keyringPosture, runtimeReadyAtRequest: pool.runtimeReady,
+    };
+  }
   const modelId = pathParams.modelId as string;
   const catalog = await getAiCatalog(deps, operator);
   const found = findModel(catalog, modelId);
@@ -595,6 +638,7 @@ async function summaryFor(deps: AiQueryDeps, operator: AiOperatorParams, route: 
 
 function fieldsFromSummary(route: AiContractRoute, summary: Record<string, unknown>): Record<string, unknown> {
   if (route.id === "tenant.resume") return {};
+  if (route.id === "managed-credential.pool-source.set") return { source: summary.requestedSource };
   if (route.id === "model.lifecycle.set") return { lifecycle: summary.requestedLifecycle };
   return { certification: summary.requestedCertification, evidenceRef: summary.evidenceRef };
 }
@@ -613,6 +657,25 @@ async function assertApprovedFactsStillHold(deps: AiQueryDeps, operator: AiOpera
     const current = { state: state.emergency.state, since: state.emergency.since, operationId: state.emergency.operationId };
     const approved = { state: "suspended", since: summary.suspendedSince, operationId: summary.suspendOperationId };
     if (!same(current, approved)) throw changed("emergency suspension", approved, current);
+    return;
+  }
+  if (route.id === "managed-credential.pool-source.set") {
+    const inventory = await getManagedAiCredentials(deps, operator);
+    const pool = inventory.pools.find((entry) => entry.poolKey === pathParams.poolKey);
+    if (!pool) throw new AiOperationRefusedError("AI_MANAGED_POOL_NOT_FOUND", `The owner has no managed credential pool '${pathParams.poolKey}'`, 404);
+    const current = {
+      source: pool.runtimeSource,
+      environmentCredentialCount: pool.environmentCredentials.length,
+      managedActiveCredentialCount: pool.managedCredentials.filter((entry) => entry.status === "active").length,
+      keyringPosture: inventory.keyringPosture,
+    };
+    const approved = {
+      source: summary.currentSource,
+      environmentCredentialCount: summary.environmentCredentialCount,
+      managedActiveCredentialCount: summary.managedActiveCredentialCount,
+      keyringPosture: summary.keyringPosture,
+    };
+    if (!same(current, approved)) throw changed("managed credential pool readiness", approved, current);
     return;
   }
   const found = findModel(await getAiCatalog(deps, operator), pathParams.modelId as string);
@@ -639,7 +702,11 @@ export async function executeAiApproval(deps: AiApprovalDeps, params: ExecuteAiA
   }
   const summary = approval.safeRequestSummary;
   if (!summary) throw new AiOperationRefusedError("AI_APPROVAL_SUMMARY_MISSING", "The approval carries no approved safe diff", 409);
-  const pathParams: Record<string, string> = route.id === "tenant.resume" ? { tenantId: approval.targetResourceId } : { modelId: approval.targetResourceId };
+  const pathParams: Record<string, string> = route.id === "tenant.resume"
+    ? { tenantId: approval.targetResourceId }
+    : route.id === "managed-credential.pool-source.set"
+      ? { poolKey: approval.targetResourceId }
+      : { modelId: approval.targetResourceId };
 
   // §59 replay before the single-use gate (audit remediation M5 pattern): a timeout retry of an execution that
   // already ran must return its operation, not trip over the consumed approval or the (now changed) owner state.

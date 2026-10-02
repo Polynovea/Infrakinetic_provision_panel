@@ -13,7 +13,7 @@ import { ConfirmDialog } from "./ConfirmDialog";
 //   - offers the real fresh-sign-in step-up when the backend demands it (suspend, provider narrowing, every R3 step),
 //   - reports the operation's honest outcome: verified by an independent read, refused by the owner, or
 //     outcome-uncertain (never presented as success).
-// Nothing here can carry credential material: the only BYOAI action is revoke, which has no fields.
+// Tenant BYOAI remains metadata + revoke only. Platform-managed provider keys use dedicated root routes; secret fields are single-transit and are never persisted by Governance.
 
 export const newKey = (prefix: string): string => {
   const random = typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`;

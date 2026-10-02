@@ -1,5 +1,5 @@
 {
-  "contractVersion": "ai-management/v1",
+  "contractVersion": "ai-management/v2",
   "description": "module_ai operator contract served on /management/v1 (owner: Infrakinetic). Generated from src/ai/aiManagementContract.js — do not edit.",
   "scopes": [
     "ai.read",
@@ -7,6 +7,7 @@
     "ai.quota.write",
     "ai.provider_policy.write",
     "ai.emergency_suspend",
+    "ai.credentials.manage",
     "credentials.revoke",
     "finops.policy.write"
   ],
@@ -25,13 +26,18 @@
     "MODEL_LIFECYCLE_SET": "ai.model.lifecycle.set",
     "MODEL_CERTIFICATION_SET": "ai.model.certification.set",
     "CREDENTIAL_REVOKE": "ai.credential.revoke",
+    "MANAGED_CREDENTIAL_ADD": "ai.managed-credential.add",
+    "MANAGED_CREDENTIAL_ROTATE": "ai.managed-credential.rotate",
+    "MANAGED_CREDENTIAL_STATUS_SET": "ai.managed-credential.status.set",
+    "MANAGED_CREDENTIAL_POOL_SOURCE_SET": "ai.managed-credential.pool-source.set",
     "METERING_EXCEPTION_RESOLVE": "ai.metering-exception.resolve",
     "RECONCILIATION_RESOLVE": "ai.reconciliation.resolve"
   },
   "r3Actions": [
     "ai.tenant.emergency.resume",
     "ai.model.lifecycle.set",
-    "ai.model.certification.set"
+    "ai.model.certification.set",
+    "ai.managed-credential.pool-source.set"
   ],
   "commandResultEnvelope": [
     "commandId",
@@ -254,6 +260,26 @@
         "limit": "integer"
       },
       "response": "AiReconciliation"
+    },
+    {
+      "kind": "read",
+      "risk": "R0",
+      "approval": "none",
+      "id": "managed-credentials.read",
+      "method": "GET",
+      "path": "/ai/managed-credentials",
+      "scope": "ai.read",
+      "action": "ai.managed-credentials.read",
+      "binding": {
+        "tenant": null,
+        "resource": {
+          "type": "ai_fleet",
+          "id": {
+            "constant": "ai_fleet"
+          }
+        }
+      },
+      "response": "AiManagedCredentialPools"
     },
     {
       "kind": "read",
@@ -1075,6 +1101,205 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 1000
+          }
+        }
+      }
+    },
+    {
+      "kind": "mutation",
+      "id": "managed-credential.add",
+      "method": "POST",
+      "path": "/ai/managed-credentials/:poolKey",
+      "scope": "ai.credentials.manage",
+      "action": "ai.managed-credential.add",
+      "risk": "R2",
+      "approval": "none",
+      "binding": {
+        "tenant": null,
+        "resource": {
+          "type": "ai_managed_credential_pool",
+          "id": {
+            "param": "poolKey"
+          }
+        }
+      },
+      "sensitiveFields": [
+        "secret"
+      ],
+      "requestSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "idempotencyKey",
+          "reason",
+          "label",
+          "secret"
+        ],
+        "properties": {
+          "idempotencyKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          },
+          "label": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "secret": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096
+          }
+        }
+      }
+    },
+    {
+      "kind": "mutation",
+      "id": "managed-credential.rotate",
+      "method": "POST",
+      "path": "/ai/managed-credentials/:poolKey/:credentialId/rotate",
+      "scope": "ai.credentials.manage",
+      "action": "ai.managed-credential.rotate",
+      "risk": "R2",
+      "approval": "none",
+      "binding": {
+        "tenant": null,
+        "resource": {
+          "type": "ai_managed_credential",
+          "id": {
+            "param": "credentialId"
+          }
+        }
+      },
+      "sensitiveFields": [
+        "secret"
+      ],
+      "requestSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "idempotencyKey",
+          "reason",
+          "secret"
+        ],
+        "properties": {
+          "idempotencyKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          },
+          "secret": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096
+          }
+        }
+      }
+    },
+    {
+      "kind": "mutation",
+      "id": "managed-credential.status.set",
+      "method": "PUT",
+      "path": "/ai/managed-credentials/:poolKey/:credentialId/status",
+      "scope": "ai.credentials.manage",
+      "action": "ai.managed-credential.status.set",
+      "risk": "R2",
+      "approval": "none",
+      "binding": {
+        "tenant": null,
+        "resource": {
+          "type": "ai_managed_credential",
+          "id": {
+            "param": "credentialId"
+          }
+        }
+      },
+      "requestSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "idempotencyKey",
+          "reason",
+          "status"
+        ],
+        "properties": {
+          "idempotencyKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "draining",
+              "disabled",
+              "revoked"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "kind": "mutation",
+      "approvalExecutor": "maker_or_checker",
+      "id": "managed-credential.pool-source.set",
+      "method": "PUT",
+      "path": "/ai/managed-credentials/:poolKey/source",
+      "scope": "ai.credentials.manage",
+      "action": "ai.managed-credential.pool-source.set",
+      "risk": "R3",
+      "approval": "maker_checker",
+      "binding": {
+        "tenant": null,
+        "resource": {
+          "type": "ai_managed_credential_pool",
+          "id": {
+            "param": "poolKey"
+          }
+        }
+      },
+      "requestSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "idempotencyKey",
+          "reason",
+          "source"
+        ],
+        "properties": {
+          "idempotencyKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "environment",
+              "managed_db"
+            ]
           }
         }
       }
@@ -4181,6 +4406,660 @@
       "body": {
         "idempotencyKey": "x",
         "reason": ""
+      },
+      "valid": false
+    },
+    {
+      "routeId": "managed-credential.add",
+      "name": "valid-minimal",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "label": "x",
+        "secret": "x"
+      },
+      "valid": true
+    },
+    {
+      "routeId": "managed-credential.add",
+      "name": "valid-full",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "label": "x",
+        "secret": "x"
+      },
+      "valid": true
+    },
+    {
+      "routeId": "managed-credential.add",
+      "name": "empty-object",
+      "body": {},
+      "valid": false
+    },
+    {
+      "routeId": "managed-credential.add",
+      "name": "missing:idempotencyKey",
+      "body": {
+        "reason": "x",
+        "label": "x",
+        "secret": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "managed-credential.add",
+      "name": "missing:reason",
+      "body": {
+        "idempotencyKey": "x",
+        "label": "x",
+        "secret": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "managed-credential.add",
+      "name": "missing:label",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "secret": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "managed-credential.add",
+      "name": "missing:secret",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "label": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "managed-credential.add",
+      "name": "unknown-property:$",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "label": "x",
+        "secret": "x",
+        "smuggledField": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "managed-credential.add",
+      "name": "wrong-type:idempotencyKey",
+      "body": {
+        "idempotencyKey": 12345,
+        "reason": "x",
+        "label": "x",
+        "secret": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "managed-credential.add",
+      "name": "too-long:idempotencyKey",
+      "body": {
+        "idempotencyKey": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "reason": "x",
+        "label": "x",
+        "secret": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "managed-credential.add",
+      "name": "empty:idempotencyKey",
+      "body": {
+        "idempotencyKey": "",
+        "reason": "x",
+        "label": "x",
+        "secret": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "managed-credential.add",
+      "name": "wrong-type:reason",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": 12345,
+        "label": "x",
+        "secret": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "managed-credential.add",
+      "name": "too-long:reason",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "label": "x",
+        "secret": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "managed-credential.add",
+      "name": "empty:reason",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "",
+        "label": "x",
+        "secret": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "managed-credential.add",
+      "name": "wrong-type:label",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "label": 12345,
+        "secret": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "managed-credential.add",
+      "name": "too-long:label",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "label": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "secret": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "managed-credential.add",
+      "name": "empty:label",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "label": "",
+        "secret": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "managed-credential.add",
+      "name": "wrong-type:secret",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "label": "x",
+        "secret": 12345
+      },
+      "valid": false
+    },
+    {
+      "routeId": "managed-credential.add",
+      "name": "too-long:secret",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "label": "x",
+        "secret": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "managed-credential.add",
+      "name": "empty:secret",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "label": "x",
+        "secret": ""
+      },
+      "valid": false
+    },
+    {
+      "routeId": "managed-credential.rotate",
+      "name": "valid-minimal",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "secret": "x"
+      },
+      "valid": true
+    },
+    {
+      "routeId": "managed-credential.rotate",
+      "name": "valid-full",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "secret": "x"
+      },
+      "valid": true
+    },
+    {
+      "routeId": "managed-credential.rotate",
+      "name": "empty-object",
+      "body": {},
+      "valid": false
+    },
+    {
+      "routeId": "managed-credential.rotate",
+      "name": "missing:idempotencyKey",
+      "body": {
+        "reason": "x",
+        "secret": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "managed-credential.rotate",
+      "name": "missing:reason",
+      "body": {
+        "idempotencyKey": "x",
+        "secret": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "managed-credential.rotate",
+      "name": "missing:secret",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "managed-credential.rotate",
+      "name": "unknown-property:$",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "secret": "x",
+        "smuggledField": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "managed-credential.rotate",
+      "name": "wrong-type:idempotencyKey",
+      "body": {
+        "idempotencyKey": 12345,
+        "reason": "x",
+        "secret": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "managed-credential.rotate",
+      "name": "too-long:idempotencyKey",
+      "body": {
+        "idempotencyKey": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "reason": "x",
+        "secret": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "managed-credential.rotate",
+      "name": "empty:idempotencyKey",
+      "body": {
+        "idempotencyKey": "",
+        "reason": "x",
+        "secret": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "managed-credential.rotate",
+      "name": "wrong-type:reason",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": 12345,
+        "secret": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "managed-credential.rotate",
+      "name": "too-long:reason",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "secret": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "managed-credential.rotate",
+      "name": "empty:reason",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "",
+        "secret": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "managed-credential.rotate",
+      "name": "wrong-type:secret",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "secret": 12345
+      },
+      "valid": false
+    },
+    {
+      "routeId": "managed-credential.rotate",
+      "name": "too-long:secret",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "secret": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "managed-credential.rotate",
+      "name": "empty:secret",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "secret": ""
+      },
+      "valid": false
+    },
+    {
+      "routeId": "managed-credential.status.set",
+      "name": "valid-minimal",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "status": "active"
+      },
+      "valid": true
+    },
+    {
+      "routeId": "managed-credential.status.set",
+      "name": "valid-full",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "status": "active"
+      },
+      "valid": true
+    },
+    {
+      "routeId": "managed-credential.status.set",
+      "name": "empty-object",
+      "body": {},
+      "valid": false
+    },
+    {
+      "routeId": "managed-credential.status.set",
+      "name": "missing:idempotencyKey",
+      "body": {
+        "reason": "x",
+        "status": "active"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "managed-credential.status.set",
+      "name": "missing:reason",
+      "body": {
+        "idempotencyKey": "x",
+        "status": "active"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "managed-credential.status.set",
+      "name": "missing:status",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "managed-credential.status.set",
+      "name": "unknown-property:$",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "status": "active",
+        "smuggledField": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "managed-credential.status.set",
+      "name": "wrong-type:idempotencyKey",
+      "body": {
+        "idempotencyKey": 12345,
+        "reason": "x",
+        "status": "active"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "managed-credential.status.set",
+      "name": "too-long:idempotencyKey",
+      "body": {
+        "idempotencyKey": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "reason": "x",
+        "status": "active"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "managed-credential.status.set",
+      "name": "empty:idempotencyKey",
+      "body": {
+        "idempotencyKey": "",
+        "reason": "x",
+        "status": "active"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "managed-credential.status.set",
+      "name": "wrong-type:reason",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": 12345,
+        "status": "active"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "managed-credential.status.set",
+      "name": "too-long:reason",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "status": "active"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "managed-credential.status.set",
+      "name": "empty:reason",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "",
+        "status": "active"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "managed-credential.status.set",
+      "name": "wrong-type:status",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "status": 12345
+      },
+      "valid": false
+    },
+    {
+      "routeId": "managed-credential.status.set",
+      "name": "bad-enum:status",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "status": "zzz-not-an-option"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "managed-credential.pool-source.set",
+      "name": "valid-minimal",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "source": "environment"
+      },
+      "valid": true
+    },
+    {
+      "routeId": "managed-credential.pool-source.set",
+      "name": "valid-full",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "source": "environment"
+      },
+      "valid": true
+    },
+    {
+      "routeId": "managed-credential.pool-source.set",
+      "name": "empty-object",
+      "body": {},
+      "valid": false
+    },
+    {
+      "routeId": "managed-credential.pool-source.set",
+      "name": "missing:idempotencyKey",
+      "body": {
+        "reason": "x",
+        "source": "environment"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "managed-credential.pool-source.set",
+      "name": "missing:reason",
+      "body": {
+        "idempotencyKey": "x",
+        "source": "environment"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "managed-credential.pool-source.set",
+      "name": "missing:source",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "managed-credential.pool-source.set",
+      "name": "unknown-property:$",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "source": "environment",
+        "smuggledField": "x"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "managed-credential.pool-source.set",
+      "name": "wrong-type:idempotencyKey",
+      "body": {
+        "idempotencyKey": 12345,
+        "reason": "x",
+        "source": "environment"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "managed-credential.pool-source.set",
+      "name": "too-long:idempotencyKey",
+      "body": {
+        "idempotencyKey": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "reason": "x",
+        "source": "environment"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "managed-credential.pool-source.set",
+      "name": "empty:idempotencyKey",
+      "body": {
+        "idempotencyKey": "",
+        "reason": "x",
+        "source": "environment"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "managed-credential.pool-source.set",
+      "name": "wrong-type:reason",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": 12345,
+        "source": "environment"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "managed-credential.pool-source.set",
+      "name": "too-long:reason",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "source": "environment"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "managed-credential.pool-source.set",
+      "name": "empty:reason",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "",
+        "source": "environment"
+      },
+      "valid": false
+    },
+    {
+      "routeId": "managed-credential.pool-source.set",
+      "name": "wrong-type:source",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "source": 12345
+      },
+      "valid": false
+    },
+    {
+      "routeId": "managed-credential.pool-source.set",
+      "name": "bad-enum:source",
+      "body": {
+        "idempotencyKey": "x",
+        "reason": "x",
+        "source": "zzz-not-an-option"
       },
       "valid": false
     },

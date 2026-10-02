@@ -43,6 +43,7 @@ export const SCOPES = [
   "ai.quota.write",
   "ai.provider_policy.write",
   "ai.emergency_suspend",
+  "ai.credentials.manage",
 
   "payments.adapters.read",
   // 1A.14 (scoping §15 Q2) — separately grantable supply-chain entry.

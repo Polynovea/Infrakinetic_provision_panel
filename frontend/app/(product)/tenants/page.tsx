@@ -26,6 +26,7 @@ interface TenantRegistryUser {
 }
 
 type PlatformAccessState = "active" | "suspended" | "decommissioned";
+type TenantWorkspaceTab = "overview" | "people" | "ai" | "access" | "engines";
 
 interface TenantRegistryEntry {
   id: string;
@@ -160,6 +161,7 @@ export default function TenantsPage() {
   const [planFilter, setPlanFilter] = useState(ALL);
   const [kindFilter, setKindFilter] = useState(ALL);
   const [countryFilter, setCountryFilter] = useState(ALL);
+  const [showArchived, setShowArchived] = useState(false);
 
   const loadTenants = useCallback(() => {
     setError(null);
@@ -211,11 +213,13 @@ export default function TenantsPage() {
 
   const counts = useMemo(() => {
     if (!tenants) return null;
+    const archived = tenants.filter((t) => t.platform_access_state === "decommissioned").length;
     return {
       total: tenants.length,
-      active: tenants.filter((t) => t.status === "active").length,
-      trial: tenants.filter((t) => t.status === "trial").length,
-      suspended: tenants.filter((t) => t.status === "suspended").length,
+      operational: tenants.length - archived,
+      archived,
+      active: tenants.filter((t) => t.platform_access_state === "active").length,
+      suspended: tenants.filter((t) => t.platform_access_state === "suspended").length,
     };
   }, [tenants]);
 
@@ -228,6 +232,7 @@ export default function TenantsPage() {
     if (!tenants) return null;
     const needle = search.trim().toLowerCase();
     return tenants.filter((t) => {
+      if (!showArchived && t.platform_access_state === "decommissioned") return false;
       if (needle && !t.name.toLowerCase().includes(needle) && !t.slug.toLowerCase().includes(needle)) return false;
       if (statusFilter !== ALL && t.status !== statusFilter) return false;
       if (planFilter !== ALL && t.plan !== planFilter) return false;
@@ -235,9 +240,9 @@ export default function TenantsPage() {
       if (countryFilter !== ALL && t.country !== countryFilter) return false;
       return true;
     });
-  }, [tenants, search, statusFilter, planFilter, kindFilter, countryFilter]);
+  }, [tenants, search, statusFilter, planFilter, kindFilter, countryFilter, showArchived]);
 
-  const filtersActive = statusFilter !== ALL || planFilter !== ALL || kindFilter !== ALL || countryFilter !== ALL || search.trim() !== "";
+  const filtersActive = statusFilter !== ALL || planFilter !== ALL || kindFilter !== ALL || countryFilter !== ALL || search.trim() !== "" || showArchived;
 
   function clearFilters() {
     setSearch("");
@@ -245,6 +250,7 @@ export default function TenantsPage() {
     setPlanFilter(ALL);
     setKindFilter(ALL);
     setCountryFilter(ALL);
+    setShowArchived(false);
   }
 
   const canCommission = operator?.scopes.includes("tenants.commission") ?? false;
@@ -266,25 +272,16 @@ export default function TenantsPage() {
       {counts && (
         <div className="metric-row" style={{ marginBottom: "1.25rem" }}>
           <span className="metric-chip">
-            <span className="metric-chip-value">{counts.total}</span> total
+            <span className="metric-chip-value">{counts.operational}</span> operational
           </span>
           <span className="metric-chip">
-            <span className="metric-chip-value" style={{ color: "var(--success-fg)" }}>
-              {counts.active}
-            </span>{" "}
-            active
+            <span className="metric-chip-value" style={{ color: "var(--success-fg)" }}>{counts.active}</span>{" "}platform access active
           </span>
           <span className="metric-chip">
-            <span className="metric-chip-value" style={{ color: "var(--warning-fg)" }}>
-              {counts.trial}
-            </span>{" "}
-            trial
+            <span className="metric-chip-value" style={{ color: "var(--warning-fg)" }}>{counts.suspended}</span>{" "}platform access suspended
           </span>
           <span className="metric-chip">
-            <span className="metric-chip-value" style={{ color: "var(--danger-fg)" }}>
-              {counts.suspended}
-            </span>{" "}
-            suspended
+            <span className="metric-chip-value">{counts.archived}</span> archived / decommissioned
           </span>
         </div>
       )}
@@ -338,12 +335,17 @@ export default function TenantsPage() {
             ))}
           </select>
         </div>
+        <label style={{ display: "flex", alignItems: "center", gap: "0.45rem", minHeight: "2.4rem", fontSize: "0.85rem" }}>
+          <input type="checkbox" checked={showArchived} onChange={(e) => setShowArchived(e.target.checked)} />
+          Show archived tenants
+        </label>
         {filtersActive && (
           <button className="btn" onClick={clearFilters}>
             <Icon name="filter_alt_off" size="sm" /> Clear
           </button>
         )}
       </div>
+      <p className="overlay-note" style={{ margin: "-0.35rem 0 1rem" }}>Decommissioned tenants are retained for audit/history and hidden by default. Commercial status and platform-access state are shown separately because they are different controls.</p>
 
       <div className="card" style={{ padding: 0, overflowX: "auto" }}>
         {error && <ErrorState label={error} />}
@@ -355,13 +357,14 @@ export default function TenantsPage() {
                 <th>Slug</th>
                 <th>Kind</th>
                 <th>Plan</th>
-                <th>Status</th>
+                <th>Commercial</th>
+                <th>Platform access</th>
                 <th>Country</th>
                 <th>Created</th>
               </tr>
             </thead>
             <tbody>
-              <SkeletonTableRows columns={7} />
+              <SkeletonTableRows columns={8} />
             </tbody>
           </table>
         )}
@@ -376,7 +379,8 @@ export default function TenantsPage() {
                 <th>Slug</th>
                 <th>Kind</th>
                 <th>Plan</th>
-                <th>Status</th>
+                <th>Commercial</th>
+                <th>Platform access</th>
                 <th>Country</th>
                 <th>Created</th>
               </tr>
@@ -390,9 +394,8 @@ export default function TenantsPage() {
                     <StatusBadge value={t.tenant_kind} />
                   </td>
                   <td>{t.plan}</td>
-                  <td>
-                    <StatusBadge value={t.status} />
-                  </td>
+                  <td><StatusBadge value={t.status} /></td>
+                  <td><StatusBadge value={t.platform_access_state ?? "unknown"} /></td>
                   <td>{t.country}</td>
                   <td>{formatDate(t.created_at)}</td>
                 </tr>
@@ -448,6 +451,8 @@ function TenantDetailDrawer({
   onMutated: () => void;
 }) {
   const [tenant, setTenant] = useState(initialTenant);
+  const [activeTab, setActiveTab] = useState<TenantWorkspaceTab>("overview");
+  const [visibleUserCount, setVisibleUserCount] = useState(25);
   const [users, setUsers] = useState<TenantRegistryUser[] | null>(null);
   const [usersObservedAt, setUsersObservedAt] = useState<string | null>(null);
   const [usersError, setUsersError] = useState<string | null>(null);
@@ -741,7 +746,7 @@ function TenantDetailDrawer({
   const hasAnyLifecycleScope = canSuspend || canResume || canDecommission;
 
   return (
-    <Drawer title={tenant.name} subtitle={tenant.slug} onClose={onClose}>
+    <Drawer title={tenant.name} subtitle={tenant.slug} onClose={onClose} size="wide">
       <div style={{ display: "flex", gap: "0.4rem", marginBottom: "1rem" }}>
         <StatusBadge value={tenant.tenant_kind} />
       </div>
@@ -761,6 +766,21 @@ function TenantDetailDrawer({
         </div>
       </div>
 
+      <div role="tablist" aria-label="Tenant workspace" style={{ display: "flex", gap: "0.35rem", flexWrap: "wrap", marginBottom: "1rem", borderBottom: "1px solid var(--border-subtle)", paddingBottom: "0.55rem" }}>
+        {[
+          ["overview", "Overview"],
+          ["people", `People${users ? ` (${users.length})` : ""}`],
+          ["ai", "AI"],
+          ["access", "Credentials & integrations"],
+          ["engines", "Engines"],
+        ].map(([key, label]) => (
+          <button key={key} role="tab" aria-selected={activeTab === key} className={`btn${activeTab === key ? " btn-primary" : ""}`} style={{ fontSize: "0.8rem" }} onClick={() => setActiveTab(key as TenantWorkspaceTab)}>
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {activeTab === "overview" && (<>
       {isPlatformTenant && (
         <p className="overlay-note" style={{ marginBottom: "1rem" }}>
           The reserved platform tenant has no lifecycle controls.
@@ -833,8 +853,11 @@ function TenantDetailDrawer({
         </div>
       </dl>
 
-      <h3 className="text-subhead" style={{ margin: "1.5rem 0 0.6rem" }}>
-        Users
+      </>)}
+
+      {activeTab === "people" && (<>
+      <h3 className="text-subhead" style={{ margin: "0.25rem 0 0.6rem" }}>
+        People
       </h3>
       <p className="overlay-note" style={{ margin: "0 0 0.6rem" }}>
         {usersObservedAt ? `Last observed ${formatDate(usersObservedAt)}` : " "}
@@ -864,7 +887,7 @@ function TenantDetailDrawer({
             </tr>
           </thead>
           <tbody>
-            {users.map((u) => (
+            {users.slice(0, visibleUserCount).map((u) => (
               <tr
                 key={u.id}
                 onClick={canReadIdentity ? () => setSelectedUser(u) : undefined}
@@ -884,6 +907,11 @@ function TenantDetailDrawer({
         </table>
         </div>
       )}
+      {users && users.length > visibleUserCount && (
+        <button className="btn" style={{ marginTop: "0.6rem" }} onClick={() => setVisibleUserCount((n) => Math.min(users.length, n + 25))}>
+          Show {Math.min(25, users.length - visibleUserCount)} more people
+        </button>
+      )}
 
       {canReadIdentity && selectedUser && (
         <IdentityPanel
@@ -902,6 +930,9 @@ function TenantDetailDrawer({
         />
       )}
 
+      </>)}
+
+      {activeTab === "access" && (<>
       {canReadCredentials && !isPlatformTenant && (
         <>
           <h3 className="text-subhead" style={{ margin: "1.5rem 0 0.6rem" }}>
@@ -953,11 +984,13 @@ function TenantDetailDrawer({
         <IntegrationsPanel tenantId={tenant.id} request={request} />
       )}
 
-      {operatorScopes.includes("ai.read") && !isPlatformTenant && (
+      </>)}
+
+      {activeTab === "ai" && operatorScopes.includes("ai.read") && !isPlatformTenant && (
         <AiTenantPanel tenantId={tenant.id} request={request} />
       )}
 
-      {canReadCredentials && selectedCredential && (
+      {activeTab === "access" && canReadCredentials && selectedCredential && (
         <CredentialPanel
           tenantId={tenant.id}
           credentialId={selectedCredential.credentialId}
@@ -971,7 +1004,7 @@ function TenantDetailDrawer({
         />
       )}
 
-      {canReadIdentity && (
+      {activeTab === "people" && canReadIdentity && (
         <>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", margin: "1.5rem 0 0.6rem" }}>
             <h3 className="text-subhead" style={{ margin: 0 }}>
@@ -1048,8 +1081,9 @@ function TenantDetailDrawer({
         </>
       )}
 
-      <h3 className="text-subhead" style={{ margin: "1.5rem 0 0.6rem" }}>
-        Engines &amp; Capabilities
+      {activeTab === "engines" && (<>
+      <h3 className="text-subhead" style={{ margin: "0.25rem 0 0.6rem" }}>
+        Engine access
       </h3>
       <p className="overlay-note" style={{ margin: "0 0 0.6rem" }}>
         {enginesObservedAt ? `Last observed ${formatDate(enginesObservedAt)}` : " "}
@@ -1114,8 +1148,10 @@ function TenantDetailDrawer({
         </div>
       )}
 
-      {canReconcile && !isPlatformTenant && (
-        <div className="card" style={{ marginTop: "1.5rem" }}>
+      </>)}
+
+      {activeTab === "overview" && canReconcile && !isPlatformTenant && (
+        <div className="card" style={{ marginTop: "1rem" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.6rem" }}>
             <h3 className="text-subhead" style={{ margin: 0 }}>
               Reconciliation
@@ -1171,7 +1207,7 @@ function TenantDetailDrawer({
         </div>
       )}
 
-      <div className="card" style={{ marginTop: "1.5rem" }}>
+      {activeTab === "overview" && <div className="card" style={{ marginTop: "1rem" }}>
         <button
           className="btn"
           style={{ border: "none", background: "transparent", padding: 0, fontSize: "0.82rem", color: "var(--text-muted)" }}
@@ -1185,7 +1221,7 @@ function TenantDetailDrawer({
             <dd style={{ margin: "0.1rem 0", fontFamily: "monospace" }}>{tenant.id}</dd>
           </dl>
         )}
-      </div>
+      </div>}
 
       {pendingAction && (
         <ConfirmDialog

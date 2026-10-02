@@ -13,6 +13,7 @@ import type { ApprovalRecord } from "./ApprovalQueue";
 //   model certify    R3 request with an evidence reference                                 ai.provider_policy.write
 //   metering resolve R1                                                                    ai.quota.write
 //   reconciliation   R1 (statement ingestion is an owner-side CLI/job — never uploaded here)  finops.policy.write
+//   managed keys     add/rotate/status R2; runtime-source cutover R3 maker-checker              ai.credentials.manage
 
 const AI = "/management/v1/ai";
 const PROVIDER_STATUSES = ["active", "disabled", "deprecated"] as const;
@@ -94,6 +95,82 @@ export function ModelCertificationDialog({ modelId, label, current, onClose, onD
   );
 }
 
+export function ManagedCredentialAddDialog({ poolKey, poolName, onClose, onDone }: Common & { poolKey: string; poolName: string }) {
+  const [label, setLabel] = useState("");
+  const [secret, setSecret] = useState("");
+  return (
+    <ActionDialog
+      title={`Add managed key — ${poolName}`}
+      description="The key is sent once to the owner for encryption. Governance stores only a one-way digest for idempotency/audit and never stores or returns the raw key. Adding a key does not change the pool's runtime source."
+      confirmLabel="Add key"
+      canSubmit={label.trim() !== "" && secret.trim().length >= 8}
+      build={(reason, idempotencyKey) => ({ method: "POST", path: `${AI}/managed-credentials/${encodeURIComponent(poolKey)}`, body: { idempotencyKey, reason, label: label.trim(), secret: secret.trim() } })}
+      onClose={onClose}
+      onDone={onDone}
+    >
+      <div className="field"><label>Label</label><input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="e.g. NVIDIA account A" maxLength={120} autoComplete="off" /></div>
+      <div className="field"><label>Provider key</label><input type="password" value={secret} onChange={(e) => setSecret(e.target.value)} placeholder="Paste once" autoComplete="new-password" /></div>
+    </ActionDialog>
+  );
+}
+
+export function ManagedCredentialRotateDialog({ poolKey, credentialId, label, onClose, onDone }: Common & { poolKey: string; credentialId: string; label: string }) {
+  const [secret, setSecret] = useState("");
+  return (
+    <ActionDialog
+      title={`Rotate key — ${label}`}
+      description="Creates a new encrypted version and supersedes the previous version. The pool keeps using all active credentials; use Drain/Disable separately if you need a staged cutover."
+      confirmLabel="Rotate key"
+      canSubmit={secret.trim().length >= 8}
+      build={(reason, idempotencyKey) => ({ method: "POST", path: `${AI}/managed-credentials/${encodeURIComponent(poolKey)}/${encodeURIComponent(credentialId)}/rotate`, body: { idempotencyKey, reason, secret: secret.trim() } })}
+      onClose={onClose}
+      onDone={onDone}
+    >
+      <div className="field"><label>New provider key</label><input type="password" value={secret} onChange={(e) => setSecret(e.target.value)} placeholder="Paste once" autoComplete="new-password" /></div>
+    </ActionDialog>
+  );
+}
+
+export function ManagedCredentialStatusDialog({ poolKey, credentialId, label, current, onClose, onDone }: Common & { poolKey: string; credentialId: string; label: string; current: string }) {
+  const options = ["active", "draining", "disabled", "revoked"].filter((value) => value !== current);
+  const [status, setStatus] = useState(options[0] ?? "draining");
+  const danger = status === "revoked" || status === "disabled";
+  return (
+    <ActionDialog
+      title={`Key status — ${label}`}
+      description={status === "draining" ? "Draining stops this key from being selected once the managed pool is authoritative, while keeping its audit history." : status === "revoked" ? "Revocation is terminal for this version. The owner refuses the change if it would leave a managed runtime pool below its minimum active-key count." : "Change the key's participation in the managed pool."}
+      confirmLabel={`Set ${status}`}
+      danger={danger}
+      build={(reason, idempotencyKey) => ({ method: "PUT", path: `${AI}/managed-credentials/${encodeURIComponent(poolKey)}/${encodeURIComponent(credentialId)}/status`, body: { idempotencyKey, reason, status } })}
+      onClose={onClose}
+      onDone={onDone}
+    >
+      <div className="field"><label>New status (currently {current})</label><select value={status} onChange={(e) => setStatus(e.target.value)}>{options.map((value) => <option key={value} value={value}>{value}</option>)}</select></div>
+    </ActionDialog>
+  );
+}
+
+export function ManagedPoolSourceDialog({ poolKey, poolName, current, environmentCount, managedActiveCount, keyringPosture, onClose, onDone }: Common & { poolKey: string; poolName: string; current: string; environmentCount: number; managedActiveCount: number; keyringPosture: string }) {
+  const target = current === "environment" ? "managed_db" : "environment";
+  return (
+    <ActionDialog
+      title={`Runtime source — ${poolName}`}
+      description="Runtime-source cutover is maker-checker. A different operator must approve the exact source and current readiness counts; execution re-reads them and refuses if they changed. No key material appears in the approval."
+      confirmLabel={`Request ${target === "managed_db" ? "Governance-managed" : "environment"} source`}
+      canSubmit={target === "environment" ? environmentCount > 0 : managedActiveCount > 0 && keyringPosture === "configured"}
+      build={(reason) => ({ method: "POST", path: `${AI}/managed-credentials/${encodeURIComponent(poolKey)}/source/request`, body: { reason, source: target } })}
+      onClose={onClose}
+      onDone={onDone}
+    >
+      <div className="card" style={{ fontSize: "0.85rem" }}>
+        <div>Current: <strong>{current === "managed_db" ? "Governance-managed" : "environment"}</strong></div>
+        <div>Environment keys: {environmentCount} · active managed keys: {managedActiveCount}</div>
+        <div>Managed encryption keyring: {keyringPosture}</div>
+      </div>
+    </ActionDialog>
+  );
+}
+
 export function ResolveMeteringDialog({ exceptionId, type, onClose, onDone }: Common & { exceptionId: string; type: string }) {
   return (
     <ActionDialog
@@ -138,6 +215,13 @@ export function AiApprovalSummary({ approval }: { approval: ApprovalRecord }) {
     ];
   } else if (approval.requestedAction === "ai.model.certification.set") {
     rows = [row("Model", `${s.providerKey}/${s.modelKey}`), row("Certification", `${String(s.certificationAtRequest).replace(/_/g, " ")} → ${String(s.requestedCertification).replace(/_/g, " ")}`), row("Evidence", s.evidenceRef)];
+  } else if (approval.requestedAction === "ai.managed-credential.pool-source.set") {
+    rows = [
+      row("Credential pool", s.poolKey), row("Workload", s.workloadLabel),
+      row("Runtime source", `${s.currentSource} → ${s.requestedSource}`),
+      row("Environment keys", s.environmentCredentialCount), row("Active managed keys", s.managedActiveCredentialCount),
+      row("Encryption keyring", s.keyringPosture), row("Ready at request", s.runtimeReadyAtRequest),
+    ];
   } else {
     rows = [];
   }

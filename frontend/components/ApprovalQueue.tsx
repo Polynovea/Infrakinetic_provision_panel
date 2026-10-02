@@ -41,6 +41,7 @@ export function ApprovalQueue({
   onExecuted,
   renderSummary,
   canExecute,
+  hideWhenEmpty = false,
 }: {
   request: (path: string, init?: RequestInit) => Promise<Response>;
   stepUp: (returnTo?: string) => void;
@@ -52,6 +53,8 @@ export function ApprovalQueue({
   renderSummary?: (approval: ApprovalRecord) => React.ReactNode;
   /** Narrows who is offered Execute (AI approvals: only the maker or the checker — the owner refuses anyone else). */
   canExecute?: (approval: ApprovalRecord) => boolean;
+  /** Page-local queues can stay silent when the central Approvals inbox has nothing for this surface. */
+  hideWhenEmpty?: boolean;
 }) {
   const [approvals, setApprovals] = useState<ApprovalRecord[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -104,6 +107,7 @@ export function ApprovalQueue({
   }
 
   if (approvals === null && !error) return null;
+  if (hideWhenEmpty && !error && approvals?.length === 0 && !lastResult) return null;
 
   return (
     <div className="card" style={{ marginTop: "1rem" }}>

@@ -41,10 +41,14 @@ import {
   type PaymentAdapterApprovalActionKey,
 } from "../../management/operations/paymentAdapterOperation.js";
 import { listTenantIntegrations } from "../../management/operations/integrationQuery.js";
+import { getPlatformInfrastructure } from "../../management/operations/platformInfrastructureQuery.js";
+import { getPlatformFinOps } from "../../management/operations/platformFinOpsQuery.js";
+import { FinOpsAllocationPolicyStore, applyFinOpsAllocation, replaceFinOpsAllocationPolicy } from "../../management/operations/finOpsAllocationPolicy.js";
 import {
   getAiAdminCommandReceipt,
   getAiCatalog,
   getAiReconciliation,
+  getManagedAiCredentials,
   getFleetAiSummary,
   getTenantAiCredentials,
   getTenantAiState,
@@ -196,6 +200,8 @@ export interface ManagementRouterDeps {
   approvals: ManagementApprovalStore;
   /** 1A.14 — staged global configuration packages and restore operations (migration 0016). */
   globalConfigStore: GlobalConfigRestoreStore;
+  /** 1A.17 — versioned platform operating-cost allocation policy (migration 0017). */
+  finOpsAllocationStore: FinOpsAllocationPolicyStore;
 }
 
 // 1A.2 route integration points (whoami/session/audit) prove the operator
@@ -1898,6 +1904,70 @@ export function createManagementRouter(deps: ManagementRouterDeps): Router {
     }
   });
 
+  // 1A.16 — live, read-only AWS/Azure infrastructure inventory. The owner
+  // returns partial source status rather than fabricating an empty service when
+  // IAM/cloud access is unavailable; no credential or connection string enters
+  // Governance or the browser.
+  router.get("/infrastructure", requireScope("runtime.read", deps.auditSink), async (req, res, next) => {
+    try {
+      const ctx = req.operatorContext;
+      if (!ctx) { res.status(403).json({ error: "NOT_AUTHENTICATED" }); return; }
+      res.status(200).json(await getPlatformInfrastructure(await adapterDeps(), operatorParams(ctx)));
+    } catch (err) {
+      if (adapterOperationErrorResponse(err, res)) return;
+      next(err);
+    }
+  });
+
+  // 1A.17 — platform operating-cost evidence. This is deliberately separate
+  // from module_finance: read-only provider/usage facts, no journals and no
+  // fabricated allocation when a billing feed or policy is missing.
+  router.get("/finops", requireScope("finops.read", deps.auditSink), async (req, res, next) => {
+    try {
+      const ctx = req.operatorContext;
+      if (!ctx) { res.status(403).json({ error: "NOT_AUTHENTICATED" }); return; }
+      const snapshot = await getPlatformFinOps(await adapterDeps(), operatorParams(ctx));
+      const policy = await deps.finOpsAllocationStore.getActive();
+      res.status(200).json({
+        ...snapshot,
+        allocation: {
+          ...((snapshot.allocation as Record<string, unknown> | undefined) ?? {}),
+          policyVersion: policy?.policyVersion ?? null,
+          activePolicy: policy,
+        },
+        governedAllocation: applyFinOpsAllocation(snapshot, policy),
+      });
+    } catch (err) {
+      if (adapterOperationErrorResponse(err, res)) return;
+      next(err);
+    }
+  });
+
+  router.get("/finops/allocation-policies", requireScope("finops.read", deps.auditSink), async (req, res, next) => {
+    try {
+      const ctx = req.operatorContext;
+      if (!ctx) { res.status(403).json({ error: "NOT_AUTHENTICATED" }); return; }
+      res.status(200).json({ active: await deps.finOpsAllocationStore.getActive(), policies: await deps.finOpsAllocationStore.list(50) });
+    } catch (err) { next(err); }
+  });
+
+  router.put("/finops/allocation-policy", requireScope("finops.policy.write", deps.auditSink), async (req, res, next) => {
+    try {
+      const ctx = req.operatorContext;
+      if (!ctx) { res.status(403).json({ error: "NOT_AUTHENTICATED" }); return; }
+      const body = (req.body ?? {}) as Record<string, unknown>;
+      if (!requireReasonAndKey(body, res)) return;
+      const result = await replaceFinOpsAllocationPolicy(
+        { ledger: deps.ledger, store: deps.finOpsAllocationStore },
+        { operatorId: ctx.operatorId, operatorSessionId: ctx.operatorSessionId, idempotencyKey: body.idempotencyKey, reason: body.reason, rules: body.rules, correlationId: ctx.correlationId },
+      );
+      res.status(200).json(result);
+    } catch (err) {
+      if (err instanceof Error && /rules\[|rules must|duplicate ruleId|allocat|reason must/.test(err.message)) { res.status(400).json({ error: "FINOPS_POLICY_INVALID", message: err.message }); return; }
+      next(err);
+    }
+  });
+
   // 1A.15 Slice 1 — AI operator reads (R0, ai.read). Owner-composed live by
   // module_ai; Governance stores nothing and refuses secret-shaped owner
   // responses (aiQuery.ts findSecretShapedField).
@@ -1951,8 +2021,9 @@ export function createManagementRouter(deps: ManagementRouterDeps): Router {
   //   R4     suspend, provider narrowing: + fresh step-up + recovery intent
   //   R3     resume, model lifecycle, model certification: /request (step-up)
   //          -> /approvals/:id/approve|reject (checker, step-up) -> /approvals/:id/execute
-  // BYOAI is safe metadata read + revoke ONLY: no route below accepts
-  // credential material, and none exists for submit, rotate, decrypt or test.
+  // Tenant BYOAI remains safe metadata + revoke ONLY. Platform-managed provider
+  // credentials are a separate root control: add/rotate material is relayed once
+  // to the owner and never persisted by Governance (aiOperation persistenceSafeFields).
   // ───────────────────────────────────────────────────────────────────────
 
   function aiErrorResponse(err: unknown, res: import("express").Response): boolean {
@@ -1981,6 +2052,17 @@ export function createManagementRouter(deps: ManagementRouterDeps): Router {
       const ctx = req.operatorContext;
       if (!ctx) { res.status(403).json({ error: "NOT_AUTHENTICATED" }); return; }
       res.status(200).json(await getTenantAiCredentials(await aiDeps(), { tenantId: req.params.tenantId, ...operatorParams(ctx) }));
+    } catch (err) {
+      if (aiErrorResponse(err, res)) return;
+      next(err);
+    }
+  });
+
+  router.get("/ai/managed-credentials", requireScope("ai.read", deps.auditSink), async (req, res, next) => {
+    try {
+      const ctx = req.operatorContext;
+      if (!ctx) { res.status(403).json({ error: "NOT_AUTHENTICATED" }); return; }
+      res.status(200).json(await getManagedAiCredentials(await aiDeps(), operatorParams(ctx)));
     } catch (err) {
       if (aiErrorResponse(err, res)) return;
       next(err);

@@ -12,6 +12,9 @@ import {
 import {
   AiApprovalSummary, ModelCertificationDialog, ModelLifecycleDialog, ProviderStateDialog, ResolveMeteringDialog, ResolveReconciliationDialog,
 } from "../../../components/AiFleetActions";
+import {
+  ManagedCredentialAddDialog, ManagedCredentialRotateDialog, ManagedCredentialStatusDialog, ManagedPoolSourceDialog,
+} from "../../../components/AiManagedCredentialActions";
 
 // Phase 1A.15 — fleet AI operator view (ai.read) and the fleet-level actions over it. module_ai composes every
 // figure live; Governance stores none of it. Migration-internal volume comes from Migration's own usage table
@@ -31,6 +34,17 @@ interface Catalog {
   legacyKillSwitches: Array<{ libraryKey: string; enabled: boolean; updatedAt: string }>;
 }
 interface MeteringSummary { open: number; resolved?: number; byType: Array<{ type: string; open: number }> }
+interface CredentialUsage { attempts: number; requests: number; successes: number; failures: number; rateLimited: number; totalTokens: number; estimatedCost: number; currency: string | null; lastAttemptAt: string | null; lastSuccessAt: string | null }
+interface ManagedCredential {
+  credentialId: string; version: number | null; poolKey: string; label: string; status: string; source: string; maskedHint: string; credentialTag: string;
+  createdAt: string | null; supersededAt: string | null; revokedAt: string | null; sharedWithPools: string[]; usage30d: CredentialUsage;
+}
+interface ManagedPool {
+  poolKey: string; providerKey: string; displayName: string; workloadLabel: string; runtimeSource: string; legacyEnvVars: string[];
+  minimumActiveCredentials: number; providerStatus: string; credentialReady: boolean; runtimeReady: boolean; selectedCredentialCount: number;
+  environmentCredentials: ManagedCredential[]; managedCredentials: ManagedCredential[]; updatedAt: string;
+}
+interface ManagedInventory { contractVersion: string; keyringPosture: string; pools: ManagedPool[]; observedAt: string; source: string; freshness: string }
 interface Fleet {
   windows: { day: string; week: string; month: string };
   planes: Plane[];
@@ -54,6 +68,7 @@ interface MeteringException {
   observedAttempts: number; expectedAttempts: number | null; firstObservedAt: string; lastObservedAt: string;
 }
 interface ReconStatement { statementId: string; providerKey: string; sourceKind: string; currency: string; periodStart: string; periodEnd: string; lineCount: number; totalAmount: number; importedBy: string; importedAt: string; status: string }
+interface TenantDirectoryEntry { id: string; name: string; slug: string }
 interface ReconLine {
   reconciliationId: string; providerKey: string; modelKey: string | null; serviceDay: string; currency: string; outcome: string;
   estimatedAmount: number | null; actualAmount: number | null; variance: number | null; tenantId: string | null; poolLevel: boolean; reason: string | null; resolutionState: string;
@@ -63,7 +78,11 @@ type Dialog =
   | { kind: "provider"; providerKey: string; status: string }
   | { kind: "lifecycle" | "certification"; modelId: string; label: string; current: string }
   | { kind: "metering"; exceptionId: string; type: string }
-  | { kind: "recon"; reconciliationId: string; outcome: string };
+  | { kind: "recon"; reconciliationId: string; outcome: string }
+  | { kind: "managed-add"; poolKey: string; workloadLabel: string }
+  | { kind: "managed-rotate"; poolKey: string; credentialId: string; label: string }
+  | { kind: "managed-status"; poolKey: string; credentialId: string; label: string; current: string }
+  | { kind: "managed-source"; poolKey: string; current: string; managedReady: boolean };
 
 const PLANE_LABELS: Record<string, string> = {
   embedded_managed: "Embedded (managed)",
@@ -80,12 +99,15 @@ export default function AiFleetPage() {
   const canPolicy = scopes.includes("ai.provider_policy.write");
   const canMetering = scopes.includes("ai.quota.write");
   const canRecon = scopes.includes("finops.policy.write");
-  const canSeeApprovals = scopes.includes("identity.read") && (canPolicy || scopes.includes("ai.emergency_suspend"));
+  const canManageCredentials = scopes.includes("ai.credentials.manage");
+  const canSeeApprovals = scopes.includes("identity.read") && (canPolicy || canManageCredentials || scopes.includes("ai.emergency_suspend"));
 
   const [fleet, setFleet] = useState<Fleet | null>(null);
   const [catalog, setCatalog] = useState<Catalog | null>(null);
+  const [managed, setManaged] = useState<ManagedInventory | null | "unavailable">(null);
   const [metering, setMetering] = useState<MeteringException[] | null | "unavailable">(null);
   const [recon, setRecon] = useState<{ statements: ReconStatement[]; lines: ReconLine[] } | null | "unavailable">(null);
+  const [tenantDirectory, setTenantDirectory] = useState<Record<string, TenantDirectoryEntry>>({});
   const [error, setError] = useState<string | null>(null);
   const [dialog, setDialog] = useState<Dialog | null>(null);
   const [refresh, setRefresh] = useState(0);
@@ -93,18 +115,25 @@ export default function AiFleetPage() {
   const load = useCallback(async () => {
     setError(null);
     try {
-      const [f, c, m, r] = await Promise.all([
+      const [f, c, k, m, r, t] = await Promise.all([
         request("/management/v1/ai/fleet/summary"),
         request("/management/v1/ai/catalog"),
+        request("/management/v1/ai/managed-credentials"),
         request("/management/v1/ai/metering-exceptions?state=open&limit=50"),
         request("/management/v1/ai/reconciliation?state=open&limit=50"),
+        request("/management/v1/tenants"),
       ]);
       if (!f.ok) { setError(f.status === 403 ? "You need the ai.read scope to view AI state." : "Could not load fleet AI state."); return; }
       setFleet(await f.json());
       if (c.ok) setCatalog(await c.json());
+      setManaged(k.ok ? ((await k.json()) as ManagedInventory) : "unavailable");
       // An owner build without these routes answers 404 (surfaced by Governance as an upstream error): say so, don't imply "none".
       setMetering(m.ok ? ((await m.json()).exceptions as MeteringException[]) : "unavailable");
       setRecon(r.ok ? ((await r.json()) as { statements: ReconStatement[]; lines: ReconLine[] }) : "unavailable");
+      if (t.ok) {
+        const tenantBody = await t.json() as { tenants?: TenantDirectoryEntry[] };
+        setTenantDirectory(Object.fromEntries((tenantBody.tenants ?? []).map((tenant) => [tenant.id, tenant])));
+      }
     } catch {
       setError("Could not load fleet AI state.");
     }
@@ -115,12 +144,17 @@ export default function AiFleetPage() {
   const close = () => setDialog(null);
   const done = () => setRefresh((n) => n + 1);
   const catalogModels = (providerKey: string) => catalog?.providers.find((p) => p.providerKey === providerKey)?.models ?? [];
+  const tenantDisplay = (tenantId: string | null | undefined) => {
+    if (!tenantId) return "—";
+    const tenant = tenantDirectory[tenantId];
+    return tenant ? `${tenant.name} (${tenant.slug})` : `${tenantId.slice(0, 8)}…`;
+  };
 
   return (
     <>
       <div className="page-header">
-        <h1 className="text-display">AI</h1>
-        <p>Fleet AI usage, provider/model posture, exceptions and quota risk, read live from module_ai.</p>
+        <h1 className="text-display">AI operations</h1>
+        <p>Fleet AI consumption, runtime credentials, provider/model controls, exceptions and quota risk.</p>
       </div>
 
       {error && <ErrorState label={error} />}
@@ -132,9 +166,16 @@ export default function AiFleetPage() {
             {fleet.entitlement.moduleAiExplicitlyDisabled ? ` · explicitly disabled: ${fleet.entitlement.moduleAiExplicitlyDisabled}` : ""}
           </p>
 
-          <h3 className="text-subhead" style={{ margin: "1rem 0 0.5rem" }}>Usage by plane (successful attempts, UTC windows)</h3>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(11rem, 1fr))", gap: "0.75rem", margin: "0.85rem 0 1rem" }}>
+            <MetricCard label="Tokens today" value={fmtNumber(fleet.planes.reduce((n, p) => n + p.tokens.day, 0))} />
+            <MetricCard label="Tokens this month" value={fmtNumber(fleet.planes.reduce((n, p) => n + p.tokens.month, 0))} />
+            <MetricCard label="Requests this month" value={fmtNumber(fleet.planes.reduce((n, p) => n + p.requests.month, 0))} />
+            <MetricCard label="Estimated AI cost" value={fmtCost(fleet.planes.reduce((n, p) => n + p.estimatedCost.month, 0))} />
+          </div>
+
+          <h3 className="text-subhead" style={{ margin: "1rem 0 0.5rem" }}>AI usage modes (successful attempts, UTC windows)</h3>
           <table className="data-table">
-            <thead><tr><th>Plane</th><th>Source</th><th>Tokens today / week / month</th><th>Requests month</th><th>Estimated cost month</th></tr></thead>
+            <thead><tr><th>Mode</th><th>Metering source</th><th>Tokens today / week / month</th><th>Requests month</th><th>Estimated cost month</th></tr></thead>
             <tbody>
               {fleet.planes.map((p) => (
                 <tr key={p.plane}>
@@ -154,6 +195,76 @@ export default function AiFleetPage() {
               : fleet.reconciliationExceptions ? <NotModelledNote value={fleet.reconciliationExceptions} /> : "—"}
           </p>
 
+          <h3 className="text-subhead" style={heading}>Runtime credential pools</h3>
+          <p className="overlay-note" style={{ marginTop: 0 }}>
+            Provider policy and runtime readiness are separate facts. A provider can be policy-active while its runtime has no usable credential; this view reports both instead of treating “active” as “working”.
+          </p>
+          {managed === "unavailable" && <ErrorState label="Managed credential inventory is not available from the owner build." />}
+          {managed && managed !== "unavailable" && (
+            <div style={{ display: "grid", gap: "0.85rem" }}>
+              {managed.pools.map((pool) => {
+                const activeManaged = pool.managedCredentials.filter((c) => c.status === "active").length;
+                const managedReady = activeManaged >= pool.minimumActiveCredentials;
+                const allCredentials = [...pool.environmentCredentials, ...pool.managedCredentials];
+                const overlaps = allCredentials.filter((c) => c.sharedWithPools.length > 0);
+                return (
+                  <div className="card" key={pool.poolKey} style={{ padding: "1rem" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", alignItems: "flex-start", flexWrap: "wrap" }}>
+                      <div>
+                        <div style={{ display: "flex", gap: "0.5rem", alignItems: "center", flexWrap: "wrap" }}>
+                          <strong>{pool.displayName}</strong>
+                          <StatusBadge value={pool.runtimeReady ? "runtime ready" : "runtime unavailable"} />
+                          <StatusBadge value={`policy ${pool.providerStatus}`} />
+                        </div>
+                        <div className="overlay-note" style={{ marginTop: "0.2rem" }}>{pool.workloadLabel} · pool <span style={{ fontFamily: "monospace" }}>{pool.poolKey}</span></div>
+                      </div>
+                      {canManageCredentials && (
+                        <div style={{ display: "flex", gap: "0.4rem", flexWrap: "wrap" }}>
+                          <button className="btn" style={small} onClick={() => setDialog({ kind: "managed-add", poolKey: pool.poolKey, workloadLabel: pool.workloadLabel })}>Add key…</button>
+                          <button className="btn" style={small} disabled={pool.runtimeSource === "environment" && !managedReady} onClick={() => setDialog({ kind: "managed-source", poolKey: pool.poolKey, current: pool.runtimeSource, managedReady })}>
+                            {pool.runtimeSource === "environment" ? "Move runtime to managed pool…" : "Change runtime source…"}
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(10rem, 1fr))", gap: "0.6rem", marginTop: "0.8rem" }}>
+                      <MiniFact label="Runtime source" value={pool.runtimeSource === "managed_db" ? "Managed encrypted pool" : "Legacy environment pool"} />
+                      <MiniFact label="Selected now" value={`${pool.selectedCredentialCount} credential${pool.selectedCredentialCount === 1 ? "" : "s"}`} />
+                      <MiniFact label="Managed readiness" value={`${activeManaged}/${pool.minimumActiveCredentials} active required`} />
+                      <MiniFact label="Credential posture" value={pool.credentialReady ? "Ready" : "No usable credential"} />
+                    </div>
+                    {overlaps.length > 0 && (
+                      <p style={{ margin: "0.75rem 0 0", fontSize: "0.82rem" }}>
+                        <strong>Shared-key overlap:</strong> {overlaps.map((c) => `${c.maskedHint} is also present in ${c.sharedWithPools.join(", ")}`).join("; ")}. This is visible intentionally so workload pools are not mistaken for independent credentials.
+                      </p>
+                    )}
+                    {allCredentials.length === 0 ? (
+                      <p className="overlay-note">No credential is configured for this pool.</p>
+                    ) : (
+                      <table className="data-table" style={{ marginTop: "0.75rem" }}>
+                        <thead><tr><th>Credential</th><th>Source</th><th>State</th><th>30-day use</th><th>Last success</th>{canManageCredentials && <th />}</tr></thead>
+                        <tbody>
+                          {allCredentials.map((credential) => (
+                            <tr key={`${pool.poolKey}:${credential.credentialId}`}>
+                              <td><strong>{credential.label}</strong><div className="overlay-note" style={{ marginTop: 0 }}>{credential.maskedHint} · tag {credential.credentialTag.slice(0, 8)}…{credential.version ? ` · v${credential.version}` : ""}</div></td>
+                              <td>{credential.source === "managed_db" ? "Managed encrypted" : "Legacy environment"}</td>
+                              <td><StatusBadge value={credential.status} /></td>
+                              <td>{fmtNumber(credential.usage30d.requests)} requests · {fmtNumber(credential.usage30d.totalTokens)} tokens{credential.usage30d.rateLimited ? ` · ${credential.usage30d.rateLimited} rate-limited` : ""}</td>
+                              <td>{credential.usage30d.lastSuccessAt ? when(credential.usage30d.lastSuccessAt) : "No recorded success"}</td>
+                              {canManageCredentials && <td>{credential.source === "managed_db" && credential.version !== null ? <div style={{ display: "flex", gap: "0.35rem", flexWrap: "wrap" }}><button className="btn" style={small} onClick={() => setDialog({ kind: "managed-rotate", poolKey: pool.poolKey, credentialId: credential.credentialId, label: credential.label })}>Rotate…</button><button className="btn" style={small} onClick={() => setDialog({ kind: "managed-status", poolKey: pool.poolKey, credentialId: credential.credentialId, label: credential.label, current: credential.status })}>State…</button></div> : <span className="overlay-note">Managed actions begin after staging a managed key.</span>}</td>}
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    )}
+                    {pool.legacyEnvVars.length > 0 && <p className="overlay-note">Legacy configuration source: {pool.legacyEnvVars.join(", ")}. Variable names are shown for operational traceability; values are never returned.</p>}
+                  </div>
+                );
+              })}
+              <p className="overlay-note" style={{ marginTop: 0 }}>Credential inventory observed {when(managed.observedAt)} · posture: {managed.keyringPosture.replace(/_/g, " ")}</p>
+            </div>
+          )}
+
           <h3 className="text-subhead" style={heading}>Providers and models</h3>
           <table className="data-table">
             <thead><tr><th>Provider</th><th>Status</th><th>Executor</th><th>Plane</th><th>Credentials</th><th>Models (lifecycle · certification)</th>{canPolicy && <th />}</tr></thead>
@@ -162,7 +273,7 @@ export default function AiFleetPage() {
                 const detailed = catalogModels(p.providerKey);
                 return (
                   <tr key={p.providerKey}>
-                    <td><span style={{ fontFamily: "monospace" }}>{p.providerKey}</span><div className="overlay-note" style={{ marginTop: 0 }}>{p.displayName}</div></td>
+                    <td><strong>{p.displayName}</strong><div className="overlay-note" style={{ marginTop: 0 }}>{p.providerKey}</div></td>
                     <td>
                       <StatusBadge value={p.status} />
                       <div className="overlay-note" style={{ marginTop: 0 }}>enforced: {p.enforcement.statusEnforced.replace("_", " ")}</div>
@@ -207,7 +318,7 @@ export default function AiFleetPage() {
               <tbody>
                 {fleet.quotaRisk.map((q) => (
                   <tr key={q.policyId}>
-                    <td style={{ fontFamily: "monospace", fontSize: "0.8rem" }}>{q.tenantId}</td>
+                    <td title={q.tenantId}>{tenantDisplay(q.tenantId)}</td>
                     <td>{q.period}</td><td>{q.limitType}</td>
                     <td>{fmtNumber(q.used)} / {fmtNumber(q.hard)}</td>
                     <td><StatusBadge value={q.state} /></td>
@@ -219,21 +330,33 @@ export default function AiFleetPage() {
 
           <h3 className="text-subhead" style={heading}>Top this month</h3>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(16rem, 1fr))", gap: "1rem" }}>
-            <TopList title="Tenants" rows={fleet.top.tenants.map((t) => [t.tenantId, t.totalTokens])} mono />
+            <TopList title="Tenants" rows={fleet.top.tenants.map((t) => [tenantDisplay(t.tenantId), t.totalTokens])} />
             <TopList title="Capabilities" rows={fleet.top.capabilities.map((c) => [c.capabilityKey, c.totalTokens])} mono />
             <TopList title="Models" rows={fleet.top.models.map((m) => [`${m.providerKey}/${m.modelKey ?? "?"}`, m.totalTokens])} mono />
           </div>
 
-          <h3 className="text-subhead" style={heading}>Provider health (7 days, all attempts)</h3>
+          <h3 className="text-subhead" style={heading}>Provider attempt outcomes (7 days)</h3>
+          <p className="overlay-note" style={{ marginTop: 0 }}>This is request-outcome telemetry, not a synthetic uptime score. Credential-level evidence is shown in Runtime credential pools above.</p>
           {fleet.providerHealth7d.length === 0 ? (
             <EmptyState label="No provider attempts in the last 7 days." icon="monitor_heart" />
           ) : (
             <table className="data-table">
-              <thead><tr><th>Provider</th><th>Attempts</th><th>Failures</th><th>Rate limited</th></tr></thead>
+              <thead><tr><th>Provider</th><th>Attempts</th><th>Failure rate</th><th>Rate-limit rate</th><th>Operational signal</th></tr></thead>
               <tbody>
-                {fleet.providerHealth7d.map((h) => (
-                  <tr key={h.providerKey}><td>{h.providerKey}</td><td>{h.attempts}</td><td>{h.failures}</td><td>{h.rateLimited}</td></tr>
-                ))}
+                {fleet.providerHealth7d.map((health) => {
+                  const failurePct = health.attempts > 0 ? (health.failures / health.attempts) * 100 : 0;
+                  const rateLimitPct = health.attempts > 0 ? (health.rateLimited / health.attempts) * 100 : 0;
+                  const provider = fleet.providers.find((entry) => entry.providerKey === health.providerKey);
+                  return (
+                    <tr key={health.providerKey}>
+                      <td><strong>{provider?.displayName ?? health.providerKey}</strong><div className="overlay-note" style={{ marginTop: 0 }}>{health.providerKey}</div></td>
+                      <td>{fmtNumber(health.attempts)}</td>
+                      <td>{health.failures} · {failurePct.toFixed(1)}%</td>
+                      <td>{health.rateLimited} · {rateLimitPct.toFixed(1)}%</td>
+                      <td>{health.failures === 0 && health.rateLimited === 0 ? <StatusBadge value="no recorded errors" /> : <StatusBadge value="attention" />}</td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           )}
@@ -252,7 +375,7 @@ export default function AiFleetPage() {
               <tbody>
                 {metering.map((e) => (
                   <tr key={e.exceptionId}>
-                    <td style={{ fontFamily: "monospace", fontSize: "0.8rem" }}>{e.tenantId}</td>
+                    <td title={e.tenantId}>{tenantDisplay(e.tenantId)}</td>
                     <td>{e.type.replace(/_/g, " ")}</td><td>{e.capabilityKey ?? "—"}</td><td>{e.providerKey ?? "—"}</td>
                     <td>{e.observedAttempts} / {e.expectedAttempts ?? "?"}</td>
                     <td>{when(e.firstObservedAt)} → {when(e.lastObservedAt)}</td>
@@ -295,7 +418,7 @@ export default function AiFleetPage() {
                         <td>{l.serviceDay}</td>
                         <td>{l.estimatedAmount === null ? "—" : l.estimatedAmount.toFixed(4)} / {l.actualAmount === null ? "—" : l.actualAmount.toFixed(4)} {l.currency}</td>
                         <td>{l.variance === null ? "—" : l.variance.toFixed(4)}</td>
-                        <td>{l.poolLevel ? "pool" : l.tenantId ?? "—"}</td>
+                        <td>{l.poolLevel ? "Managed pool" : <span title={l.tenantId ?? undefined}>{tenantDisplay(l.tenantId)}</span>}</td>
                         <td style={{ fontSize: "0.8rem" }}>{l.reason ?? "—"}</td>
                         {canRecon && <td><button className="btn" style={small} onClick={() => setDialog({ kind: "recon", reconciliationId: l.reconciliationId, outcome: l.outcome })}>Resolve…</button></td>}
                       </tr>
@@ -331,6 +454,7 @@ export default function AiFleetPage() {
               refreshKey={refresh}
               onExecuted={done}
               renderSummary={(a) => <AiApprovalSummary approval={a} />}
+              hideWhenEmpty
               canExecute={(a) => a.makerOperatorId === operator.operatorId || a.checkerOperatorId === operator.operatorId}
             />
           )}
@@ -340,10 +464,22 @@ export default function AiFleetPage() {
           {dialog?.kind === "certification" && <ModelCertificationDialog modelId={dialog.modelId} label={dialog.label} current={dialog.current} onClose={close} onDone={done} />}
           {dialog?.kind === "metering" && <ResolveMeteringDialog exceptionId={dialog.exceptionId} type={dialog.type} onClose={close} onDone={done} />}
           {dialog?.kind === "recon" && <ResolveReconciliationDialog reconciliationId={dialog.reconciliationId} outcome={dialog.outcome} onClose={close} onDone={done} />}
+          {dialog?.kind === "managed-add" && <ManagedCredentialAddDialog poolKey={dialog.poolKey} workloadLabel={dialog.workloadLabel} onClose={close} onDone={done} />}
+          {dialog?.kind === "managed-rotate" && <ManagedCredentialRotateDialog poolKey={dialog.poolKey} credentialId={dialog.credentialId} label={dialog.label} onClose={close} onDone={done} />}
+          {dialog?.kind === "managed-status" && <ManagedCredentialStatusDialog poolKey={dialog.poolKey} credentialId={dialog.credentialId} label={dialog.label} current={dialog.current} onClose={close} onDone={done} />}
+          {dialog?.kind === "managed-source" && <ManagedPoolSourceDialog poolKey={dialog.poolKey} current={dialog.current} managedReady={dialog.managedReady} onClose={close} onDone={done} />}
         </>
       )}
     </>
   );
+}
+
+function MetricCard({ label, value }: { label: string; value: string }) {
+  return <div className="card" style={{ padding: "0.85rem 1rem" }}><div className="overlay-note" style={{ marginTop: 0 }}>{label}</div><div style={{ fontSize: "1.45rem", fontWeight: 650, marginTop: "0.2rem" }}>{value}</div></div>;
+}
+
+function MiniFact({ label, value }: { label: string; value: string }) {
+  return <div><div className="overlay-note" style={{ marginTop: 0 }}>{label}</div><div style={{ fontSize: "0.88rem", marginTop: "0.15rem" }}>{value}</div></div>;
 }
 
 function TopList({ title, rows, mono = false }: { title: string; rows: Array<[string, number]>; mono?: boolean }) {

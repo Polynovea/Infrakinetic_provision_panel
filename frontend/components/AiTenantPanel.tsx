@@ -115,15 +115,15 @@ export function AiTenantPanel({ tenantId, request }: { tenantId: string; request
           <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap", alignItems: "center", fontSize: "0.85rem" }}>
             <span>module_ai: <StatusBadge value={state.moduleAi.entitled ? "active" : "disabled"} /> {state.moduleAi.explicitRow ? "" : "(default)"}</span>
             <span>Platform state: <StatusBadge value={state.moduleAi.platformEngineState} /></span>
-            <span>Emergency: <StatusBadge value={state.emergency.state === "suspended" ? "suspended" : "active"} /></span>
+            <span>Emergency stop: <StatusBadge value={state.emergency.state === "suspended" ? "active" : "not active"} /></span>
             <span>Root policy: {state.rootPolicy.source === "default" ? "default (compatibility)" : `v${state.rootPolicy.policyVersion}`} · {state.rootPolicy.commissioningMode} · billing anchor day {state.rootPolicy.billingAnchorDay}</span>
             <span className="overlay-note" style={{ marginTop: 0 }}>Observed {when(state.observedAt)}</span>
           </div>
 
           {(canSuspend || canEntitle || canQuota || canPolicy) && (
             <div style={{ display: "flex", gap: "0.4rem", flexWrap: "wrap", margin: "0.6rem 0" }} aria-label="AI operator actions">
-              {canSuspend && state.emergency.state === "none" && <button className="btn btn-danger" style={small} onClick={() => setDialog({ kind: "suspend" })}>Suspend AI (R4)</button>}
-              {canSuspend && state.emergency.state === "suspended" && <button className="btn btn-primary" style={small} onClick={() => setDialog({ kind: "resume" })}>Request resume (R3)</button>}
+              {canSuspend && state.emergency.state === "none" && <button className="btn btn-danger" style={small} onClick={() => setDialog({ kind: "suspend" })}>Emergency stop AI…</button>}
+              {canSuspend && state.emergency.state === "suspended" && <button className="btn btn-primary" style={small} onClick={() => setDialog({ kind: "resume" })}>Request AI restoration…</button>}
               {canEntitle && <button className="btn" style={small} onClick={() => setDialog({ kind: "planes" })}>Planes</button>}
               {canEntitle && <button className="btn" style={small} onClick={() => setDialog({ kind: "mode" })}>Commissioning mode</button>}
               {canQuota && <button className="btn" style={small} onClick={() => setDialog({ kind: "anchor" })}>Billing anchor</button>}
@@ -140,9 +140,9 @@ export function AiTenantPanel({ tenantId, request }: { tenantId: string; request
             </div>
           )}
 
-          <h4 style={section}>Planes</h4>
+          <h4 style={section}>AI access modes</h4>
           <table className="data-table">
-            <thead><tr><th>Plane</th><th>Desired (root)</th><th>Effective</th><th>Reason</th></tr></thead>
+            <thead><tr><th>Mode</th><th>Allowed by policy</th><th>Available</th><th>Reason</th></tr></thead>
             <tbody>
               {state.planes.map((p) => (
                 <tr key={p.plane}>
