@@ -7,13 +7,13 @@ import { ActionDialog } from "./AiActions";
 export interface AllocationTargetDraft { dimension: string; key: string; percentage: number }
 export interface AllocationRuleDraft {
   ruleId: string;
-  match: { source: "aws" | "ai_reconciled"; provider?: string; service?: string; costClass?: string; providerKey?: string; currency?: string };
+  match: { source: "aws" | "azure" | "ai_reconciled"; provider?: string; service?: string; costClass?: string; financialClass?: string; providerKey?: string; currency?: string };
   allocations: AllocationTargetDraft[];
 }
 
 interface Common { onClose: () => void; onDone: () => void }
 const DIMENSIONS = ["tenant", "engine", "environment", "provider", "region", "service", "integration", "ai_capability", "release", "shared"] as const;
-const AWS_MATCH = ["all", "costClass", "service", "currency"] as const;
+const CLOUD_MATCH = ["all", "costClass", "financialClass", "service", "currency"] as const;
 const AI_MATCH = ["all", "providerKey", "currency"] as const;
 
 function id() {
@@ -26,7 +26,7 @@ function blankRule(): AllocationRuleDraft {
 }
 
 function matchField(rule: AllocationRuleDraft): string {
-  for (const field of ["costClass", "service", "providerKey", "currency"] as const) if (rule.match[field]) return field;
+  for (const field of ["costClass", "financialClass", "service", "providerKey", "currency"] as const) if (rule.match[field]) return field;
   return "all";
 }
 
@@ -60,7 +60,7 @@ export function FinOpsAllocationDialog({ initialRules, onClose, onDone }: Common
       <div style={{ display: "grid", gap: "0.75rem" }}>
         {rules.map((rule, ruleIndex) => {
           const field = matchField(rule);
-          const fields = rule.match.source === "aws" ? AWS_MATCH : AI_MATCH;
+          const fields = rule.match.source === "ai_reconciled" ? AI_MATCH : CLOUD_MATCH;
           const matchValue = field === "all" ? "" : String((rule.match as Record<string, unknown>)[field] ?? "");
           const total = rule.allocations.reduce((n, target) => n + Number(target.percentage || 0), 0);
           return (
@@ -71,9 +71,9 @@ export function FinOpsAllocationDialog({ initialRules, onClose, onDone }: Common
               </div>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(9rem, 1fr))", gap: "0.5rem", marginTop: "0.55rem" }}>
                 <div className="field"><label>Rule ID</label><input value={rule.ruleId} maxLength={120} onChange={(e) => updateRule(ruleIndex, { ...rule, ruleId: e.target.value })} /></div>
-                <div className="field"><label>Cost source</label><select value={rule.match.source} onChange={(e) => updateRule(ruleIndex, { ...rule, match: { source: e.target.value as "aws" | "ai_reconciled" } })}><option value="aws">AWS billing</option><option value="ai_reconciled">AI provider actual</option></select></div>
+                <div className="field"><label>Cost source</label><select value={rule.match.source} onChange={(e) => updateRule(ruleIndex, { ...rule, match: { source: e.target.value as "aws" | "azure" | "ai_reconciled" } })}><option value="aws">AWS billing</option><option value="azure">Azure billing</option><option value="ai_reconciled">AI provider actual</option></select></div>
                 <div className="field"><label>Match by</label><select value={field} onChange={(e) => updateRule(ruleIndex, setMatch(rule, e.target.value, ""))}>{fields.map((value) => <option key={value} value={value}>{value === "all" ? "All cost from source" : value.replace(/([A-Z])/g, " $1").toLowerCase()}</option>)}</select></div>
-                {field !== "all" && <div className="field"><label>Match value</label><input value={matchValue} onChange={(e) => updateRule(ruleIndex, setMatch(rule, field, e.target.value))} placeholder={field === "costClass" ? "e.g. compute" : field === "providerKey" ? "e.g. nvidia_nim" : undefined} /></div>}
+                {field !== "all" && <div className="field"><label>Match value</label><input value={matchValue} onChange={(e) => updateRule(ruleIndex, setMatch(rule, field, e.target.value))} placeholder={field === "costClass" ? "e.g. compute" : field === "financialClass" ? "e.g. credit" : field === "providerKey" ? "e.g. nvidia_nim" : undefined} /></div>}
               </div>
               <div style={{ marginTop: "0.45rem" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "0.5rem" }}><span className="overlay-note" style={{ margin: 0 }}>Allocation targets · {total}% allocated · {Math.max(0, 100 - total)}% remains unallocated</span><button type="button" className="btn" style={{ fontSize: "0.75rem", padding: "0.15rem 0.5rem" }} onClick={() => updateRule(ruleIndex, { ...rule, allocations: [...rule.allocations, { dimension: "environment", key: "production", percentage: Math.max(1, 100 - total) }] })}>Add target</button></div>
