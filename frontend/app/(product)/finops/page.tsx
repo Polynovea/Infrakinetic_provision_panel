@@ -23,7 +23,8 @@ interface AiEstimated { currency: string; amount: number; attempts: number; tota
 interface AiReconciled { providerKey: string; currency: string; actualAmount: number; estimatedAmount: number; unallocatedAmount: number; tenantAttributedAmount: number; lines: number; openLines: number }
 interface AllocationPolicy { policyVersion: string; status: string; rules: AllocationRuleDraft[]; reason: string; createdBy: string; createdAt: string; supersedesPolicyVersion?: string }
 interface GovernedFact { factId: string; source: string; amount: number; currency: string; service?: string; costClass?: string; financialClass?: string; providerKey?: string; estimated: boolean; ruleId: string | null; allocations: Array<{ dimension: string; key: string; percentage: number; amount: number; currency: string }>; unallocatedAmount: number }
-interface CloudSource { status: string; errorCode?: string; estimated?: boolean; rows?: CloudCostRow[]; reason?: string }
+interface FinancialSummary { currency: string; grossCharges: number; credits: number; discounts: number; refunds: number; otherOffsets: number; netCost: number }
+interface CloudSource { status: string; errorCode?: string; estimated?: boolean; rows?: CloudCostRow[]; summaryByCurrency?: FinancialSummary[]; reason?: string }
 interface FinOpsSnapshot {
   contractVersion: string;
   period: { kind: string; start: string; end: string };
@@ -66,6 +67,19 @@ function displayCurrencyMap(map: Map<string, number>) {
   return map.size === 0 ? "—" : [...map].map(([currency, amount]) => money(amount, currency)).join(" + ");
 }
 
+function summaryMap(rows: FinancialSummary[] | undefined, key: keyof FinancialSummary) {
+  if (!rows?.length) return "—";
+  return rows.map((row) => money(Number(row[key] ?? 0), row.currency)).join(" + ");
+}
+
+function offsetsMap(rows: FinancialSummary[] | undefined) {
+  if (!rows?.length) return "—";
+  return rows.map((row) => {
+    const amount = row.credits + row.discounts + row.refunds + row.otherOffsets;
+    return money(amount, row.currency);
+  }).join(" + ");
+}
+
 export default function FinOpsPage() {
   const { request, operator } = useOperatorSession();
   const canPolicy = operator?.scopes.includes("finops.policy.write") ?? false;
@@ -94,7 +108,9 @@ export default function FinOpsPage() {
       aiUnallocatedByCurrency.set(row.currency, (aiUnallocatedByCurrency.get(row.currency) ?? 0) + row.unallocatedAmount);
     }
     return {
-      aws: displayCurrencyMap(sumByCurrency(snapshot.sources.aws.rows ?? [])),
+      awsGross: snapshot.sources.aws.summaryByCurrency?.length ? summaryMap(snapshot.sources.aws.summaryByCurrency, "grossCharges") : displayCurrencyMap(new Map([...sumByCurrency((snapshot.sources.aws.rows ?? []).filter((row) => row.amount > 0))])),
+      awsOffsets: snapshot.sources.aws.summaryByCurrency?.length ? offsetsMap(snapshot.sources.aws.summaryByCurrency) : displayCurrencyMap(new Map([...sumByCurrency((snapshot.sources.aws.rows ?? []).filter((row) => row.amount < 0))])),
+      awsNet: snapshot.sources.aws.summaryByCurrency?.length ? summaryMap(snapshot.sources.aws.summaryByCurrency, "netCost") : displayCurrencyMap(sumByCurrency(snapshot.sources.aws.rows ?? [])),
       azure: displayCurrencyMap(sumByCurrency(snapshot.sources.azure.rows ?? [])),
       aiEstimated: displayCurrencyMap(aiEstimatedByCurrency),
       aiActual: displayCurrencyMap(aiActualByCurrency),
@@ -115,12 +131,21 @@ export default function FinOpsPage() {
         <>
           <p className="overlay-note" style={{ marginTop: 0 }}>Month-to-date evidence {snapshot.period.start} → {snapshot.period.end} · observed {when(snapshot.observedAt)}. Provider credits, discounts and refunds remain explicit rows; estimated and reconciled amounts are deliberately not merged.</p>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(12rem, 1fr))", gap: "0.75rem", margin: "0.85rem 0 1rem" }}>
-            <Metric label="AWS cloud cost" value={summary.aws} note={snapshot.sources.aws.status === "live" ? (snapshot.sources.aws.estimated ? "Cost Explorer · current period estimated" : "Cost Explorer") : `source ${snapshot.sources.aws.status.replace(/_/g, " ")}`} />
+            <Metric label="AWS gross charges" value={summary.awsGross} note={snapshot.sources.aws.status === "live" ? "Before credits, discounts and refunds" : `source ${snapshot.sources.aws.status.replace(/_/g, " ")}`} />
+            <Metric label="AWS credits & offsets" value={summary.awsOffsets} note="Credits, discounts, refunds and other negative adjustments" />
+            <Metric label="AWS net cost" value={summary.awsNet} note={snapshot.sources.aws.estimated ? "Cost Explorer · current period estimated" : "Cost Explorer"} />
             <Metric label="Azure cloud cost" value={summary.azure} note={snapshot.sources.azure.status === "live" ? "Azure Cost Management" : `source ${snapshot.sources.azure.status.replace(/_/g, " ")}`} />
             <Metric label="AI usage estimate" value={summary.aiEstimated} note="Owner metering + versioned pricing" />
             <Metric label="AI provider actual" value={summary.aiActual} note="Imported/reconciled provider statements" />
-            <Metric label="AI still unallocated" value={summary.aiUnallocated} note="Managed/shared pool cost remains explicit" />
           </div>
+
+          {snapshot.sources.aws.summaryByCurrency?.length ? <>
+            <h3 className="text-subhead" style={{ margin: "1rem 0 0.5rem" }}>AWS gross-to-net</h3>
+            <table className="data-table">
+              <thead><tr><th>Currency</th><th>Gross charges</th><th>Credits</th><th>Discounts</th><th>Refunds</th><th>Other offsets</th><th>Net cost</th></tr></thead>
+              <tbody>{snapshot.sources.aws.summaryByCurrency.map((row) => <tr key={row.currency}><td>{row.currency}</td><td>{money(row.grossCharges, row.currency)}</td><td>{money(row.credits, row.currency)}</td><td>{money(row.discounts, row.currency)}</td><td>{money(row.refunds, row.currency)}</td><td>{money(row.otherOffsets, row.currency)}</td><td><strong>{money(row.netCost, row.currency)}</strong></td></tr>)}</tbody>
+            </table>
+          </> : null}
 
           <h3 className="text-subhead" style={{ margin: "1rem 0 0.5rem" }}>Cost-source coverage</h3>
           <table className="data-table">
