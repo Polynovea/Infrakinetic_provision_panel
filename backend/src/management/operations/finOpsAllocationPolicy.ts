@@ -8,7 +8,7 @@ import { buildSafeSnapshot } from "./evidence.js";
 export const FINOPS_ALLOCATION_ACTION = "finops.allocation-policy.replace";
 export const FINOPS_ALLOCATION_RESOURCE = "finops_allocation_policy";
 
-const SOURCES = ["aws", "ai_reconciled"] as const;
+const SOURCES = ["aws", "azure", "ai_reconciled"] as const;
 const DIMENSIONS = ["tenant", "engine", "environment", "provider", "region", "service", "integration", "ai_capability", "release", "shared"] as const;
 
 export interface FinOpsAllocationTarget {
@@ -24,6 +24,7 @@ export interface FinOpsAllocationRule {
     provider?: string;
     service?: string;
     costClass?: string;
+    financialClass?: string;
     providerKey?: string;
     currency?: string;
   };
@@ -82,9 +83,9 @@ export function validateFinOpsAllocationRules(value: unknown): FinOpsAllocationR
     if (!row.match || typeof row.match !== "object" || Array.isArray(row.match)) throw new Error(`rules[${index}].match must be an object`);
     const matchRaw = row.match as Record<string, unknown>;
     const source = matchRaw.source;
-    if (!SOURCES.includes(source as never)) throw new Error(`rules[${index}].match.source must be aws or ai_reconciled`);
+    if (!SOURCES.includes(source as never)) throw new Error(`rules[${index}].match.source must be aws, azure or ai_reconciled`);
     const match: FinOpsAllocationRule["match"] = { source: source as FinOpsAllocationRule["match"]["source"] };
-    for (const key of ["provider", "service", "costClass", "providerKey", "currency"] as const) {
+    for (const key of ["provider", "service", "costClass", "financialClass", "providerKey", "currency"] as const) {
       if (matchRaw[key] !== undefined) match[key] = text(matchRaw[key], `rules[${index}].match.${key}`, 200);
     }
     if (!Array.isArray(row.allocations) || row.allocations.length === 0 || row.allocations.length > 20) throw new Error(`rules[${index}].allocations must contain 1..20 targets`);
@@ -179,11 +180,11 @@ export async function replaceFinOpsAllocationPolicy(deps: { ledger: ManagementOp
   }
 }
 
-interface CostFact { factId: string; source: "aws" | "ai_reconciled"; amount: number; currency: string; provider?: string; service?: string; costClass?: string; providerKey?: string; estimated: boolean }
+interface CostFact { factId: string; source: "aws" | "azure" | "ai_reconciled"; amount: number; currency: string; provider?: string; service?: string; costClass?: string; financialClass?: string; recordType?: string; chargeType?: string; providerKey?: string; estimated: boolean }
 
 function matches(rule: FinOpsAllocationRule, fact: CostFact): boolean {
   if (rule.match.source !== fact.source) return false;
-  for (const key of ["provider", "service", "costClass", "providerKey", "currency"] as const) {
+  for (const key of ["provider", "service", "costClass", "financialClass", "providerKey", "currency"] as const) {
     if (rule.match[key] !== undefined && rule.match[key] !== fact[key]) return false;
   }
   return true;
@@ -191,7 +192,30 @@ function matches(rule: FinOpsAllocationRule, fact: CostFact): boolean {
 
 export function applyFinOpsAllocation(snapshot: Record<string, any>, policy: FinOpsAllocationPolicyRecord | null) { // eslint-disable-line @typescript-eslint/no-explicit-any
   const facts: CostFact[] = [];
-  for (const row of snapshot?.sources?.aws?.rows ?? []) facts.push({ factId: `aws:${row.service}:${row.currency}`, source: "aws", amount: Number(row.amount ?? 0), currency: String(row.currency ?? "UNKNOWN"), provider: row.provider, service: row.service, costClass: row.costClass, estimated: Boolean(row.estimated) });
+  for (const row of snapshot?.sources?.aws?.rows ?? []) facts.push({
+    factId: `aws:${row.service}:${row.recordType ?? row.financialClass ?? "usage"}:${row.currency}`,
+    source: "aws",
+    amount: Number(row.amount ?? 0),
+    currency: String(row.currency ?? "UNKNOWN"),
+    provider: row.provider,
+    service: row.service,
+    costClass: row.costClass,
+    financialClass: row.financialClass,
+    recordType: row.recordType,
+    estimated: Boolean(row.estimated),
+  });
+  for (const row of snapshot?.sources?.azure?.rows ?? []) facts.push({
+    factId: `azure:${row.service}:${row.chargeType ?? row.financialClass ?? "usage"}:${row.currency}`,
+    source: "azure",
+    amount: Number(row.amount ?? 0),
+    currency: String(row.currency ?? "UNKNOWN"),
+    provider: row.provider,
+    service: row.service,
+    costClass: row.costClass,
+    financialClass: row.financialClass,
+    chargeType: row.chargeType,
+    estimated: Boolean(row.estimated),
+  });
   for (const row of snapshot?.sources?.ai?.reconciled ?? []) {
     const unallocated = Number(row.unallocatedAmount ?? 0);
     if (unallocated > 0) facts.push({ factId: `ai:${row.providerKey}:${row.currency}`, source: "ai_reconciled", amount: unallocated, currency: String(row.currency ?? "UNKNOWN"), provider: "AI provider", providerKey: row.providerKey, costClass: "AI", estimated: false });

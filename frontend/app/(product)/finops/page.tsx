@@ -7,19 +7,32 @@ import { StatusBadge } from "../../../components/StatusBadge";
 import { ErrorState, EmptyState } from "../../../components/States";
 import { FinOpsAllocationDialog, type AllocationRuleDraft } from "../../../components/FinOpsAllocationDialog";
 
-interface AwsCostRow { provider: string; service: string; costClass: string; amount: number; currency: string; evidence: string; estimated: boolean }
+interface CloudCostRow {
+  provider: string;
+  service: string;
+  costClass: string;
+  financialClass?: string;
+  recordType?: string;
+  chargeType?: string;
+  amount: number;
+  currency: string;
+  evidence: string;
+  estimated: boolean;
+}
 interface AiEstimated { currency: string; amount: number; attempts: number; totalTokens: number }
 interface AiReconciled { providerKey: string; currency: string; actualAmount: number; estimatedAmount: number; unallocatedAmount: number; tenantAttributedAmount: number; lines: number; openLines: number }
 interface AllocationPolicy { policyVersion: string; status: string; rules: AllocationRuleDraft[]; reason: string; createdBy: string; createdAt: string; supersedesPolicyVersion?: string }
-interface GovernedFact { factId: string; source: string; amount: number; currency: string; service?: string; costClass?: string; providerKey?: string; estimated: boolean; ruleId: string | null; allocations: Array<{ dimension: string; key: string; percentage: number; amount: number; currency: string }>; unallocatedAmount: number }
+interface GovernedFact { factId: string; source: string; amount: number; currency: string; service?: string; costClass?: string; financialClass?: string; providerKey?: string; estimated: boolean; ruleId: string | null; allocations: Array<{ dimension: string; key: string; percentage: number; amount: number; currency: string }>; unallocatedAmount: number }
+interface CloudSource { status: string; errorCode?: string; estimated?: boolean; rows?: CloudCostRow[]; reason?: string }
 interface FinOpsSnapshot {
   contractVersion: string;
   period: { kind: string; start: string; end: string };
   sources: {
-    aws: { status: string; errorCode?: string; estimated: boolean; rows: AwsCostRow[] };
+    aws: CloudSource;
     ai: { status: string; estimated: AiEstimated[]; reconciled: AiReconciled[] };
-    azure: { status: string; reason: string };
+    azure: CloudSource;
   };
+  coverage?: { costClasses?: string[]; financialClasses?: string[]; estimatedVsReconciled?: string };
   allocation: { authority: string; policyVersion: string | null; defaultDisposition: string; note: string; activePolicy?: AllocationPolicy | null };
   governedAllocation?: { policyVersion: string | null; facts: GovernedFact[] };
   observedAt: string;
@@ -43,6 +56,16 @@ function SourceState({ status, errorCode }: { status: string; errorCode?: string
   return <span title={errorCode ?? undefined}><StatusBadge value={status.replace(/_/g, " ")} /></span>;
 }
 
+function sumByCurrency(rows: CloudCostRow[]) {
+  const out = new Map<string, number>();
+  for (const row of rows) out.set(row.currency, (out.get(row.currency) ?? 0) + row.amount);
+  return out;
+}
+
+function displayCurrencyMap(map: Map<string, number>) {
+  return map.size === 0 ? "—" : [...map].map(([currency, amount]) => money(amount, currency)).join(" + ");
+}
+
 export default function FinOpsPage() {
   const { request, operator } = useOperatorSession();
   const canPolicy = operator?.scopes.includes("finops.policy.write") ?? false;
@@ -62,8 +85,6 @@ export default function FinOpsPage() {
 
   const summary = useMemo(() => {
     if (!snapshot) return null;
-    const awsByCurrency = new Map<string, number>();
-    for (const row of snapshot.sources.aws.rows) awsByCurrency.set(row.currency, (awsByCurrency.get(row.currency) ?? 0) + row.amount);
     const aiEstimatedByCurrency = new Map<string, number>();
     for (const row of snapshot.sources.ai.estimated) aiEstimatedByCurrency.set(row.currency, (aiEstimatedByCurrency.get(row.currency) ?? 0) + row.amount);
     const aiActualByCurrency = new Map<string, number>();
@@ -72,9 +93,16 @@ export default function FinOpsPage() {
       aiActualByCurrency.set(row.currency, (aiActualByCurrency.get(row.currency) ?? 0) + row.actualAmount);
       aiUnallocatedByCurrency.set(row.currency, (aiUnallocatedByCurrency.get(row.currency) ?? 0) + row.unallocatedAmount);
     }
-    const display = (map: Map<string, number>) => map.size === 0 ? "—" : [...map].map(([currency, amount]) => money(amount, currency)).join(" + ");
-    return { aws: display(awsByCurrency), aiEstimated: display(aiEstimatedByCurrency), aiActual: display(aiActualByCurrency), aiUnallocated: display(aiUnallocatedByCurrency) };
+    return {
+      aws: displayCurrencyMap(sumByCurrency(snapshot.sources.aws.rows ?? [])),
+      azure: displayCurrencyMap(sumByCurrency(snapshot.sources.azure.rows ?? [])),
+      aiEstimated: displayCurrencyMap(aiEstimatedByCurrency),
+      aiActual: displayCurrencyMap(aiActualByCurrency),
+      aiUnallocated: displayCurrencyMap(aiUnallocatedByCurrency),
+    };
   }, [snapshot]);
+
+  const cloudRows = snapshot ? [...(snapshot.sources.aws.rows ?? []), ...(snapshot.sources.azure.rows ?? [])] : [];
 
   return (
     <>
@@ -85,9 +113,10 @@ export default function FinOpsPage() {
       {error && <ErrorState label={error} />}
       {snapshot && summary && (
         <>
-          <p className="overlay-note" style={{ marginTop: 0 }}>Month-to-date evidence {snapshot.period.start} → {snapshot.period.end} · observed {when(snapshot.observedAt)}. Estimated and reconciled amounts are deliberately not merged.</p>
+          <p className="overlay-note" style={{ marginTop: 0 }}>Month-to-date evidence {snapshot.period.start} → {snapshot.period.end} · observed {when(snapshot.observedAt)}. Provider credits, discounts and refunds remain explicit rows; estimated and reconciled amounts are deliberately not merged.</p>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(12rem, 1fr))", gap: "0.75rem", margin: "0.85rem 0 1rem" }}>
             <Metric label="AWS cloud cost" value={summary.aws} note={snapshot.sources.aws.status === "live" ? (snapshot.sources.aws.estimated ? "Cost Explorer · current period estimated" : "Cost Explorer") : `source ${snapshot.sources.aws.status.replace(/_/g, " ")}`} />
+            <Metric label="Azure cloud cost" value={summary.azure} note={snapshot.sources.azure.status === "live" ? "Azure Cost Management" : `source ${snapshot.sources.azure.status.replace(/_/g, " ")}`} />
             <Metric label="AI usage estimate" value={summary.aiEstimated} note="Owner metering + versioned pricing" />
             <Metric label="AI provider actual" value={summary.aiActual} note="Imported/reconciled provider statements" />
             <Metric label="AI still unallocated" value={summary.aiUnallocated} note="Managed/shared pool cost remains explicit" />
@@ -97,16 +126,28 @@ export default function FinOpsPage() {
           <table className="data-table">
             <thead><tr><th>Source</th><th>Status</th><th>What it means</th></tr></thead>
             <tbody>
-              <tr><td>AWS Cost Explorer</td><td><SourceState status={snapshot.sources.aws.status} errorCode={snapshot.sources.aws.errorCode} /></td><td>{snapshot.sources.aws.status === "live" ? "Real account billing evidence grouped by AWS service." : "AWS spend is unknown here; this is not shown as zero."}</td></tr>
+              <tr><td>AWS Cost Explorer</td><td><SourceState status={snapshot.sources.aws.status} errorCode={snapshot.sources.aws.errorCode} /></td><td>{snapshot.sources.aws.status === "live" ? "Real account billing evidence grouped by service and record type." : "AWS spend is unknown here; this is not shown as zero."}</td></tr>
+              <tr><td>Azure Cost Management</td><td><SourceState status={snapshot.sources.azure.status} errorCode={snapshot.sources.azure.errorCode} /></td><td>{snapshot.sources.azure.status === "live" ? "Real Azure billing evidence grouped by service and charge type." : snapshot.sources.azure.reason ?? "Azure spend is unknown here; this is not shown as zero."}</td></tr>
               <tr><td>AI owner metering</td><td><SourceState status={snapshot.sources.ai.status} /></td><td>Estimated provider consumption from immutable AI usage attempts and pricing versions.</td></tr>
               <tr><td>AI provider statements</td><td><SourceState status={snapshot.sources.ai.status} /></td><td>Actual imported provider amounts with reconciliation outcomes; managed-pool lines remain pool-level until explicitly allocated.</td></tr>
-              <tr><td>Azure Cost Management</td><td><SourceState status={snapshot.sources.azure.status} /></td><td>{snapshot.sources.azure.reason}</td></tr>
             </tbody>
           </table>
 
-          <h3 className="text-subhead" style={{ margin: "1.25rem 0 0.5rem" }}>AWS service cost</h3>
-          {snapshot.sources.aws.rows.length === 0 ? <EmptyState label={snapshot.sources.aws.status === "live" ? "No AWS cost rows in this period." : "AWS billing evidence is not available to this runtime identity."} icon="cloud_off" /> : (
-            <table className="data-table"><thead><tr><th>Service</th><th>Class</th><th>Amount</th><th>Evidence</th></tr></thead><tbody>{snapshot.sources.aws.rows.map((row) => <tr key={`${row.service}:${row.currency}`}><td>{row.service}</td><td>{row.costClass.replace(/_/g, " ")}</td><td>{money(row.amount, row.currency)}{row.estimated ? " · estimated by provider" : ""}</td><td>{row.evidence.replace(/_/g, " ")}</td></tr>)}</tbody></table>
+          <h3 className="text-subhead" style={{ margin: "1.25rem 0 0.5rem" }}>Cloud provider cost evidence</h3>
+          {cloudRows.length === 0 ? <EmptyState label="No cloud billing rows are currently observable. Denied or unconfigured sources remain coverage gaps rather than zero cost." icon="cloud_off" /> : (
+            <table className="data-table">
+              <thead><tr><th>Provider</th><th>Service</th><th>Cost class</th><th>Financial class</th><th>Amount</th><th>Evidence</th></tr></thead>
+              <tbody>{cloudRows.map((row, index) => (
+                <tr key={`${row.provider}:${row.service}:${row.recordType ?? row.chargeType ?? row.financialClass ?? "usage"}:${row.currency}:${index}`}>
+                  <td>{row.provider}</td>
+                  <td>{row.service}<div className="overlay-note" style={{ marginTop: 0 }}>{row.recordType ?? row.chargeType ?? "provider usage"}</div></td>
+                  <td>{row.costClass.replace(/_/g, " ")}</td>
+                  <td>{(row.financialClass ?? "usage").replace(/_/g, " ")}</td>
+                  <td>{money(row.amount, row.currency)}{row.estimated ? " · provider estimate" : ""}</td>
+                  <td>{row.evidence.replace(/_/g, " ")}</td>
+                </tr>
+              ))}</tbody>
+            </table>
           )}
 
           <h3 className="text-subhead" style={{ margin: "1.25rem 0 0.5rem" }}>AI estimated vs reconciled</h3>
@@ -124,6 +165,7 @@ export default function FinOpsPage() {
               {canPolicy && <button className="btn" onClick={() => setEditingPolicy(true)}>{snapshot.allocation.activePolicy ? "Replace allocation policy…" : "Create allocation policy…"}</button>}
             </div>
             <p className="overlay-note">{snapshot.allocation.note}</p>
+            {snapshot.coverage?.financialClasses?.length ? <p className="overlay-note" style={{ marginTop: "0.25rem" }}>Provider financial classes: {snapshot.coverage.financialClasses.join(", ").replace(/_/g, " ")}.</p> : null}
             {snapshot.allocation.activePolicy && <p className="overlay-note" style={{ marginBottom: 0 }}>Active version created {when(snapshot.allocation.activePolicy.createdAt)} · {snapshot.allocation.activePolicy.rules.length} rule(s) · reason: {snapshot.allocation.activePolicy.reason}</p>}
           </div>
 
@@ -135,7 +177,7 @@ export default function FinOpsPage() {
               <thead><tr><th>Cost fact</th><th>Amount</th><th>Policy rule</th><th>Attributed</th><th>Still unallocated</th></tr></thead>
               <tbody>{snapshot.governedAllocation.facts.map((fact) => (
                 <tr key={fact.factId}>
-                  <td><strong>{fact.service ?? fact.providerKey ?? fact.factId}</strong><div className="overlay-note" style={{ marginTop: 0 }}>{fact.source.replace(/_/g, " ")}{fact.costClass ? ` · ${fact.costClass.replace(/_/g, " ")}` : ""}{fact.estimated ? " · provider estimate" : ""}</div></td>
+                  <td><strong>{fact.service ?? fact.providerKey ?? fact.factId}</strong><div className="overlay-note" style={{ marginTop: 0 }}>{fact.source.replace(/_/g, " ")}{fact.costClass ? ` · ${fact.costClass.replace(/_/g, " ")}` : ""}{fact.financialClass ? ` · ${fact.financialClass.replace(/_/g, " ")}` : ""}{fact.estimated ? " · provider estimate" : ""}</div></td>
                   <td>{money(fact.amount, fact.currency)}</td>
                   <td>{fact.ruleId ?? "No matching rule"}</td>
                   <td>{fact.allocations.length === 0 ? "—" : fact.allocations.map((allocation) => `${allocation.dimension}:${allocation.key} ${allocation.percentage}% (${money(allocation.amount, allocation.currency)})`).join("; ")}</td>
