@@ -209,11 +209,11 @@ export interface TenantAiState {
   freshness: string;
 }
 
-interface Windowed { day: number; week: number; month: number }
+interface Windowed { day: number; week: number; month: number; rolling7?: number; rolling30?: number }
 
 export interface FleetAiSummary {
   contractVersion: string;
-  windows: { day: string; week: string; month: string };
+  windows: { day: string; week: string; month: string; rolling7?: string; rolling30?: string };
   planes: Array<{ plane: string; source: string; gatedBy?: string; tokens: Windowed; requests: Windowed; estimatedCost: Windowed }>;
   top: {
     tenants: Array<{ tenantId: string; totalTokens: number; estimatedCost: number }>;
@@ -256,6 +256,62 @@ export interface AiCredentialMetadata {
   observedAt: string;
   source: string;
   freshness: string;
+  correlationId?: string;
+}
+
+export interface AiManagedCredentialUsage {
+  attempts: number;
+  requests: number;
+  successes: number;
+  failures: number;
+  rateLimited: number;
+  totalTokens: number;
+  estimatedCost: number;
+  currency: string | null;
+  lastAttemptAt: string | null;
+  lastSuccessAt: string | null;
+}
+
+export interface AiManagedCredentialEntry {
+  credentialId: string;
+  version: number | null;
+  poolKey: string;
+  label: string;
+  status: string;
+  source: "environment_legacy" | "managed_db" | string;
+  maskedHint: string;
+  credentialTag: string;
+  createdAt: string | null;
+  supersededAt: string | null;
+  revokedAt: string | null;
+  sharedWithPools: string[];
+  usage30d: AiManagedCredentialUsage;
+}
+
+export interface AiManagedCredentialPool {
+  poolKey: string;
+  providerKey: string;
+  displayName: string;
+  workloadLabel: string;
+  runtimeSource: "environment" | "managed_db";
+  legacyEnvVars: string[];
+  minimumActiveCredentials: number;
+  providerStatus: string;
+  credentialReady: boolean;
+  runtimeReady: boolean;
+  selectedCredentialCount: number;
+  environmentCredentials: AiManagedCredentialEntry[];
+  managedCredentials: AiManagedCredentialEntry[];
+  updatedAt: string;
+}
+
+export interface AiManagedCredentialPools {
+  contractVersion: string;
+  keyringPosture: string;
+  pools: AiManagedCredentialPool[];
+  observedAt?: string;
+  source?: string;
+  freshness?: string;
   correlationId?: string;
 }
 
@@ -363,7 +419,7 @@ export interface AiAdminCommandReceipt {
 // Field NAMES that must never appear in an AI operator DTO. Anchored at the
 // end of the key so safe metadata names ("maskedHint",
 // "fingerprintSecretPosture", "credentialSource") pass.
-const SECRET_SHAPED_KEY = /(secret|password|passphrase|token|api[_-]?key|private[_-]?key|ciphertext|authorization|plaintext|key[_-]?material|fingerprint)$/i;
+const SECRET_SHAPED_KEY = /(secret|password|passphrase|token|api[_-]?key|private[_-]?key|access[_-]?key|shared[_-]?access[_-]?key|sas[_-]?key|connection[_-]?string|ciphertext|authorization|plaintext|key[_-]?material|fingerprint)$/i;
 
 export function findSecretShapedField(value: unknown, path = "$"): string | null {
   if (Array.isArray(value)) {
@@ -457,6 +513,11 @@ export function getAiCatalog(deps: AiQueryDeps, params: AiOperatorParams): Promi
 /** Safe metadata only: ref id, provider, version, status, masked hint, timestamps. */
 export function getTenantAiCredentials(deps: AiQueryDeps, params: AiOperatorParams & { tenantId: string }): Promise<AiCredentialMetadata> {
   return readOk<AiCredentialMetadata>(deps, { ...params, routeId: "tenant.credentials.read", pathParams: { tenantId: params.tenantId } }, () => new UnknownTenantError(params.tenantId));
+}
+
+/** Platform-managed credential pool topology and safe per-key usage. No raw key material. */
+export function getManagedAiCredentials(deps: AiQueryDeps, params: AiOperatorParams): Promise<AiManagedCredentialPools> {
+  return readOk<AiManagedCredentialPools>(deps, { ...params, routeId: "managed-credentials.read" });
 }
 
 export function listAiMeteringExceptions(

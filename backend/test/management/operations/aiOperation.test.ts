@@ -24,6 +24,8 @@ const PATH_SAMPLES: Record<string, string> = {
   refId: "aicred_00000000-0000-4000-8000-000000000035",
   exceptionId: "00000000-0000-4000-8000-000000000038",
   reconciliationId: "00000000-0000-4000-8000-000000000044",
+  poolKey: "nvidia_nim",
+  credentialId: "00000000-0000-4000-8000-000000000099",
 };
 
 const pathParamsFor = (routeId: string) =>
@@ -52,6 +54,7 @@ const DIRECT_ROUTES = AI_LEDGERED_ROUTES.filter((route) => route.approval === "n
 describe("contract coverage", () => {
   it("the ledgered, non-approval routes are exactly the R1/R2/R4 commands", () => {
     expect(DIRECT_ROUTES.map((route) => route.id).sort()).toEqual([
+      "managed-credential.add", "managed-credential.rotate", "managed-credential.status.set",
       "metering-exception.resolve", "provider.state.set",
       "reconciliation.line.resolve", "tenant.billing-anchor.set", "tenant.capability.commission", "tenant.commissioning-mode.set",
       "tenant.credential.revoke", "tenant.model-policy.set", "tenant.planes.set", "tenant.quota.grace.grant", "tenant.quota.remove", "tenant.quota.set", "tenant.suspend",
@@ -201,7 +204,7 @@ describe("risk classes and the controls the contract declares", () => {
     expect(disabled.operation.status).toBe("completed");
   });
 
-  it.each(["tenant.resume", "model.lifecycle.set", "model.certification.set"])("%s is R3: executeAiCommand refuses to run it without maker-checker", async (routeId) => {
+  it.each(["tenant.resume", "model.lifecycle.set", "model.certification.set", "managed-credential.pool-source.set"])("%s is R3: executeAiCommand refuses to run it without maker-checker", async (routeId) => {
     const { deps, owner, ledger } = await setup();
     await expect(
       executeAiCommand(deps, { ...operator(), routeId, pathParams: pathParamsFor(routeId), fields: sampleFields(routeId), reason: "r", idempotencyKey: `r3-${routeId}` }),
@@ -236,12 +239,28 @@ describe("risk classes and the controls the contract declares", () => {
     expect(await ledger.listOperations({ limit: 10 })).toHaveLength(0);
   });
 
-  it("there is no way to reach a BYOAI submit/rotate/decrypt/test operation: the only credential mutation is revoke, and it takes no material", () => {
-    const credentialRoutes = AI_CONTRACT.routes.filter((route) => /credential/.test(route.id + route.path));
-    expect(credentialRoutes.map((route) => route.id).sort()).toEqual(["tenant.credential.revoke", "tenant.credentials.read"]);
+  it("tenant BYOAI cannot submit/rotate/decrypt/test through Governance; managed platform credentials use separate routes", () => {
+    const tenantCredentialRoutes = AI_CONTRACT.routes.filter((route) => route.path.includes("/ai/tenants/") && route.path.includes("/credentials"));
+    expect(tenantCredentialRoutes.map((route) => route.id).sort()).toEqual(["tenant.credential.revoke", "tenant.credentials.read"]);
     const revoke = aiRoute("tenant.credential.revoke");
     expect(Object.keys(revoke.requestSchema?.properties ?? {}).sort()).toEqual(["idempotencyKey", "reason"]);
     expect(revoke.requestSchema?.additionalProperties).toBe(false);
+    expect(aiRoute("managed-credential.add").sensitiveFields).toEqual(["secret"]);
+    expect(aiRoute("managed-credential.rotate").sensitiveFields).toEqual(["secret"]);
+  });
+
+  it("managed key material is sent once to the owner but never persisted in the Governance ledger", async () => {
+    const { deps, owner, ledger } = await setup();
+    const raw = "nvapi-super-secret-do-not-store";
+    const result = await executeAiCommand(deps, { ...operator(), routeId: "managed-credential.add", pathParams: { poolKey: "nvidia_nim" }, fields: { label: "primary", secret: raw }, reason: "add managed provider capacity", idempotencyKey: "managed-secret-1" });
+    expect(result.operation.status).toBe("completed");
+    expect(owner.mutations()[0]!.body?.secret).toBe(raw);
+    const stored = await ledger.getByIdempotencyKey("managed-secret-1");
+    expect(JSON.stringify(stored)).not.toContain(raw);
+    expect(stored?.safePayloadHash).toMatch(/^[0-9a-f]{64}$/);
+    const other = await executeAiCommand(deps, { ...operator(), routeId: "managed-credential.add", pathParams: { poolKey: "nvidia_nim" }, fields: { label: "primary", secret: "nvapi-different-secret-do-not-store" }, reason: "add managed provider capacity", idempotencyKey: "managed-secret-2" });
+    expect(other.operation.safePayloadHash).not.toBe(stored?.safePayloadHash);
+    expect(JSON.stringify(other.operation)).not.toContain("nvapi-different-secret-do-not-store");
   });
 });
 

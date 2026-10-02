@@ -9,16 +9,18 @@ export function Drawer({
   subtitle,
   onClose,
   children,
+  size = "default",
 }: {
   title: string;
   subtitle?: ReactNode;
   onClose: () => void;
   children: ReactNode;
+  size?: "default" | "wide";
 }) {
   return (
     <>
       <div className="drawer-backdrop" onClick={onClose} />
-      <div className="drawer-panel" role="dialog" aria-modal="true" aria-label={title}>
+      <div className={`drawer-panel${size === "wide" ? " drawer-panel-wide" : ""}`} role="dialog" aria-modal="true" aria-label={title}>
         <div className="drawer-header">
           <div>
             <h2 className="text-headline">{title}</h2>

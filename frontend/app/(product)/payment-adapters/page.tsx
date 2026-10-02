@@ -81,25 +81,38 @@ export default function PaymentAdaptersPage() {
     <>
       <div className="page-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", gap: "1rem" }}>
         <div>
-          <h1 className="text-display">Payment adapters</h1>
-          <p>Certified custom payment adapter releases, their lifecycle and runtime presence.</p>
+          <h1 className="text-display">Payment extensions</h1>
+          <p>Custom payment-provider extensions: certification, approval, lifecycle and runtime readiness. Built-in payment providers are managed elsewhere.</p>
         </div>
         {scopes.includes("payments.adapters.submit") && (
           <button className="btn btn-primary" onClick={() => setShowSubmit(true)}>Submit adapter</button>
         )}
       </div>
 
-      {runtime && (
-        <div className="card" style={{ marginBottom: "1rem", fontSize: "0.85rem" }}>
-          <strong>Runtime (worker that answered):</strong> instance {runtime.workerId.pmInstance ?? "?"} · pid {runtime.workerId.pid} · epoch {runtime.registryEpoch ?? "unknown"} ·
-          reconciled {when(runtime.lastReconciledAt)} · loaded: {runtime.loadedCustomAdapters.length ? runtime.loadedCustomAdapters.join(", ") : "none"}
-          {runtime.lastSyncError && <span style={{ color: "var(--danger-fg)" }}> · last sync error {runtime.lastSyncError}</span>}
-          <p className="overlay-note">Each read is answered by one worker; reload to observe the other.</p>
-        </div>
+      {runtime && releases && (
+        <>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(11rem, 1fr))", gap: "0.75rem", marginBottom: "1rem" }}>
+            <RuntimeMetric label="Custom releases" value={String(releases.length)} />
+            <RuntimeMetric label="Runtime loaded" value={String(runtime.loadedCustomAdapters.length)} />
+            <RuntimeMetric label="Runtime sync" value={runtime.lastSyncError ? "Needs attention" : runtime.lastReconciledAt ? "Synchronized" : "Not observed"} />
+            <RuntimeMetric label="Last reconciliation" value={when(runtime.lastReconciledAt)} />
+          </div>
+          {runtime.lastSyncError && (
+            <div className="card" style={{ marginBottom: "1rem", borderColor: "var(--danger-border)" }}>
+              <strong>Runtime synchronization issue</strong>
+              <p style={{ margin: "0.35rem 0 0", fontSize: "0.85rem" }}>{runtime.lastSyncError}</p>
+            </div>
+          )}
+        </>
       )}
 
       {error && <ErrorState label={error} />}
-      {releases && releases.length === 0 && <EmptyState label="No custom adapter releases." icon="payments" />}
+      {releases && releases.length === 0 && (
+        <div className="card" style={{ marginBottom: "1rem" }}>
+          <EmptyState label="No custom payment adapter releases are installed." icon="payments" />
+          <p className="overlay-note" style={{ textAlign: "center", marginBottom: 0 }}>This catalog is only for governed custom payment-provider extensions. Built-in payment providers and tenant payment credentials are not represented as custom adapter releases here.</p>
+        </div>
+      )}
       {releases && releases.length > 0 && (
         <table className="data-table">
           <thead>
@@ -130,7 +143,8 @@ export default function PaymentAdaptersPage() {
           include={(a) => a.requestedAction.startsWith("payment.adapter.")}
           refreshKey={refreshKey}
           onExecuted={() => setRefreshKey((k) => k + 1)}
-        />
+                      hideWhenEmpty
+/>
       )}
 
       {selected && (
@@ -145,6 +159,15 @@ export default function PaymentAdaptersPage() {
       )}
       {showSubmit && <SubmitDrawer request={request} onClose={() => setShowSubmit(false)} onChanged={() => setRefreshKey((k) => k + 1)} />}
     </>
+  );
+}
+
+function RuntimeMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="card" style={{ padding: "0.85rem 1rem" }}>
+      <div className="overlay-note" style={{ marginTop: 0 }}>{label}</div>
+      <div style={{ fontSize: "1.1rem", fontWeight: 650, marginTop: "0.2rem" }}>{value}</div>
+    </div>
   );
 }
 
@@ -243,24 +266,24 @@ function ReleaseDrawer({
 
           <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginTop: "0.75rem" }}>
             {scopes.includes("payments.adapters.approve") && release?.certificationStatus === "certified" && release.approvalStatus === "submitted" && (
-              <button className="btn btn-primary" disabled={!reasonOk || busy} onClick={() => post(`${base}/approve/request`, { reason })}>Request approval (R3)</button>
+              <button className="btn btn-primary" disabled={!reasonOk || busy} onClick={() => post(`${base}/approve/request`, { reason })}>Request approval…</button>
             )}
             {scopes.includes("payments.adapters.revoke") && release?.lifecycleStatus === "active" && (
               <button className="btn" disabled={!reasonOk || busy} onClick={() => post(`${base}/deprecate`, { idempotencyKey: key("deprecate"), reason })}>Deprecate (R2)</button>
             )}
             {scopes.includes("payments.adapters.revoke") && ["active", "deprecated"].includes(release?.lifecycleStatus ?? "") && (
-              <button className="btn" disabled={!reasonOk || busy} onClick={() => post(`${base}/retire/request`, { reason })}>Request retire (R3)</button>
+              <button className="btn" disabled={!reasonOk || busy} onClick={() => post(`${base}/retire/request`, { reason })}>Request retirement…</button>
             )}
           </div>
 
           {scopes.includes("payments.adapters.revoke") && ["active", "deprecated", "retired"].includes(release?.lifecycleStatus ?? "") && (
             <div style={{ marginTop: "1rem", borderTop: "1px solid var(--border-subtle)", paddingTop: "0.75rem" }}>
               <p style={{ fontSize: "0.85rem", margin: "0 0 0.5rem" }}>
-                Revoke (R4) revokes every connection on this adapter across the fleet.
+                Revocation disables every connection on this extension across the fleet and requires a recovery plan plus a second operator.
                 {impact && <> Current impact: <strong>{impact.affectedConnectionCount}</strong> connections in <strong>{impact.affectedTenantCount}</strong> tenants (test {impact.byEnvironment.test}, live {impact.byEnvironment.live}). The approval binds this count; execution is refused if it changes.</>}
               </p>
               <div className="field"><label>Recovery plan</label><textarea rows={2} value={recoveryIntent} onChange={(e) => setRecoveryIntent(e.target.value)} placeholder="How will affected tenants be restored?" /></div>
-              <button className="btn btn-danger" disabled={!reasonOk || recoveryIntent.trim() === "" || busy} onClick={() => setConfirmRevoke(true)}>Request revoke (R4)</button>
+              <button className="btn btn-danger" disabled={!reasonOk || recoveryIntent.trim() === "" || busy} onClick={() => setConfirmRevoke(true)}>Request revocation…</button>
             </div>
           )}
 

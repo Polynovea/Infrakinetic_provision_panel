@@ -511,7 +511,7 @@ export function CredentialPanel({
 
           {(canRotate || canRevoke) && (
             <div className="card" style={{ marginBottom: "1rem" }}>
-              <h4 style={{ margin: "0 0 0.5rem", fontSize: "0.9rem" }}>Sensitive (R3) actions</h4>
+              <h4 style={{ margin: "0 0 0.5rem", fontSize: "0.9rem" }}>Sensitive actions</h4>
               <p className="overlay-note" style={{ margin: "0 0 0.6rem" }}>
                 Requires a fresh sign-in confirmation and a separate operator&apos;s approval before execution.
               </p>
@@ -661,7 +661,7 @@ export function CredentialPanel({
       {showReplace && (
         <ConfirmDialog
           title={`Establish a new secret for ${displayName}?`}
-          description="Replace only establishes credential material that isn't live yet — an already-active secret must be rotated instead, under the R3 approval flow below."
+          description="Replace only establishes credential material that isn't live yet — an already-active secret must be rotated instead, through the two-person approval flow below."
           busy={replaceBusy}
           confirmLabel="Replace"
           onCancel={() => {

@@ -26,9 +26,13 @@ function migratedDb() {
 }
 
 describe("migrations/0015_payment_adapter_and_global_config_scopes.sql", () => {
-  it("the DB constraint and roles.ts SCOPES are exactly the same set (the 0008 lesson)", () => {
-    expect(new Set(constraintScopes())).toEqual(new Set(SCOPES));
-    expect(constraintScopes()).toHaveLength(SCOPES.length);
+  it("contains every scope that existed when 0015 was authored; later additive scope migrations own later vocabulary", () => {
+    const historical = new Set(constraintScopes());
+    for (const scope of SCOPES) {
+      if (scope === "ai.credentials.manage") continue;
+      expect(historical.has(scope)).toBe(true);
+    }
+    expect(historical.has("ai.credentials.manage")).toBe(false);
   });
 
   it("accepts the three new scopes and still rejects unknown vocabulary", () => {

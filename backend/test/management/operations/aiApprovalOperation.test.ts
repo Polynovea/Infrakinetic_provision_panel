@@ -11,7 +11,7 @@ import {
   AI_APPROVAL_ROUTES, aiApprovalScope, executeAiApproval, isAiApproval, requestAiApproval,
 } from "../../../src/management/operations/aiOperation.js";
 
-// 1A.15 final closure — R3 maker-checker for the AI plane: tenant resume, model lifecycle, model certification.
+// 1A.15 rectification — R3 maker-checker for tenant resume, model lifecycle/certification and managed-pool source cutover.
 // The properties under test: the checker approves a concrete safe diff; execution re-reads the owner's CURRENT
 // facts and refuses BEFORE consuming the approval if they moved; the owner's assertion carries the signed
 // maker/checker evidence; approvals are single-use and replay-safe.
@@ -37,10 +37,11 @@ const CERTIFY = { routeId: "model.certification.set", pathParams: { modelId: MOD
 
 describe("which actions are AI approvals", () => {
   it("are exactly the contract's R3 actions, each with its own contract scope", () => {
-    expect(AI_APPROVAL_ROUTES.map((route) => route.action).sort()).toEqual(["ai.model.certification.set", "ai.model.lifecycle.set", "ai.tenant.emergency.resume"]);
+    expect(AI_APPROVAL_ROUTES.map((route) => route.action).sort()).toEqual(["ai.managed-credential.pool-source.set", "ai.model.certification.set", "ai.model.lifecycle.set", "ai.tenant.emergency.resume"]);
     expect(aiApprovalScope({ requestedAction: "ai.tenant.emergency.resume" })).toBe("ai.emergency_suspend");
     expect(aiApprovalScope({ requestedAction: "ai.model.lifecycle.set" })).toBe("ai.provider_policy.write");
     expect(aiApprovalScope({ requestedAction: "ai.model.certification.set" })).toBe("ai.provider_policy.write");
+    expect(aiApprovalScope({ requestedAction: "ai.managed-credential.pool-source.set" })).toBe("ai.credentials.manage");
     expect(isAiApproval({ requestedAction: "ai.tenant.emergency.suspend" })).toBe(false); // suspend is single-operator R4
     expect(isAiApproval({ requestedAction: "payment.adapter.approve" })).toBe(false);
     expect(aiApprovalScope({ requestedAction: "identity.force-reset" })).toBeUndefined();

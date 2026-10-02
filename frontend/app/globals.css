@@ -755,6 +755,10 @@ button.card:hover {
   overflow-x: hidden;
 }
 
+.drawer-panel-wide {
+  width: min(760px, 88vw);
+}
+
 @keyframes drawer-slide-in {
   from {
     transform: translateX(24px);

@@ -9,7 +9,17 @@ import { SkeletonCard } from "../../components/Skeleton";
 import { ErrorState } from "../../components/States";
 
 interface TenantSummary {
+  tenant_kind: "customer" | "platform";
   status: string;
+  platform_access_state?: "active" | "suspended" | "decommissioned";
+}
+
+interface DriftSummary {
+  projectionMissing: unknown[];
+  stuckOperations: unknown[];
+  staleObservations: unknown[];
+  desiredProvisionedMismatch: unknown[];
+  lifecycleMismatch?: unknown[];
 }
 
 interface EngineSummary {
@@ -48,11 +58,16 @@ function relativeTime(iso: string): string {
   return `${days}d ago`;
 }
 
-function useFetchState<T>(path: string, request: (path: string) => Promise<Response>, extract: (body: unknown) => T) {
+function useFetchState<T>(path: string, request: (path: string) => Promise<Response>, extract: (body: unknown) => T, enabled = true) {
   const [data, setData] = useState<T | null>(null);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
     let cancelled = false;
+    if (!enabled) {
+      setData(null);
+      setError(null);
+      return () => { cancelled = true; };
+    }
     setError(null);
     request(path)
       .then(async (res) => {
@@ -69,27 +84,39 @@ function useFetchState<T>(path: string, request: (path: string) => Promise<Respo
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [path]);
+  }, [path, enabled]);
   return { data, error };
 }
 
 export default function OverviewPage() {
   const { operator, request } = useOperatorSession();
+  const canReadRuntime = operator?.scopes.includes("runtime.read") ?? false;
   const tenants = useFetchState<TenantSummary[]>("/management/v1/tenants", request, (b) => (b as { tenants: TenantSummary[] }).tenants);
   const engines = useFetchState<EngineSummary[]>("/management/v1/engines", request, (b) => (b as { engines: EngineSummary[] }).engines);
   const operations = useFetchState<OperationSummary[]>(
-    "/management/v1/operations?limit=10",
+    "/management/v1/operations?limit=6",
     request,
     (b) => (b as { operations: OperationSummary[] }).operations,
   );
+  const drift = useFetchState<DriftSummary>(
+    "/management/v1/reconciliation/drift",
+    request,
+    (b) => b as DriftSummary,
+    canReadRuntime,
+  );
 
   const tenantCounts = tenants.data
-    ? {
-        total: tenants.data.length,
-        active: tenants.data.filter((t) => t.status === "active").length,
-        trial: tenants.data.filter((t) => t.status === "trial").length,
-        suspended: tenants.data.filter((t) => t.status === "suspended").length,
-      }
+    ? (() => {
+        const customers = tenants.data.filter((t) => t.tenant_kind === "customer");
+        const access = (t: TenantSummary) => t.platform_access_state ?? "active";
+        const live = customers.filter((t) => access(t) !== "decommissioned");
+        return {
+          total: live.length,
+          active: live.filter((t) => access(t) === "active").length,
+          suspended: live.filter((t) => access(t) === "suspended").length,
+          archived: customers.filter((t) => access(t) === "decommissioned").length,
+        };
+      })()
     : null;
 
   const engineCounts = engines.data
@@ -103,17 +130,26 @@ export default function OverviewPage() {
     : null;
 
   const atRiskEngines = engines.data?.filter((e) => e.state !== "operational") ?? [];
+  const driftCounts = drift.data
+    ? {
+        total: drift.data.projectionMissing.length + drift.data.stuckOperations.length + drift.data.staleObservations.length + drift.data.desiredProvisionedMismatch.length + (drift.data.lifecycleMismatch?.length ?? 0),
+        stuck: drift.data.stuckOperations.length,
+        stale: drift.data.staleObservations.length,
+        lifecycle: drift.data.lifecycleMismatch?.length ?? 0,
+        missing: drift.data.projectionMissing.length,
+      }
+    : null;
 
   return (
     <>
       <div className="page-header">
         <h1 className="text-display">Overview</h1>
-        <p>{operator ? `Signed in as ${operator.email}.` : "Welcome."}</p>
+        <p>Fleet health, operating controls and items that need attention.</p>
       </div>
 
       <div className="card-grid">
         <a className="card metric-card" href="/tenants" style={{ textDecoration: "none", color: "inherit" }}>
-          <div className="metric-card-label">Tenant fleet</div>
+          <div className="metric-card-label">Customer tenants</div>
           {tenants.error ? (
             <ErrorState label={tenants.error} />
           ) : !tenantCounts ? (
@@ -126,27 +162,22 @@ export default function OverviewPage() {
                   <span className="metric-chip-value" style={{ color: "var(--success-fg)" }}>
                     {tenantCounts.active}
                   </span>
-                  active
-                </span>
-                <span className="metric-chip">
-                  <span className="metric-chip-value" style={{ color: "var(--warning-fg)" }}>
-                    {tenantCounts.trial}
-                  </span>
-                  trial
+                  access active
                 </span>
                 <span className="metric-chip">
                   <span className="metric-chip-value" style={{ color: "var(--danger-fg)" }}>
                     {tenantCounts.suspended}
                   </span>
-                  suspended
+                  access suspended
                 </span>
               </div>
+              {tenantCounts.archived > 0 && <div className="overlay-note" style={{ marginTop: "0.45rem" }}>{tenantCounts.archived} decommissioned customer tenant{tenantCounts.archived === 1 ? "" : "s"} archived from the live fleet.</div>}
             </>
           )}
         </a>
 
         <a className="card metric-card" href="/engine-state" style={{ textDecoration: "none", color: "inherit" }}>
-          <div className="metric-card-label">Engine fleet</div>
+          <div className="metric-card-label">Engine control policy</div>
           {engines.error ? (
             <ErrorState label={engines.error} />
           ) : !engineCounts ? (
@@ -159,7 +190,7 @@ export default function OverviewPage() {
                   <span className="metric-chip-value" style={{ color: "var(--success-fg)" }}>
                     {engineCounts.operational}
                   </span>
-                  operational
+                  enabled normally
                 </span>
                 {engineCounts.degraded > 0 && (
                   <span className="metric-chip">
@@ -190,19 +221,22 @@ export default function OverviewPage() {
           )}
         </a>
 
-        {operator && (
-          <div className="card metric-card">
-            <div className="metric-card-label">Signed in as</div>
-            <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginTop: "0.2rem" }}>
-              <Icon name="account_circle" size="lg" style={{ color: "var(--action-primary)" }} />
-              <div>
-                <div style={{ fontSize: "0.95rem", fontWeight: 600 }}>{operator.email}</div>
-                <div className="overlay-note" style={{ marginTop: 0 }}>
-                  {operator.roles[0]?.replace(/_/g, " ") ?? "operator"}
+        {canReadRuntime && (
+          <a className="card metric-card" href="/reconciliation" style={{ textDecoration: "none", color: "inherit" }}>
+            <div className="metric-card-label">Needs attention</div>
+            {drift.error ? <ErrorState label="Could not load tenant health." /> : !driftCounts ? <SkeletonCard /> : (
+              <>
+                <div className="metric-card-value">{driftCounts.total}</div>
+                <div className="metric-row">
+                  {driftCounts.stuck > 0 && <span className="metric-chip"><span className="metric-chip-value" style={{ color: "var(--danger-fg)" }}>{driftCounts.stuck}</span> stuck</span>}
+                  {driftCounts.stale > 0 && <span className="metric-chip"><span className="metric-chip-value" style={{ color: "var(--warning-fg)" }}>{driftCounts.stale}</span> stale</span>}
+                  {driftCounts.lifecycle > 0 && <span className="metric-chip"><span className="metric-chip-value" style={{ color: "var(--warning-fg)" }}>{driftCounts.lifecycle}</span> lifecycle drift</span>}
+                  {driftCounts.missing > 0 && <span className="metric-chip"><span className="metric-chip-value">{driftCounts.missing}</span> missing projection</span>}
+                  {driftCounts.total === 0 && <span className="metric-chip"><span className="metric-chip-value" style={{ color: "var(--success-fg)" }}>0</span> tenant-control issues</span>}
                 </div>
-              </div>
-            </div>
-          </div>
+              </>
+            )}
+          </a>
         )}
       </div>
 
@@ -210,7 +244,7 @@ export default function OverviewPage() {
         <div className="card" style={{ marginTop: "1rem", borderColor: "var(--warning-border)" }}>
           <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "0.5rem" }}>
             <Icon name="warning" filled />
-            <strong>Engines needing attention</strong>
+            <strong>Engine controls outside normal policy</strong>
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: "0.4rem" }}>
             {atRiskEngines.map((e) => (
@@ -229,7 +263,7 @@ export default function OverviewPage() {
 
       <div className="card" style={{ marginTop: "1rem" }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "0.75rem" }}>
-          <strong>Recent privileged operations</strong>
+          <strong>Recent control activity</strong>
         </div>
         {operations.error && <ErrorState label={operations.error} />}
         {!operations.error && operations.data === null && (
@@ -252,7 +286,7 @@ export default function OverviewPage() {
                   <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                     {humanizeAction(op.requestedAction)} <span style={{ color: "var(--text-muted)" }}>&middot; {op.targetEngine}</span>
                   </div>
-                  {op.reason && <div className="overlay-note" style={{ marginTop: "0.1rem" }}>{op.reason}</div>}
+                  {op.reason && <div className="overlay-note" style={{ marginTop: "0.1rem" }} title={op.reason}>Reason recorded · open the relevant control for details</div>}
                 </div>
                 <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexShrink: 0 }}>
                   <StatusBadge value={op.status} />

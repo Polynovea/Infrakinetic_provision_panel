@@ -13,6 +13,7 @@ import { ManagementOperationLedger } from "../../src/management/operations/manag
 import { CommissionedTenantsRepository } from "../../src/management/operations/commissionedTenants.js";
 import { ManagementApprovalStore } from "../../src/management/operations/managementApprovalStore.js";
 import { GlobalConfigRestoreStore } from "../../src/management/operations/globalConfigRestoreOperation.js";
+import { FinOpsAllocationPolicyStore } from "../../src/management/operations/finOpsAllocationPolicy.js";
 import { activeAdminOperator } from "../helpers/operators.js";
 import { buildTestIdentityProvider } from "../helpers/testProvider.js";
 import { buildMigratedPgMemClient } from "../helpers/pgMemDb.js";
@@ -25,6 +26,7 @@ const unusedEngineStateDeps = {
   commissionedTenants: new CommissionedTenantsRepository(buildMigratedPgMemClient().client),
   approvals: new ManagementApprovalStore(buildMigratedPgMemClient().client),
   globalConfigStore: new GlobalConfigRestoreStore(buildMigratedPgMemClient().client),
+  finOpsAllocationStore: new FinOpsAllocationPolicyStore(buildMigratedPgMemClient().client),
   getManagementSigningKeys: () => Promise.reject(new Error("not used in this test")),
   loadTransportConfig: () => {
     throw new Error("not used in this test");

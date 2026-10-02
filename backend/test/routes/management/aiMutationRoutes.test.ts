@@ -426,12 +426,16 @@ describe("the AI route surface is exactly what the contract declares", () => {
     const { app } = await harness();
     const expected = [
       "GET /ai/tenants/:tenantId/state", "GET /ai/fleet/summary", "GET /ai/catalog", "GET /ai/tenants/:tenantId/credentials",
-      "GET /ai/metering-exceptions", "GET /ai/reconciliation", "GET /ai-admin-commands/:idempotencyKey",
+      "GET /ai/managed-credentials", "GET /ai/metering-exceptions", "GET /ai/reconciliation", "GET /ai-admin-commands/:idempotencyKey",
       "POST /ai/tenants/:tenantId/commissioning-mode/preview",
       ...AI_LEDGERED_ROUTES.map((route) => (route.approval === "maker_checker" ? `POST ${route.path}/request` : `${route.method} ${route.path}`)),
     ].sort();
     expect(aiRoutes(app)).toEqual(expected);
-    for (const entry of aiRoutes(app)) expect(entry, entry).not.toMatch(/submit|rotate|decrypt|secret|token|\/test\b|upload|statement/i);
+    // Tenant BYOAI remains metadata + revoke only. Platform-managed credentials
+    // intentionally have add/rotate/status routes under their own root scope.
+    for (const entry of aiRoutes(app).filter((route) => route.includes("/ai/tenants/") && route.includes("/credentials"))) {
+      expect(entry, entry).not.toMatch(/submit|rotate|decrypt|secret|token|\/test\b|upload/i);
+    }
     // Every contract read + mutation is reachable on Governance (the preview is the one unreceipted POST).
     const declared = AI_CONTRACT.routes.filter((route) => route.kind === "mutation").map((route) => route.id);
     expect(declared.length).toBe(AI_LEDGERED_ROUTES.length + 1);

@@ -69,8 +69,13 @@ export default function PlatformPage() {
   return (
     <>
       <div className="page-header">
-        <h1 className="text-display">Platform</h1>
-        <p>{observedAt ? `Last observed ${formatDate(observedAt)}` : "The engine fleet and its current platform state."}</p>
+        <h1 className="text-display">Engine controls</h1>
+        <p>{observedAt ? `Control policy observed ${formatDate(observedAt)}` : "Platform-wide engine access controls."}</p>
+      </div>
+
+      <div className="card" style={{ marginBottom: "1rem", padding: "0.8rem 1rem" }}>
+        <strong>Control policy, not service health</strong>
+        <p className="overlay-note" style={{ marginBottom: 0 }}>These states govern whether an engine may operate platform-wide. Runtime/cloud health is reported separately under Infrastructure.</p>
       </div>
 
       {loadError && <ErrorState label={loadError} />}
@@ -103,11 +108,6 @@ export default function PlatformPage() {
                 </div>
                 <StatusBadge value={engine.state} />
               </div>
-              {engine.reason && (
-                <div className="overlay-note" style={{ marginTop: "0.5rem" }}>
-                  {engine.reason}
-                </div>
-              )}
             </button>
           ))}
         </div>
@@ -228,7 +228,7 @@ function EngineDetailDrawer({
 
   return (
     <>
-    <Drawer title={engine.label} subtitle={`Current platform state: ${engine.state}`} onClose={onClose}>
+    <Drawer title={engine.label} subtitle={`Current control state: ${engine.state}`} onClose={onClose}>
       <div style={{ display: "flex", alignItems: "center", gap: "0.6rem", marginBottom: "1rem" }}>
         <StatusBadge value={engine.state} />
         {engine.reason && <span className="overlay-note" style={{ marginTop: 0 }}>{engine.reason}</span>}
@@ -237,7 +237,7 @@ function EngineDetailDrawer({
       {!operation && (
         <div className="card">
           <h3 className="text-subhead" style={{ marginBottom: "0.75rem" }}>
-            Change platform state
+            Change engine control state
           </h3>
           <div className="field">
             <label>Desired state</label>
@@ -248,8 +248,9 @@ function EngineDetailDrawer({
             </select>
           </div>
           <p className="field-hint">
-            Risk classification: <strong>{riskClass}</strong>
-            {desiredState === "disabled" && " — this takes the engine offline platform-wide, for every tenant, immediately."}
+            {desiredState === "disabled"
+              ? "Platform-wide disable: requires a fresh sign-in confirmation and immediately blocks this engine for every tenant."
+              : "Governed platform control change. A reason is recorded with the operation."}
           </p>
           <div className="field">
             <label>Reason</label>
