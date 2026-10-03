@@ -216,7 +216,7 @@ describe("R4 tenant/provider narrowing approvals", () => {
     await decide(approvals, approval.approvalId);
     const result = await executeAiApproval(deps, { ...operator(CHECKER), approvalId: approval.approvalId, idempotencyKey: "provider-r4-1" });
     expect(result.operation).toMatchObject({ status: "completed", riskClass: "R4" });
-    expect(owner.catalog.providers.find((p) => p.providerKey === "nvidia_nim")?.status).toBe("disabled");
+    expect(owner.catalog.providers.find((p: { providerKey: string; status?: string }) => p.providerKey === "nvidia_nim")?.status).toBe("disabled");
   });
 });
 
