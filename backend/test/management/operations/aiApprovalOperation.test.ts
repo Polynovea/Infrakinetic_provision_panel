@@ -11,7 +11,7 @@ import {
   AI_APPROVAL_ROUTES, aiApprovalScope, executeAiApproval, isAiApproval, requestAiApproval,
 } from "../../../src/management/operations/aiOperation.js";
 
-// 1A.15 rectification — R3 maker-checker for tenant resume, model lifecycle/certification and managed-pool source cutover.
+// 1A.15/1A.19 hardening — maker-checker for R3 plus R4 tenant suspend/provider narrowing.
 // The properties under test: the checker approves a concrete safe diff; execution re-reads the owner's CURRENT
 // facts and refuses BEFORE consuming the approval if they moved; the owner's assertion carries the signed
 // maker/checker evidence; approvals are single-use and replay-safe.
@@ -34,15 +34,19 @@ const decide = (approvals: ManagementApprovalStore, approvalId: string, decision
 const RESUME = { routeId: "tenant.resume", pathParams: { tenantId: TENANT }, fields: {} };
 const LIFECYCLE = { routeId: "model.lifecycle.set", pathParams: { modelId: MODEL_ID }, fields: { lifecycle: "deprecated" } };
 const CERTIFY = { routeId: "model.certification.set", pathParams: { modelId: MODEL_ID }, fields: { certification: "provider_certified", evidenceRef: "cert-run-2026-10-05" } };
+const SUSPEND = { routeId: "tenant.suspend", pathParams: { tenantId: TENANT }, fields: { recoveryIntent: "restore after key rotation" } };
+const PROVIDER_DISABLE = { routeId: "provider.state.set", pathParams: { providerKey: "nvidia_nim" }, fields: { status: "disabled", recoveryIntent: "restore after vendor recovery" } };
 
 describe("which actions are AI approvals", () => {
-  it("are exactly the contract's R3 actions, each with its own contract scope", () => {
-    expect(AI_APPROVAL_ROUTES.map((route) => route.action).sort()).toEqual(["ai.managed-credential.pool-source.set", "ai.model.certification.set", "ai.model.lifecycle.set", "ai.tenant.emergency.resume"]);
+  it("are exactly the contract's maker-checker actions, including R4 suspend/provider narrowing", () => {
+    expect(AI_APPROVAL_ROUTES.map((route) => route.action).sort()).toEqual(["ai.managed-credential.pool-source.set", "ai.model.certification.set", "ai.model.lifecycle.set", "ai.provider.state.set", "ai.tenant.emergency.resume", "ai.tenant.emergency.suspend"].sort());
     expect(aiApprovalScope({ requestedAction: "ai.tenant.emergency.resume" })).toBe("ai.emergency_suspend");
     expect(aiApprovalScope({ requestedAction: "ai.model.lifecycle.set" })).toBe("ai.provider_policy.write");
     expect(aiApprovalScope({ requestedAction: "ai.model.certification.set" })).toBe("ai.provider_policy.write");
     expect(aiApprovalScope({ requestedAction: "ai.managed-credential.pool-source.set" })).toBe("ai.credentials.manage");
-    expect(isAiApproval({ requestedAction: "ai.tenant.emergency.suspend" })).toBe(false); // suspend is single-operator R4
+    expect(aiApprovalScope({ requestedAction: "ai.tenant.emergency.suspend" })).toBe("ai.emergency_suspend");
+    expect(aiApprovalScope({ requestedAction: "ai.provider.state.set" })).toBe("ai.provider_policy.write");
+    expect(isAiApproval({ requestedAction: "ai.tenant.emergency.suspend" })).toBe(true);
     expect(isAiApproval({ requestedAction: "payment.adapter.approve" })).toBe(false);
     expect(aiApprovalScope({ requestedAction: "identity.force-reset" })).toBeUndefined();
   });
@@ -191,6 +195,31 @@ describe("tenant resume (R3)", () => {
   });
 });
 
+describe("R4 tenant/provider narrowing approvals", () => {
+  it("tenant suspend binds current emergency state and executes only with a distinct checker", async () => {
+    const { deps, owner, approvals } = await setup();
+    const approval = await requestAiApproval(deps, { ...operator(MAKER), ...SUSPEND, reason: "suspected credential compromise" });
+    expect(approval).toMatchObject({ riskClass: "R4", requestedAction: "ai.tenant.emergency.suspend", makerOperatorId: MAKER });
+    await expect(approvals.decideApproval({ approvalId: approval.approvalId, checkerOperatorId: MAKER, decision: "approved" })).rejects.toBeInstanceOf(SelfApprovalNotAllowedError);
+    await decide(approvals, approval.approvalId);
+    const result = await executeAiApproval(deps, { ...operator(MAKER), approvalId: approval.approvalId, idempotencyKey: "suspend-r4-1" });
+    expect(result.operation).toMatchObject({ status: "completed", riskClass: "R4" });
+    expect(result.operation.approvalEvidence).toMatchObject({ approvalId: approval.approvalId, checkerOperatorId: CHECKER });
+    expect(owner.mutations()[0]?.claims).toMatchObject({ approval: { approval_id: approval.approvalId, maker_operator_id: MAKER, checker_operator_id: CHECKER } });
+    expect(owner.state.emergency.state).toBe("suspended");
+  });
+
+  it("provider disable is R4 maker-checker while activation remains outside the approval path", async () => {
+    const { deps, owner, approvals } = await setup();
+    const approval = await requestAiApproval(deps, { ...operator(MAKER), ...PROVIDER_DISABLE, reason: "provider incident" });
+    expect(approval).toMatchObject({ riskClass: "R4", requestedAction: "ai.provider.state.set", targetResourceId: "nvidia_nim" });
+    await decide(approvals, approval.approvalId);
+    const result = await executeAiApproval(deps, { ...operator(CHECKER), approvalId: approval.approvalId, idempotencyKey: "provider-r4-1" });
+    expect(result.operation).toMatchObject({ status: "completed", riskClass: "R4" });
+    expect(owner.catalog.providers.find((p: { providerKey: string; status?: string }) => p.providerKey === "nvidia_nim")?.status).toBe("disabled");
+  });
+});
+
 describe("model lifecycle (R3)", () => {
   it("shows the checker which capabilities use the model as their default, and executes the approved lifecycle", async () => {
     const { deps, owner, approvals } = await setup();
@@ -278,9 +307,10 @@ describe("model certification (R3)", () => {
 });
 
 describe("misuse of the approval pair", () => {
-  it("cannot request an approval for a route that is not R3", async () => {
+  it("cannot request an approval for a route/state that is not approval-gated", async () => {
     const { deps } = await setup();
-    await expect(requestAiApproval(deps, { ...operator(MAKER), routeId: "tenant.suspend", pathParams: { tenantId: TENANT }, fields: { recoveryIntent: "x" }, reason: "r" })).rejects.toMatchObject({ code: "AI_ROUTE_NOT_APPROVAL_GATED" });
+    await expect(requestAiApproval(deps, { ...operator(MAKER), routeId: "tenant.planes.set", pathParams: { tenantId: TENANT }, fields: { planes: ["embedded_managed"] }, reason: "r" })).rejects.toMatchObject({ code: "AI_ROUTE_NOT_APPROVAL_GATED" });
+    await expect(requestAiApproval(deps, { ...operator(MAKER), routeId: "provider.state.set", pathParams: { providerKey: "nvidia_nim" }, fields: { status: "active" }, reason: "r" })).rejects.toMatchObject({ code: "AI_ROUTE_NOT_APPROVAL_GATED" });
   });
 
   it("cannot execute an approval that belongs to another domain through the AI executor", async () => {

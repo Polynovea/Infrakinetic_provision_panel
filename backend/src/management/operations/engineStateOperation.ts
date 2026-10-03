@@ -56,6 +56,13 @@ export class UnexpectedManagementApiResponseError extends Error {
   }
 }
 
+export class ApprovedEngineStateChangedError extends Error {
+  constructor(readonly expected: { state: PlatformEngineState; reason: string | null }, readonly observed: { state: string; reason: string | null }) {
+    super(`Engine state changed after approval: expected ${expected.state}, observed ${observed.state}. A fresh approval is required.`);
+    this.name = "ApprovedEngineStateChangedError";
+  }
+}
+
 // Step 1 below (resolve + validate) runs BEFORE the 1A.5 ledger reservation
 // — deliberately: the canonical engine key it resolves is what gets bound
 // into the ledger's target_engine and idempotency hash (never the caller's
@@ -111,6 +118,10 @@ export interface RequestEngineStateChangeParams {
   causationId?: string;
   /** Set when this call is itself a recovery of a prior operation. */
   rollbackOfOperationId?: string;
+  /** Signed maker-checker evidence for an approved R3/R4 execution. */
+  approvalEvidence?: { approvalId: string; makerOperatorId: string; checkerOperatorId: string };
+  /** Owner state bound by the approval. A mismatch fails before ledger reservation/mutation. */
+  expectedBeforeState?: { state: PlatformEngineState; reason: string | null };
 }
 
 export interface EngineStateOperationResult {
@@ -143,7 +154,7 @@ export async function requestEngineStateChange(
 
   const correlationId = params.correlationId ?? randomUUID();
 
-  const mint = (requestedAction: string, scope: string, targetEngine: string): Promise<string> =>
+  const mint = (requestedAction: string, scope: string, targetEngine: string, approvalEvidence?: { approvalId: string; makerOperatorId: string; checkerOperatorId: string }): Promise<string> =>
     mintManagementAssertion(deps.signingKeys, deps.transportConfig, {
       operatorId: params.operatorId,
       operatorSessionId: params.operatorSessionId,
@@ -153,6 +164,7 @@ export async function requestEngineStateChange(
       targetEngine,
       requestedAction,
       correlationId,
+      approvalEvidence,
     });
 
   const call = (assertion: string, method: "GET" | "PUT", path: string, body?: unknown) =>
@@ -187,6 +199,11 @@ export async function requestEngineStateChange(
   const resolved = resolveResult.body as EffectiveStateReadBody;
   const canonicalEngine = resolved.engineKey;
   const beforeState = { state: resolved.state, reason: resolved.reason };
+  if (params.expectedBeforeState && (
+    params.expectedBeforeState.state !== beforeState.state || params.expectedBeforeState.reason !== beforeState.reason
+  )) {
+    throw new ApprovedEngineStateChangedError(params.expectedBeforeState, beforeState);
+  }
 
   // Step 2 — idempotency reservation + immutable ledger entry (1A.5). The
   // canonical key, never the caller's alias, is what gets bound into the
@@ -200,10 +217,13 @@ export async function requestEngineStateChange(
     targetEngine: canonicalEngine,
     reason: params.reason,
     riskClass: riskClassFor(params.desiredState),
-    approvalEvidence:
-      params.recoveryIntent || params.rollbackOfOperationId
-        ? { recoveryIntent: params.recoveryIntent, rollbackOfOperationId: params.rollbackOfOperationId }
-        : undefined,
+    approvalEvidence: params.approvalEvidence || params.recoveryIntent || params.rollbackOfOperationId
+      ? {
+          ...(params.approvalEvidence ?? {}),
+          recoveryIntent: params.recoveryIntent,
+          rollbackOfOperationId: params.rollbackOfOperationId,
+        }
+      : undefined,
     payload: {
       desiredState: params.desiredState,
       metadata: params.metadata ?? {},
@@ -229,7 +249,7 @@ export async function requestEngineStateChange(
 
   const commandId = randomUUID();
   const mutatePath = `${MANAGEMENT_V1_PREFIX}/engine-state/${encodeURIComponent(canonicalEngine)}`;
-  const mutateAssertion = await mint("platform.engine-state.set", "engines.platform_state.write", canonicalEngine);
+  const mutateAssertion = await mint("platform.engine-state.set", "engines.platform_state.write", canonicalEngine, params.approvalEvidence);
 
   let mutateResult;
   try {

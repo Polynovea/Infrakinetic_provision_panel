@@ -5,29 +5,29 @@
       "commandId": "00000000-0000-4000-8000-000000000001",
       "action": "ai.tenant.emergency.suspend",
       "tenantId": "00000000-0000-4000-8000-000000000002",
+      "approvalId": "00000000-0000-4000-8000-000000000003",
       "emergencyState": "suspended",
       "previousState": "none",
       "policyVersion": 1,
       "effectiveAt": "2026-01-01T00:00:00.000Z",
       "replay": false,
       "commandStatus": "completed",
-      "operatorId": "00000000-0000-4000-8000-000000000003",
-      "approvalId": null,
-      "correlationId": "00000000-0000-4000-8000-000000000004",
+      "operatorId": "00000000-0000-4000-8000-000000000004",
+      "correlationId": "00000000-0000-4000-8000-000000000005",
       "executedAt": "2026-01-01T00:00:00.000Z"
     },
     "AiCommandResult.tenant.resume": {
-      "commandId": "00000000-0000-4000-8000-000000000005",
+      "commandId": "00000000-0000-4000-8000-000000000006",
       "action": "ai.tenant.emergency.resume",
       "tenantId": "00000000-0000-4000-8000-000000000002",
-      "approvalId": "00000000-0000-4000-8000-000000000006",
+      "approvalId": "00000000-0000-4000-8000-000000000003",
       "emergencyState": "none",
       "previousState": "suspended",
       "policyVersion": 2,
       "effectiveAt": "2026-01-01T00:00:00.000Z",
       "replay": false,
       "commandStatus": "completed",
-      "operatorId": "00000000-0000-4000-8000-000000000003",
+      "operatorId": "00000000-0000-4000-8000-000000000004",
       "correlationId": "00000000-0000-4000-8000-000000000007",
       "executedAt": "2026-01-01T00:00:00.000Z"
     },
@@ -50,7 +50,7 @@
       "policyVersion": 3,
       "replay": false,
       "commandStatus": "completed",
-      "operatorId": "00000000-0000-4000-8000-000000000003",
+      "operatorId": "00000000-0000-4000-8000-000000000004",
       "approvalId": null,
       "correlationId": "00000000-0000-4000-8000-000000000009",
       "executedAt": "2026-01-01T00:00:00.000Z"
@@ -87,7 +87,7 @@
       "losing": 2,
       "gaining": 0,
       "diffHash": "0000000000000000000000000000000000000000000000000000000000000000",
-      "operatorId": "00000000-0000-4000-8000-000000000003",
+      "operatorId": "00000000-0000-4000-8000-000000000004",
       "approvalId": null,
       "correlationId": "00000000-0000-4000-8000-000000000010",
       "executedAt": "2026-01-01T00:00:00.000Z"
@@ -109,7 +109,7 @@
       "commissioningMode": "legacy_additive",
       "replay": false,
       "commandStatus": "completed",
-      "operatorId": "00000000-0000-4000-8000-000000000003",
+      "operatorId": "00000000-0000-4000-8000-000000000004",
       "approvalId": null,
       "correlationId": "00000000-0000-4000-8000-000000000012",
       "executedAt": "2026-01-01T00:00:00.000Z"
@@ -131,7 +131,7 @@
       "capabilitiesGainingAccess": 0,
       "replay": false,
       "commandStatus": "completed",
-      "operatorId": "00000000-0000-4000-8000-000000000003",
+      "operatorId": "00000000-0000-4000-8000-000000000004",
       "approvalId": null,
       "correlationId": "00000000-0000-4000-8000-000000000014",
       "executedAt": "2026-01-01T00:00:00.000Z"
@@ -157,7 +157,7 @@
       },
       "replay": false,
       "commandStatus": "completed",
-      "operatorId": "00000000-0000-4000-8000-000000000003",
+      "operatorId": "00000000-0000-4000-8000-000000000004",
       "approvalId": null,
       "correlationId": "00000000-0000-4000-8000-000000000017",
       "executedAt": "2026-01-01T00:00:00.000Z"
@@ -189,7 +189,7 @@
       },
       "replay": false,
       "commandStatus": "completed",
-      "operatorId": "00000000-0000-4000-8000-000000000003",
+      "operatorId": "00000000-0000-4000-8000-000000000004",
       "approvalId": null,
       "correlationId": "00000000-0000-4000-8000-000000000019",
       "executedAt": "2026-01-01T00:00:00.000Z"
@@ -209,7 +209,7 @@
       "expiresAt": "2026-01-01T00:00:00.000Z",
       "replay": false,
       "commandStatus": "completed",
-      "operatorId": "00000000-0000-4000-8000-000000000003",
+      "operatorId": "00000000-0000-4000-8000-000000000004",
       "approvalId": null,
       "correlationId": "00000000-0000-4000-8000-000000000022",
       "executedAt": "2026-01-01T00:00:00.000Z"
@@ -228,7 +228,7 @@
       "policyVersion": 5,
       "replay": false,
       "commandStatus": "completed",
-      "operatorId": "00000000-0000-4000-8000-000000000003",
+      "operatorId": "00000000-0000-4000-8000-000000000004",
       "approvalId": null,
       "correlationId": "00000000-0000-4000-8000-000000000024",
       "executedAt": "2026-01-01T00:00:00.000Z"
@@ -249,7 +249,7 @@
       "globallyUsable": true,
       "replay": false,
       "commandStatus": "completed",
-      "operatorId": "00000000-0000-4000-8000-000000000003",
+      "operatorId": "00000000-0000-4000-8000-000000000004",
       "approvalId": null,
       "correlationId": "00000000-0000-4000-8000-000000000026",
       "executedAt": "2026-01-01T00:00:00.000Z"
@@ -261,6 +261,7 @@
         "type": "ai_provider",
         "id": "nvidia_ocr"
       },
+      "approvalId": "00000000-0000-4000-8000-000000000003",
       "providerKey": "nvidia_ocr",
       "status": "disabled",
       "previousStatus": "active",
@@ -271,8 +272,7 @@
       "legacyLibraryEnabled": null,
       "replay": false,
       "commandStatus": "completed",
-      "operatorId": "00000000-0000-4000-8000-000000000003",
-      "approvalId": null,
+      "operatorId": "00000000-0000-4000-8000-000000000004",
       "correlationId": "00000000-0000-4000-8000-000000000028",
       "executedAt": "2026-01-01T00:00:00.000Z"
     },
@@ -283,7 +283,7 @@
         "type": "ai_model",
         "id": "00000000-0000-4000-8000-000000000030"
       },
-      "approvalId": "00000000-0000-4000-8000-000000000006",
+      "approvalId": "00000000-0000-4000-8000-000000000003",
       "modelId": "00000000-0000-4000-8000-000000000030",
       "providerKey": "nvidia_nim",
       "modelKey": "chat_default",
@@ -295,7 +295,7 @@
       ],
       "replay": false,
       "commandStatus": "completed",
-      "operatorId": "00000000-0000-4000-8000-000000000003",
+      "operatorId": "00000000-0000-4000-8000-000000000004",
       "correlationId": "00000000-0000-4000-8000-000000000031",
       "executedAt": "2026-01-01T00:00:00.000Z"
     },
@@ -306,7 +306,7 @@
         "type": "ai_model",
         "id": "00000000-0000-4000-8000-000000000030"
       },
-      "approvalId": "00000000-0000-4000-8000-000000000006",
+      "approvalId": "00000000-0000-4000-8000-000000000003",
       "modelId": "00000000-0000-4000-8000-000000000030",
       "providerKey": "nvidia_nim",
       "modelKey": "chat_default",
@@ -316,7 +316,7 @@
       "evidenceRef": "cert-run-2026-10-03",
       "replay": false,
       "commandStatus": "completed",
-      "operatorId": "00000000-0000-4000-8000-000000000003",
+      "operatorId": "00000000-0000-4000-8000-000000000004",
       "correlationId": "00000000-0000-4000-8000-000000000033",
       "executedAt": "2026-01-01T00:00:00.000Z"
     },
@@ -485,7 +485,7 @@
       "credentialTag": "sample-credential-tag-05",
       "replay": false,
       "commandStatus": "completed",
-      "operatorId": "00000000-0000-4000-8000-000000000003",
+      "operatorId": "00000000-0000-4000-8000-000000000004",
       "approvalId": null,
       "correlationId": "00000000-0000-4000-8000-000000000037",
       "executedAt": "2026-01-01T00:00:00.000Z"
@@ -507,7 +507,7 @@
       "supersededVersion": 1,
       "replay": false,
       "commandStatus": "completed",
-      "operatorId": "00000000-0000-4000-8000-000000000003",
+      "operatorId": "00000000-0000-4000-8000-000000000004",
       "approvalId": null,
       "correlationId": "00000000-0000-4000-8000-000000000039",
       "executedAt": "2026-01-01T00:00:00.000Z"
@@ -519,14 +519,14 @@
         "type": "ai_managed_credential_pool",
         "id": "nvidia_nim"
       },
-      "approvalId": "00000000-0000-4000-8000-000000000006",
+      "approvalId": "00000000-0000-4000-8000-000000000003",
       "poolKey": "nvidia_nim",
       "previousSource": "environment",
       "runtimeSource": "managed_db",
       "availableCredentialCount": 2,
       "replay": false,
       "commandStatus": "completed",
-      "operatorId": "00000000-0000-4000-8000-000000000003",
+      "operatorId": "00000000-0000-4000-8000-000000000004",
       "correlationId": "00000000-0000-4000-8000-000000000041",
       "executedAt": "2026-01-01T00:00:00.000Z"
     },
@@ -546,7 +546,7 @@
       "credentialTag": "sample-credential-tag-06",
       "replay": false,
       "commandStatus": "completed",
-      "operatorId": "00000000-0000-4000-8000-000000000003",
+      "operatorId": "00000000-0000-4000-8000-000000000004",
       "approvalId": null,
       "correlationId": "00000000-0000-4000-8000-000000000043",
       "executedAt": "2026-01-01T00:00:00.000Z"
@@ -572,7 +572,7 @@
       "changed": true,
       "replay": false,
       "commandStatus": "completed",
-      "operatorId": "00000000-0000-4000-8000-000000000003",
+      "operatorId": "00000000-0000-4000-8000-000000000004",
       "approvalId": null,
       "correlationId": "00000000-0000-4000-8000-000000000046",
       "executedAt": "2026-01-01T00:00:00.000Z"
@@ -636,7 +636,7 @@
       "wasOpen": true,
       "replay": false,
       "commandStatus": "completed",
-      "operatorId": "00000000-0000-4000-8000-000000000003",
+      "operatorId": "00000000-0000-4000-8000-000000000004",
       "approvalId": null,
       "correlationId": "00000000-0000-4000-8000-000000000052",
       "executedAt": "2026-01-01T00:00:00.000Z"
@@ -709,14 +709,14 @@
       "changed": true,
       "replay": false,
       "commandStatus": "completed",
-      "operatorId": "00000000-0000-4000-8000-000000000003",
+      "operatorId": "00000000-0000-4000-8000-000000000004",
       "approvalId": null,
       "correlationId": "00000000-0000-4000-8000-000000000057",
       "executedAt": "2026-01-01T00:00:00.000Z"
     },
     "AiAdminCommandReceipt": {
       "command": {
-        "idempotencyKey": "route-key-53",
+        "idempotencyKey": "route-key-55",
         "commandId": "00000000-0000-4000-8000-000000000051",
         "action": "ai.metering-exception.resolve",
         "tenantId": "00000000-0000-4000-8000-000000000002",
@@ -725,7 +725,7 @@
           "id": "00000000-0000-4000-8000-000000000048"
         },
         "reason": "route test",
-        "operatorId": "00000000-0000-4000-8000-000000000003",
+        "operatorId": "00000000-0000-4000-8000-000000000004",
         "approval": null,
         "status": "completed",
         "result": {
@@ -776,7 +776,7 @@
         "state": "none",
         "reason": null,
         "recoveryIntent": null,
-        "operationId": "00000000-0000-4000-8000-000000000005",
+        "operationId": "00000000-0000-4000-8000-000000000006",
         "since": "2026-01-01T00:00:00.000Z"
       },
       "planes": [

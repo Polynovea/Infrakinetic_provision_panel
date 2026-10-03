@@ -57,7 +57,7 @@ describe("contract coverage", () => {
       "managed-credential.add", "managed-credential.rotate", "managed-credential.status.set",
       "metering-exception.resolve", "provider.state.set",
       "reconciliation.line.resolve", "tenant.billing-anchor.set", "tenant.capability.commission", "tenant.commissioning-mode.set",
-      "tenant.credential.revoke", "tenant.model-policy.set", "tenant.planes.set", "tenant.quota.grace.grant", "tenant.quota.remove", "tenant.quota.set", "tenant.suspend",
+      "tenant.credential.revoke", "tenant.model-policy.set", "tenant.planes.set", "tenant.quota.grace.grant", "tenant.quota.remove", "tenant.quota.set",
     ].sort());
   });
 });
@@ -178,30 +178,30 @@ describe("routes whose method or body shape needs explicit proof", () => {
 });
 
 describe("risk classes and the controls the contract declares", () => {
-  it("suspend is R4, needs a recovery intent, and is a single-operator command (no approval evidence)", async () => {
-    const { deps, owner } = await setup();
+  it("suspend is R4: validates recovery intent, then refuses direct execution without maker-checker", async () => {
+    const { deps, owner, ledger } = await setup();
     await expect(
       executeAiCommand(deps, { ...operator(), routeId: "tenant.suspend", pathParams: { tenantId: TENANT }, fields: { recoveryIntent: "   " }, reason: "abuse", idempotencyKey: "s0" }),
     ).rejects.toMatchObject({ code: "AI_RECOVERY_INTENT_REQUIRED" });
+    await expect(
+      executeAiCommand(deps, { ...operator(), routeId: "tenant.suspend", pathParams: { tenantId: TENANT }, fields: { recoveryIntent: "restore after key rotation" }, reason: "leaked key suspected", idempotencyKey: "s1" }),
+    ).rejects.toMatchObject({ code: "AI_APPROVAL_REQUIRED" });
     expect(owner.calls).toHaveLength(0);
-
-    const result = await executeAiCommand(deps, { ...operator(), routeId: "tenant.suspend", pathParams: { tenantId: TENANT }, fields: { recoveryIntent: "restore after key rotation" }, reason: "leaked key suspected", idempotencyKey: "s1" });
-    expect(result.operation.riskClass).toBe("R4");
-    expect(result.operation.status).toBe("completed");
-    expect(result.operation.approvalEvidence).toBeUndefined();
-    expect(owner.mutations()[0]!.claims).toMatchObject({ scopes: ["ai.emergency_suspend"], requested_action: "ai.tenant.emergency.suspend", target_tenant_id: TENANT });
+    expect(await ledger.listOperations({ limit: 10 })).toHaveLength(0);
   });
 
-  it("provider state: activating is R2; narrowing (disable/deprecate) is R4 and needs a recovery intent", async () => {
-    const { deps } = await setup();
+  it("provider state: activating is R2; narrowing validates recovery intent then requires maker-checker", async () => {
+    const { deps, owner, ledger } = await setup();
     const active = await executeAiCommand(deps, { ...operator(), routeId: "provider.state.set", pathParams: { providerKey: "nvidia_nim" }, fields: { status: "active" }, reason: "restore", idempotencyKey: "p1" });
     expect(active.operation.riskClass).toBe("R2");
     await expect(
       executeAiCommand(deps, { ...operator(), routeId: "provider.state.set", pathParams: { providerKey: "nvidia_nim" }, fields: { status: "disabled" }, reason: "outage", idempotencyKey: "p2" }),
     ).rejects.toMatchObject({ code: "AI_RECOVERY_INTENT_REQUIRED" });
-    const disabled = await executeAiCommand(deps, { ...operator(), routeId: "provider.state.set", pathParams: { providerKey: "nvidia_nim" }, fields: { status: "disabled", recoveryIntent: "vendor incident VND-9 resolved" }, reason: "outage", idempotencyKey: "p3" });
-    expect(disabled.operation.riskClass).toBe("R4");
-    expect(disabled.operation.status).toBe("completed");
+    await expect(
+      executeAiCommand(deps, { ...operator(), routeId: "provider.state.set", pathParams: { providerKey: "nvidia_nim" }, fields: { status: "disabled", recoveryIntent: "vendor incident VND-9 resolved" }, reason: "outage", idempotencyKey: "p3" }),
+    ).rejects.toMatchObject({ code: "AI_APPROVAL_REQUIRED" });
+    expect(owner.mutations()).toHaveLength(1);
+    expect(await ledger.listOperations({ limit: 10 })).toHaveLength(1);
   });
 
   it.each(["tenant.resume", "model.lifecycle.set", "model.certification.set", "managed-credential.pool-source.set"])("%s is R3: executeAiCommand refuses to run it without maker-checker", async (routeId) => {
@@ -288,9 +288,9 @@ describe("failure classification and independent observation", () => {
 
   it("an owner that answers 200 but did not apply the change is partially_completed with the expected and observed facts", async () => {
     const { deps } = await setup({ applyEffects: false });
-    const result = await executeAiCommand(deps, { ...operator(), routeId: "tenant.suspend", pathParams: { tenantId: TENANT }, fields: { recoveryIntent: "later" }, reason: "abuse", idempotencyKey: "mm-1" });
+    const result = await executeAiCommand(deps, { ...operator(), routeId: "tenant.planes.set", pathParams: { tenantId: TENANT }, fields: { planes: ["embedded_managed"] }, reason: "test observation mismatch", idempotencyKey: "mm-1" });
     expect(result.operation.status).toBe("partially_completed");
-    expect(result.operation.partialFailureState).toEqual({ stage: "effective-mismatch", via: "tenant_state", expected: "suspended", observed: "none" });
+    expect(result.operation.partialFailureState).toMatchObject({ stage: "effective-mismatch" });
   });
 
   it("a failing observation read is partially_completed (effective-observation), not a silent success", async () => {

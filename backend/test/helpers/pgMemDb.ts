@@ -69,6 +69,10 @@ export function buildMigratedPgMemClient(): { db: ReturnType<typeof newDb>; clie
     new URL("../../migrations/0017_finops_allocation_policies.sql", import.meta.url),
   );
   db.public.none(readFileSync(migration0017Path, "utf8"));
+  const migration0019Path = fileURLToPath(
+    new URL("../../migrations/0019_break_glass_audit_event.sql", import.meta.url),
+  );
+  db.public.none(readFileSync(migration0019Path, "utf8"));
 
   const { Pool } = db.adapters.createPg();
   const pool = new Pool();

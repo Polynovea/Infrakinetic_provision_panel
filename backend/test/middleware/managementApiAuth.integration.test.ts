@@ -246,6 +246,18 @@ describe("requireManagementApiAuth — end-to-end through a real Express router"
       expect(failure?.reasonCode).toBe("TOKEN_MISSING");
     });
 
+    it("records a dedicated break_glass.used event without bypassing normal auth", async () => {
+      const op = activeAdminOperator({ roles: ["break_glass"], scopes: ["tenants.read", "audit.read"] });
+      const { app: server, auditSink } = app([op]);
+      const token = await signTestToken(keyPair, { subject: op.cognitoSub });
+
+      const res = await request(server).get("/management/v1/whoami").set("authorization", `Bearer ${token}`);
+      expect(res.status).toBe(200);
+      const event = auditSink.events.find((e) => e.eventType === "break_glass.used");
+      expect(event).toMatchObject({ operatorId: op.operatorId, route: "/management/v1/whoami", method: "GET" });
+      expect(event?.detail).toEqual({ authMethod: "bearer" });
+    });
+
     it("records authz.denied when a scope check fails", async () => {
       const op = activeViewerOperator({ scopes: ["tenants.read"] });
       const { app: server, auditSink } = app([op]);

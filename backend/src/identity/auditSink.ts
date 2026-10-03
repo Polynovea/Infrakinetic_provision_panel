@@ -12,7 +12,8 @@ export interface AuditEvent {
     | "auth.failure"
     | "authz.denied"
     | "session.revoked"
-    | "session.step_up_recorded";
+    | "session.step_up_recorded"
+    | "break_glass.used";
   occurredAt: string;
   operatorId?: string;
   operatorSessionId?: string;

@@ -58,11 +58,10 @@ import type { Scope } from "../../identity/roles.js";
 //   R2  planes, capability commissioning, commissioning mode, quota set /
 //       remove / grace, billing anchor, tenant model policy, provider state
 //       (activate), credential revoke
-//   R3  tenant resume, model lifecycle, model certification  (maker-checker)
-//   R4  tenant suspend (single operator, fresh step-up, recovery intent) and
-//       provider narrowing (disable / deprecate, recovery intent)
+//   R3  tenant resume, model lifecycle, model certification, managed-pool source cutover
+//   R4  tenant suspend and provider narrowing (disable / deprecate)
 //
-// R3 binds a checker-visible safe diff into the approval at request time.
+// R3/R4 binds a checker-visible safe diff into the approval at request time.
 // Execution re-reads the owner's CURRENT state and refuses — BEFORE the
 // approval is consumed — if the facts the checker approved no longer hold; the
 // assertion then carries signed approval evidence, so the owner takes the
@@ -93,7 +92,14 @@ const isText = (value: unknown): value is string => typeof value === "string" &&
 export const AI_MUTATION_ROUTES = AI_CONTRACT.routes.filter((route) => route.kind === "mutation");
 /** Receipted mutations executed through executeAiCommand (R1/R2/R4, or R3 through the approval pair). */
 export const AI_LEDGERED_ROUTES = AI_MUTATION_ROUTES.filter((route) => route.receipted !== false);
-export const AI_APPROVAL_ROUTES = AI_MUTATION_ROUTES.filter((route) => route.approval === "maker_checker");
+export const AI_APPROVAL_ROUTES = AI_MUTATION_ROUTES.filter(
+  (route) => route.approval === "maker_checker" || route.approvalWhenNarrowing === "maker_checker",
+);
+
+function approvalRequiredFor(route: AiContractRoute, fields: Record<string, unknown>): boolean {
+  if (route.approval === "maker_checker") return true;
+  return route.approvalWhenNarrowing === "maker_checker" && effectiveRisk(route, fields) === "R4";
+}
 
 export function isAiApproval(approval: { requestedAction: string }): boolean {
   return AI_APPROVAL_ROUTES.some((route) => route.action === approval.requestedAction);
@@ -506,13 +512,22 @@ export async function executeAiCommand(deps: AiOperationDeps, params: AiCommandP
   if (route.kind !== "mutation" || route.receipted === false) {
     throw new AiOperationRefusedError("AI_ROUTE_NOT_EXECUTABLE", `${route.id} is not a receipted AI command`, 400);
   }
-  if (route.approval === "maker_checker") {
-    throw new AiOperationRefusedError("AI_APPROVAL_REQUIRED", `${route.action} is an R3 command: request an approval, have a different operator decide it, then execute it`, 409);
+  const fields = params.fields ?? {};
+  // Fail closed before revealing approval policy: authorization, schema,
+  // recovery/precondition and secret-shape validation all happen first.
+  if (!params.operatorGrantedScopes.includes(route.scope)) throw new ScopeNotGrantedError(route.scope);
+  const body = { ...fields, idempotencyKey: params.idempotencyKey, reason: params.reason };
+  const violations = validateAiBody(route, body);
+  if (violations.length > 0) throw new InvalidAiRequestError(route.id, violations);
+  assertContractPreconditions(route, fields);
+  assertNoSecretShapedText(fields, params.reason);
+  if (approvalRequiredFor(route, fields)) {
+    throw new AiOperationRefusedError("AI_APPROVAL_REQUIRED", `${route.action} requires maker-checker approval: request an approval, have a different operator decide it, then execute it`, 409);
   }
   return runAiCommand(deps, { ...params, route });
 }
 
-// ── R3 maker-checker ────────────────────────────────────────────────────
+// ── R3/R4 maker-checker ───────────────────────────────────────────────
 
 // Same 24h window as identity/credential/payment-adapter R3.
 const APPROVAL_TTL_SECONDS = 24 * 60 * 60;
@@ -534,10 +549,10 @@ function approvalHash(requestedAction: string, target: AiTarget, summary: Record
   });
 }
 
-function approvalRouteFor(routeId: string): AiContractRoute {
+function approvalRouteFor(routeId: string, fields: Record<string, unknown>): AiContractRoute {
   const route = aiRoute(routeId);
-  if (route.kind !== "mutation" || route.approval !== "maker_checker") {
-    throw new AiOperationRefusedError("AI_ROUTE_NOT_APPROVAL_GATED", `${route.id} is not a maker-checker AI command`, 400);
+  if (route.kind !== "mutation" || !approvalRequiredFor(route, fields)) {
+    throw new AiOperationRefusedError("AI_ROUTE_NOT_APPROVAL_GATED", `${route.id} does not require maker-checker approval for this requested state`, 400);
   }
   return route;
 }
@@ -549,8 +564,8 @@ const modelNotFound = (modelId: string) => new AiOperationRefusedError("AI_MODEL
  * happens". Mints read assertions only; no mutation is sent.
  */
 export async function requestAiApproval(deps: AiApprovalDeps, params: RequestAiApprovalParams): Promise<ApprovalRecord> {
-  const route = approvalRouteFor(params.routeId);
   const fields = params.fields ?? {};
+  const route = approvalRouteFor(params.routeId, fields);
   const violations = validateAiSchema(requestSchemaWithoutIdempotency(route), { ...fields, reason: params.reason });
   if (violations.length > 0) throw new InvalidAiRequestError(route.id, violations);
   assertContractPreconditions(route, fields);
@@ -567,7 +582,7 @@ export async function requestAiApproval(deps: AiApprovalDeps, params: RequestAiA
     targetResourceId: target.targetResourceId as string,
     safePayloadHash: approvalHash(route.action, target, summary),
     safeRequestSummary: summary,
-    riskClass: route.risk,
+    riskClass: effectiveRisk(route, fields),
     reason: params.reason,
     makerOperatorId: params.operatorId,
     correlationId: params.correlationId ?? randomUUID(),
@@ -576,6 +591,32 @@ export async function requestAiApproval(deps: AiApprovalDeps, params: RequestAiA
 }
 
 async function summaryFor(deps: AiQueryDeps, operator: AiOperatorParams, route: AiContractRoute, fields: Record<string, unknown>, pathParams: Record<string, string>): Promise<Record<string, unknown>> {
+  if (route.id === "tenant.suspend") {
+    const state = await getTenantAiState(deps, { ...operator, tenantId: pathParams.tenantId as string });
+    if (state.emergency.state === "suspended") {
+      throw new AiOperationRefusedError("AI_TENANT_ALREADY_SUSPENDED", "This tenant's AI is already suspended", 409);
+    }
+    return {
+      tenantId: pathParams.tenantId,
+      emergencyStateAtRequest: state.emergency.state,
+      emergencySinceAtRequest: state.emergency.since,
+      emergencyOperationIdAtRequest: state.emergency.operationId,
+      requestedRecoveryIntent: fields.recoveryIntent,
+      suspendsTo: "suspended",
+    };
+  }
+  if (route.id === "provider.state.set") {
+    const catalog = await getAiCatalog(deps, operator);
+    const provider = catalog.providers.find((entry) => entry.providerKey === pathParams.providerKey);
+    if (!provider) throw new AiOperationRefusedError("AI_PROVIDER_NOT_FOUND", `The owner catalog has no provider '${pathParams.providerKey}'`, 404);
+    if (provider.status === fields.status) throw new AiOperationRefusedError("AI_NO_CHANGE", `The provider is already '${provider.status}'`, 409);
+    return {
+      providerKey: provider.providerKey,
+      providerStatusAtRequest: provider.status,
+      requestedStatus: fields.status,
+      requestedRecoveryIntent: fields.recoveryIntent,
+    };
+  }
   if (route.id === "tenant.resume") {
     const state = await getTenantAiState(deps, { ...operator, tenantId: pathParams.tenantId as string });
     if (state.emergency.state !== "suspended") {
@@ -637,6 +678,8 @@ async function summaryFor(deps: AiQueryDeps, operator: AiOperatorParams, route: 
 }
 
 function fieldsFromSummary(route: AiContractRoute, summary: Record<string, unknown>): Record<string, unknown> {
+  if (route.id === "tenant.suspend") return { recoveryIntent: summary.requestedRecoveryIntent };
+  if (route.id === "provider.state.set") return { status: summary.requestedStatus, recoveryIntent: summary.requestedRecoveryIntent };
   if (route.id === "tenant.resume") return {};
   if (route.id === "managed-credential.pool-source.set") return { source: summary.requestedSource };
   if (route.id === "model.lifecycle.set") return { lifecycle: summary.requestedLifecycle };
@@ -652,6 +695,20 @@ async function assertApprovedFactsStillHold(deps: AiQueryDeps, operator: AiOpera
       409,
       { approved, current },
     );
+  if (route.id === "tenant.suspend") {
+    const state = await getTenantAiState(deps, { ...operator, tenantId: pathParams.tenantId as string });
+    const current = { state: state.emergency.state, since: state.emergency.since, operationId: state.emergency.operationId };
+    const approved = { state: summary.emergencyStateAtRequest, since: summary.emergencySinceAtRequest, operationId: summary.emergencyOperationIdAtRequest };
+    if (!same(current, approved)) throw changed("emergency state", approved, current);
+    return;
+  }
+  if (route.id === "provider.state.set") {
+    const catalog = await getAiCatalog(deps, operator);
+    const provider = catalog.providers.find((entry) => entry.providerKey === pathParams.providerKey);
+    if (!provider) throw new AiOperationRefusedError("AI_PROVIDER_NOT_FOUND", `The owner catalog has no provider '${pathParams.providerKey}'`, 404);
+    if (provider.status !== summary.providerStatusAtRequest) throw changed("provider state", summary.providerStatusAtRequest, provider.status);
+    return;
+  }
   if (route.id === "tenant.resume") {
     const state = await getTenantAiState(deps, { ...operator, tenantId: pathParams.tenantId as string });
     const current = { state: state.emergency.state, since: state.emergency.since, operationId: state.emergency.operationId };
@@ -694,7 +751,7 @@ export interface ExecuteAiApprovalParams extends AiOperatorParams {
 export async function executeAiApproval(deps: AiApprovalDeps, params: ExecuteAiApprovalParams): Promise<AiOperationResult & { approval: ApprovalRecord }> {
   const approval = await deps.approvals.getApproval(params.approvalId);
   const route = aiRouteByAction(approval.requestedAction);
-  if (!route || route.approval !== "maker_checker") throw new AiOperationRefusedError("AI_ROUTE_NOT_APPROVAL_GATED", "This approval is not an AI maker-checker action", 400);
+  if (!route) throw new AiOperationRefusedError("AI_ROUTE_NOT_APPROVAL_GATED", "This approval is not an AI maker-checker action", 400);
   // The owner accepts an R3 execution only from a party to the approval (contract: approvalExecutor). Refused here,
   // before the single-use approval is consumed, so a wrong executor cannot burn an approval the owner would refuse.
   if (route.approvalExecutor === "maker_or_checker" && ![approval.makerOperatorId, approval.checkerOperatorId].includes(params.operatorId)) {
@@ -702,11 +759,15 @@ export async function executeAiApproval(deps: AiApprovalDeps, params: ExecuteAiA
   }
   const summary = approval.safeRequestSummary;
   if (!summary) throw new AiOperationRefusedError("AI_APPROVAL_SUMMARY_MISSING", "The approval carries no approved safe diff", 409);
-  const pathParams: Record<string, string> = route.id === "tenant.resume"
+  const approvedFields = fieldsFromSummary(route, summary);
+  if (!approvalRequiredFor(route, approvedFields)) throw new AiOperationRefusedError("AI_ROUTE_NOT_APPROVAL_GATED", "This approval is not for a state that requires maker-checker", 400);
+  const pathParams: Record<string, string> = route.id === "tenant.resume" || route.id === "tenant.suspend"
     ? { tenantId: approval.targetResourceId }
     : route.id === "managed-credential.pool-source.set"
       ? { poolKey: approval.targetResourceId }
-      : { modelId: approval.targetResourceId };
+      : route.id === "provider.state.set"
+        ? { providerKey: approval.targetResourceId }
+        : { modelId: approval.targetResourceId };
 
   // §59 replay before the single-use gate (audit remediation M5 pattern): a timeout retry of an execution that
   // already ran must return its operation, not trip over the consumed approval or the (now changed) owner state.
@@ -729,7 +790,7 @@ export async function executeAiApproval(deps: AiApprovalDeps, params: ExecuteAiA
     route,
     routeId: route.id,
     pathParams,
-    fields: fieldsFromSummary(route, summary),
+    fields: approvedFields,
     reason: approval.reason,
     approvalEvidence: { approvalId: approval.approvalId, makerOperatorId: approval.makerOperatorId, checkerOperatorId: executed.checkerOperatorId },
     approvalLedgerEvidence: { approvalId: approval.approvalId, checkerOperatorId: executed.checkerOperatorId, decidedAt: executed.decidedAt },

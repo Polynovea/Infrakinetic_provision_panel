@@ -192,6 +192,22 @@ export function requireManagementApiAuth(deps: ManagementAuthDeps): RequestHandl
         correlationId,
       });
 
+      // Break-glass is never a bypass: normal MFA/session/scope/step-up/maker-checker
+      // controls above and downstream still apply. This event is additional durable
+      // evidence that an emergency identity was used at all, without recording a body.
+      if (operator.roles.includes("break_glass")) {
+        await deps.auditSink.record({
+          eventType: "break_glass.used",
+          occurredAt: operatorContext.authenticatedAt,
+          operatorId: operator.operatorId,
+          operatorSessionId,
+          route,
+          method,
+          correlationId,
+          detail: { authMethod: req.operatorAuthMethod },
+        });
+      }
+
       next();
     } catch (err) {
       if (err instanceof ManagementAuthError) {

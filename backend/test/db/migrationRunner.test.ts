@@ -105,6 +105,7 @@ describe("db/migrationRunner", () => {
       "0016_global_config_restore.sql",
       "0017_finops_allocation_policies.sql",
       "0018_ai_credentials_manage_scope.sql",
+      "0019_break_glass_audit_event.sql",
     ]);
     expect(results.filter((r) => !["0008_operator_scopes_lifecycle_and_plan_scopes.sql", "0010_retire_tenant_plan_write_scope.sql", "0014_audit_append_only_enforcement.sql", "0015_payment_adapter_and_global_config_scopes.sql", "0018_ai_credentials_manage_scope.sql"].includes(r.id)).every((r) => r.applied)).toBe(true);
     expect(results.find((r) => r.id === "0015_payment_adapter_and_global_config_scopes.sql")?.applied).toBe(false);
@@ -220,6 +221,7 @@ describe("db/migrationRunner", () => {
       { id: "0016_global_config_restore.sql", applied: true },
       { id: "0017_finops_allocation_policies.sql", applied: true },
       { id: "0018_ai_credentials_manage_scope.sql", applied: false },
+      { id: "0019_break_glass_audit_event.sql", applied: true },
     ]);
   });
 
@@ -267,6 +269,7 @@ describe("db/migrationRunner", () => {
       { id: "0016_global_config_restore.sql", applied: true },
       { id: "0017_finops_allocation_policies.sql", applied: true },
       { id: "0018_ai_credentials_manage_scope.sql", applied: false },
+      { id: "0019_break_glass_audit_event.sql", applied: true },
     ]);
 
     // Idempotent from here on, same as every other migration.

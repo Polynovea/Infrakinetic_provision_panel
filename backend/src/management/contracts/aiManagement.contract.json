@@ -820,6 +820,7 @@
     },
     {
       "kind": "mutation",
+      "approvalExecutor": "maker_or_checker",
       "id": "provider.state.set",
       "method": "PUT",
       "path": "/ai/providers/:providerKey/state",
@@ -828,6 +829,7 @@
       "risk": "R2",
       "riskNarrowing": "R4",
       "approval": "none",
+      "approvalWhenNarrowing": "maker_checker",
       "recoveryIntentWhenNarrowing": true,
       "binding": {
         "tenant": null,
@@ -980,13 +982,14 @@
     },
     {
       "kind": "mutation",
+      "approvalExecutor": "maker_or_checker",
       "id": "tenant.suspend",
       "method": "POST",
       "path": "/ai/tenants/:tenantId/suspend",
       "scope": "ai.emergency_suspend",
       "action": "ai.tenant.emergency.suspend",
       "risk": "R4",
-      "approval": "none",
+      "approval": "maker_checker",
       "stepUp": true,
       "recoveryIntent": true,
       "binding": {

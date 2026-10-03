@@ -114,7 +114,7 @@ describe("scope gates (role ceilings are unchanged; a scope is the authorization
     expect((await finops("post", "/ai/reconciliation/lines/00000000-0000-4000-8000-000000000044/resolve").send({ idempotencyKey: "fr-1", reason: "vendor confirmed" })).status).toBe(200);
     const before = owner.mutations().length;
     for (const [method, path, body] of [
-      ["post", `/ai/tenants/${TENANT}/suspend`, { idempotencyKey: "x1", reason: "r", recoveryIntent: "i" }],
+      ["post", `/ai/tenants/${TENANT}/suspend/request`, { idempotencyKey: "x1", reason: "r", recoveryIntent: "i" }],
       ["put", `/ai/tenants/${TENANT}/planes`, { idempotencyKey: "x2", reason: "r", planes: ["embedded_managed"] }],
       ["put", "/ai/providers/nvidia_nim/state", { idempotencyKey: "x3", reason: "r", status: "active" }],
       ["put", `/ai/tenants/${TENANT}/model-policy`, { idempotencyKey: "x4", reason: "r", providerKey: "nvidia_nim", decision: "deny" }],
@@ -129,9 +129,9 @@ describe("scope gates (role ceilings are unchanged; a scope is the authorization
   it("security can suspend (with step-up) and revoke a credential — and cannot change quotas or resolve exceptions", async () => {
     const { as } = await harness();
     const security = await as("security", { stepUp: true });
-    const suspend = await security("post", `/ai/tenants/${TENANT}/suspend`).send({ idempotencyKey: "ss-1", reason: "abuse", recoveryIntent: "restore after rotation" });
-    expect(suspend.status).toBe(200);
-    expect(suspend.body.operation).toMatchObject({ status: "completed", riskClass: "R4" });
+    const suspend = await security("post", `/ai/tenants/${TENANT}/suspend/request`).send({ reason: "abuse", recoveryIntent: "restore after rotation" });
+    expect(suspend.status).toBe(201);
+    expect(suspend.body.approval).toMatchObject({ status: "pending", riskClass: "R4", requestedAction: "ai.tenant.emergency.suspend" });
     const revoke = await security("post", `/ai/tenants/${TENANT}/credentials/aicred_00000000-0000-4000-8000-000000000035/revoke`).send({ idempotencyKey: "sr-1", reason: "employee left" });
     expect(revoke.status).toBe(200);
     expect(revoke.body.operation).toMatchObject({ status: "completed", riskClass: "R2" });
@@ -143,29 +143,29 @@ describe("scope gates (role ceilings are unchanged; a scope is the authorization
 describe("fresh step-up", () => {
   it("suspend (R4) needs it: without, nothing is ledgered or sent", async () => {
     const { as, owner, ledger } = await harness();
-    const res = await (await as("admin"))("post", `/ai/tenants/${TENANT}/suspend`).send({ idempotencyKey: "su-1", reason: "abuse", recoveryIntent: "later" });
+    const res = await (await as("admin"))("post", `/ai/tenants/${TENANT}/suspend/request`).send({ idempotencyKey: "su-1", reason: "abuse", recoveryIntent: "later" });
     expect(res.status).toBe(403);
     expect(res.body.error).toBe("STEP_UP_REQUIRED");
     expect(owner.calls).toHaveLength(0);
     expect(await ledger.listOperations({ limit: 10 })).toHaveLength(0);
   });
 
-  it("provider state: narrowing needs step-up, activating does not", async () => {
+  it("provider state: narrowing uses a stepped-up approval request, activating stays direct R2", async () => {
     const { as } = await harness();
     const call = await as("admin");
-    const disable = await call("put", "/ai/providers/nvidia_nim/state").send({ idempotencyKey: "pv-1", reason: "outage", status: "disabled", recoveryIntent: "vendor fix" });
-    expect(disable.status).toBe(403);
-    expect(disable.body.error).toBe("STEP_UP_REQUIRED");
-    const deprecate = await call("put", "/ai/providers/nvidia_nim/state").send({ idempotencyKey: "pv-2", reason: "sunset", status: "deprecated", recoveryIntent: "n/a" });
-    expect(deprecate.body.error).toBe("STEP_UP_REQUIRED");
+    const directDisable = await call("put", "/ai/providers/nvidia_nim/state").send({ idempotencyKey: "pv-1", reason: "outage", status: "disabled", recoveryIntent: "vendor fix" });
+    expect(directDisable.status).toBe(409);
+    expect(directDisable.body.error).toBe("AI_APPROVAL_REQUIRED");
+    const noStep = await call("post", "/ai/providers/nvidia_nim/state/request").send({ reason: "outage", status: "disabled", recoveryIntent: "vendor fix" });
+    expect(noStep.status).toBe(403);
+    expect(noStep.body.error).toBe("STEP_UP_REQUIRED");
     const activate = await call("put", "/ai/providers/nvidia_nim/state").send({ idempotencyKey: "pv-3", reason: "restore", status: "active" });
     expect(activate.status).toBe(200);
     expect(activate.body.operation).toMatchObject({ status: "completed", riskClass: "R2" });
-
     const stepped = await as("admin", { stepUp: true });
-    const ok = await stepped("put", "/ai/providers/nvidia_nim/state").send({ idempotencyKey: "pv-4", reason: "outage", status: "disabled", recoveryIntent: "vendor fix VND-9" });
-    expect(ok.status).toBe(200);
-    expect(ok.body.operation.riskClass).toBe("R4");
+    const requested = await stepped("post", "/ai/providers/nvidia_nim/state/request").send({ reason: "outage", status: "disabled", recoveryIntent: "vendor fix VND-9" });
+    expect(requested.status).toBe(201);
+    expect(requested.body.approval).toMatchObject({ status: "pending", riskClass: "R4", requestedAction: "ai.provider.state.set" });
   });
 
   it.each([
@@ -428,7 +428,11 @@ describe("the AI route surface is exactly what the contract declares", () => {
       "GET /ai/tenants/:tenantId/state", "GET /ai/fleet/summary", "GET /ai/catalog", "GET /ai/tenants/:tenantId/credentials",
       "GET /ai/managed-credentials", "GET /ai/metering-exceptions", "GET /ai/reconciliation", "GET /ai-admin-commands/:idempotencyKey",
       "POST /ai/tenants/:tenantId/commissioning-mode/preview",
-      ...AI_LEDGERED_ROUTES.map((route) => (route.approval === "maker_checker" ? `POST ${route.path}/request` : `${route.method} ${route.path}`)),
+      ...AI_LEDGERED_ROUTES.flatMap((route) => route.approval === "maker_checker"
+        ? [`POST ${route.path}/request`]
+        : route.approvalWhenNarrowing === "maker_checker"
+          ? [`${route.method} ${route.path}`, `POST ${route.path}/request`]
+          : [`${route.method} ${route.path}`]),
     ].sort();
     expect(aiRoutes(app)).toEqual(expected);
     // Tenant BYOAI remains metadata + revoke only. Platform-managed credentials

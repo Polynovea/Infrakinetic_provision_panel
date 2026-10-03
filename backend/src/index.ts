@@ -20,6 +20,7 @@ import { FinOpsAllocationPolicyStore } from "./management/operations/finOpsAlloc
 import { createBrowserAuthRouter } from "./routes/auth/index.js";
 import { createManagementRouter } from "./routes/management/index.js";
 import { DatabaseUnavailableError } from "./db/errors.js";
+import { createGovernanceCors } from "./middleware/governanceCors.js";
 
 // 1A.1 — infrastructure-only, still true: no database connection, no calls
 // to Infrakinetic's api-server of any kind. /healthz must pass with zero
@@ -35,25 +36,7 @@ const FRONTEND_ORIGIN =
 
 app.set("trust proxy", 1);
 
-app.use((req, res, next) => {
-  const origin = req.header("origin");
-  if (origin) {
-    if (!FRONTEND_ORIGIN || origin !== FRONTEND_ORIGIN) {
-      res.status(403).json({ error: "ORIGIN_NOT_ALLOWED" });
-      return;
-    }
-    res.header("Access-Control-Allow-Origin", origin);
-    res.header("Vary", "Origin");
-    res.header("Access-Control-Allow-Credentials", "true");
-    res.header("Access-Control-Allow-Headers", "content-type, x-governance-csrf, x-correlation-id, authorization");
-    res.header("Access-Control-Allow-Methods", "GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS");
-  }
-  if (req.method === "OPTIONS") {
-    res.status(204).end();
-    return;
-  }
-  next();
-});
+app.use(createGovernanceCors(FRONTEND_ORIGIN));
 
 app.use(express.json({ limit: "64kb" }));
 
