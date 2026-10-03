@@ -101,7 +101,7 @@ describe("every contract route is implemented by Governance", () => {
   });
 });
 
-interface Expectation { risk: string; narrowing?: string; scope: string; approval: "none" | "maker_checker"; stepUp?: boolean; method: string }
+interface Expectation { risk: string; narrowing?: string; scope: string; approval: "none" | "maker_checker"; approvalWhenNarrowing?: "maker_checker"; stepUp?: boolean; method: string }
 
 // The approved semantics, written independently of the contract (the source of truth for the assertions below).
 const APPROVED: Record<string, Expectation> = {
@@ -114,10 +114,10 @@ const APPROVED: Record<string, Expectation> = {
   "tenant.quota.grace.grant": { risk: "R2", scope: "ai.quota.write", approval: "none", method: "POST" },
   "tenant.billing-anchor.set": { risk: "R2", scope: "ai.quota.write", approval: "none", method: "PUT" },
   "tenant.model-policy.set": { risk: "R2", scope: "ai.provider_policy.write", approval: "none", method: "PUT" },
-  "provider.state.set": { risk: "R2", narrowing: "R4", scope: "ai.provider_policy.write", approval: "none", method: "PUT" },
+  "provider.state.set": { risk: "R2", narrowing: "R4", scope: "ai.provider_policy.write", approval: "none", approvalWhenNarrowing: "maker_checker", method: "PUT" },
   "model.lifecycle.set": { risk: "R3", scope: "ai.provider_policy.write", approval: "maker_checker", method: "PUT" },
   "model.certification.set": { risk: "R3", scope: "ai.provider_policy.write", approval: "maker_checker", method: "PUT" },
-  "tenant.suspend": { risk: "R4", scope: "ai.emergency_suspend", approval: "none", stepUp: true, method: "POST" },
+  "tenant.suspend": { risk: "R4", scope: "ai.emergency_suspend", approval: "maker_checker", stepUp: true, method: "POST" },
   "tenant.resume": { risk: "R3", scope: "ai.emergency_suspend", approval: "maker_checker", method: "POST" },
   "tenant.credential.revoke": { risk: "R2", scope: "credentials.revoke", approval: "none", method: "POST" },
   "managed-credential.add": { risk: "R2", scope: "ai.credentials.manage", approval: "none", method: "POST" },
@@ -135,6 +135,7 @@ describe("risk classes, scopes, approvals and step-up are the approved ones", ()
     expect(route.riskNarrowing).toBe(expected.narrowing);
     expect(route.scope).toBe(expected.scope);
     expect(route.approval).toBe(expected.approval);
+    expect(route.approvalWhenNarrowing).toBe(expected.approvalWhenNarrowing);
     expect(Boolean(route.stepUp)).toBe(Boolean(expected.stepUp));
     expect(route.method).toBe(expected.method);
     expect(route.action).toMatch(/^ai\./);
@@ -151,13 +152,18 @@ describe("risk classes, scopes, approvals and step-up are the approved ones", ()
     }
   });
 
-  it("R3 is exactly the maker-checker set: resume, model lifecycle/certification and managed-pool source cutover", () => {
+  it("R3 stays the canonical R3 set, while R4 suspend/provider narrowing are also maker-checker gated", () => {
     expect(AI_CONTRACT.r3Actions.slice().sort()).toEqual(["ai.managed-credential.pool-source.set", "ai.model.certification.set", "ai.model.lifecycle.set", "ai.tenant.emergency.resume"]);
-    expect(AI_APPROVAL_ROUTES.map((route) => route.action).sort()).toEqual(AI_CONTRACT.r3Actions.slice().sort());
+    expect(AI_APPROVAL_ROUTES.map((route) => route.action).sort()).toEqual([
+      ...AI_CONTRACT.r3Actions,
+      "ai.provider.state.set",
+      "ai.tenant.emergency.suspend",
+    ].sort());
     for (const route of AI_CONTRACT.routes.filter((r) => r.kind === "mutation")) {
-      expect(route.approval === "maker_checker", route.id).toBe(route.risk === "R3");
-      // Only a party to the approval (its maker or checker) may execute: the owner refuses anyone else (APPROVAL_OPERATOR_MISMATCH).
-      expect(route.approvalExecutor, route.id).toBe(route.approval === "maker_checker" ? "maker_or_checker" : undefined);
+      if (route.risk === "R3" || route.risk === "R4") expect(route.approval, route.id).toBe("maker_checker");
+      if (route.riskNarrowing === "R4") expect(route.approvalWhenNarrowing, route.id).toBe("maker_checker");
+      const gated = route.approval === "maker_checker" || route.approvalWhenNarrowing === "maker_checker";
+      expect(route.approvalExecutor, route.id).toBe(gated ? "maker_or_checker" : undefined);
     }
   });
 

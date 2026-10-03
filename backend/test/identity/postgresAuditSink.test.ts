@@ -43,6 +43,16 @@ describe("PostgresAuditSink", () => {
     expect(mirror.events).toHaveLength(1);
   });
 
+  it("persists break_glass.used as a first-class durable event", async () => {
+    await sink.record({
+      eventType: "break_glass.used", occurredAt: "2026-10-03T00:00:00.000Z", operatorId: OPERATOR_ID, operatorSessionId: SESSION_ID,
+      route: "/management/v1/whoami", method: "GET", detail: { authMethod: "browser-session" },
+    });
+    const persisted = await rows();
+    expect(persisted).toHaveLength(1);
+    expect(persisted[0]).toMatchObject({ event_type: "break_glass.used", operator_id: OPERATOR_ID, operator_session_id: SESSION_ID, route: "/management/v1/whoami", method: "GET" });
+  });
+
   it("an operator id not in the directory (denied, unprovisioned subject) is kept in detail instead of losing the event", async () => {
     await sink.record({ eventType: "auth.failure", occurredAt: "2026-09-25T00:00:00.000Z", operatorId: "99999999-9999-4999-8999-999999999999", reasonCode: "OPERATOR_NOT_PROVISIONED" });
 

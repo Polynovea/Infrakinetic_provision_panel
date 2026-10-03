@@ -79,17 +79,30 @@ describe("PUT /management/v1/engine-state/:engineKey — Governance's own operat
     return { server, token };
   }
 
-  it("R4: an operator WITH the scope but WITHOUT a fresh step-up -> 403 STEP_UP_REQUIRED, nothing reaches orchestration", async () => {
+  it("R4 direct disable is refused with ENGINE_APPROVAL_REQUIRED; the approval-request route owns step-up", async () => {
     const { server, op } = appWithAdmin();
     const token = await signTestToken(keyPair, { subject: op.cognitoSub });
     const res = await request(server)
       .put("/management/v1/engine-state/module_ai")
       .set("authorization", `Bearer ${token}`)
       .send({ idempotencyKey: "k1", desiredState: "disabled", reason: "incident", recoveryIntent: "re-enable after fix" });
-    expect(res.status).toBe(403);
-    expect(res.body.error).toBe("STEP_UP_REQUIRED");
+    expect(res.status).toBe(409);
+    expect(res.body.error).toBe("ENGINE_APPROVAL_REQUIRED");
     const ops = await client.query("SELECT * FROM governance.management_operations");
     expect(ops.rows).toHaveLength(0);
+  });
+
+
+  it("R4 disable approval request requires fresh step-up before any owner read", async () => {
+    const { server, op } = appWithAdmin();
+    const token = await signTestToken(keyPair, { subject: op.cognitoSub });
+    const res = await request(server)
+      .post("/management/v1/engine-state/module_ai/disable/request")
+      .set("authorization", `Bearer ${token}`)
+      .send({ reason: "incident", recoveryIntent: "re-enable after fix" });
+    expect(res.status).toBe(403);
+    expect(res.body.error).toBe("STEP_UP_REQUIRED");
+    expect((await client.query("SELECT * FROM governance.management_approvals")).rows).toHaveLength(0);
   });
 
   it("R2 recovery (desiredState 'operational') is NOT step-up gated — incident recovery stays fast", async () => {

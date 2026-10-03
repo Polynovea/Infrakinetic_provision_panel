@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   isRiskClass,
-  riskClassRequiresReason,
+  riskClassRequiresReason, riskClassRequiresApprovalWorkflow,
   RISK_CLASS_POLICY,
 } from "../../../src/management/operations/riskClassification.js";
 
@@ -26,9 +26,17 @@ describe("management/operations/riskClassification", () => {
     expect(riskClassRequiresReason("R4")).toBe(true);
   });
 
-  it("R3/R4 flag an approval-workflow hook without 1A.5 implementing one", () => {
+  it("R3/R4 are centrally classified as approval-workflow risks", () => {
     expect(RISK_CLASS_POLICY.R3.requiresApprovalWorkflow).toBe(true);
     expect(RISK_CLASS_POLICY.R4.requiresApprovalWorkflow).toBe(true);
     expect(RISK_CLASS_POLICY.R2.requiresApprovalWorkflow).toBe(false);
+  });
+
+  it("requires an approval workflow for exactly R3 and R4", () => {
+    expect(riskClassRequiresApprovalWorkflow("R0")).toBe(false);
+    expect(riskClassRequiresApprovalWorkflow("R1")).toBe(false);
+    expect(riskClassRequiresApprovalWorkflow("R2")).toBe(false);
+    expect(riskClassRequiresApprovalWorkflow("R3")).toBe(true);
+    expect(riskClassRequiresApprovalWorkflow("R4")).toBe(true);
   });
 });

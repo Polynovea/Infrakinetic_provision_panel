@@ -66,7 +66,7 @@ import {
   previewCommissioningMode,
   requestAiApproval,
 } from "../../management/operations/aiOperation.js";
-import { AI_CONTRACT, InvalidAiRequestError } from "../../management/operations/aiContract.js";
+import { AI_CONTRACT, InvalidAiRequestError, effectiveRisk } from "../../management/operations/aiContract.js";
 import { ScopeNotGrantedError } from "../../management/managementAssertionIssuer.js";
 import type { Scope } from "../../identity/roles.js";
 import {
@@ -92,6 +92,12 @@ import {
   UnexpectedManagementApiResponseError,
   ManagementApiUnreachableError,
 } from "../../management/operations/engineStateOperation.js";
+import {
+  requestEngineDisableApproval,
+  executeEngineDisableApproval,
+  isEngineDisableApproval,
+  engineDisableApprovalScope,
+} from "../../management/operations/engineStateApproval.js";
 import { ManagementOperationError, OperationNotFoundError } from "../../management/operations/managementOperationErrors.js";
 import { listTenantRegistry, getTenantRegistryEntry, getTenantRegistryUsers, UnknownTenantError } from "../../management/operations/tenantRegistryQuery.js";
 import { listEngineCatalog } from "../../management/operations/engineCatalogQuery.js";
@@ -725,14 +731,38 @@ export function createManagementRouter(deps: ManagementRouterDeps): Router {
   // platform_admin/break_glass by ROLE_SCOPE_CEILING (roles.ts). R4
   // maker-checker and the break-glass policy remain 1A.19's deliverable.
   const requireStepUpForR4EngineState = requireStepUp(300, deps.sessionStore, deps.auditSink);
+
+  router.post(
+    "/engine-state/:engineKey/disable/request",
+    requireScope("engines.platform_state.write", deps.auditSink),
+    requireStepUpForR4EngineState,
+    async (req, res, next) => {
+      try {
+        const ctx = req.operatorContext;
+        if (!ctx) { res.status(403).json({ error: "NOT_AUTHENTICATED" }); return; }
+        const body = (req.body ?? {}) as Record<string, unknown>;
+        if (typeof body.reason !== "string" || body.reason.trim() === "") { res.status(400).json({ error: "REASON_REQUIRED" }); return; }
+        if (typeof body.recoveryIntent !== "string" || body.recoveryIntent.trim() === "") { res.status(400).json({ error: "RECOVERY_INTENT_REQUIRED" }); return; }
+        const signingKeys = await deps.getManagementSigningKeys();
+        const transportConfig = deps.loadTransportConfig();
+        const approval = await requestEngineDisableApproval(
+          { approvals: deps.approvals, ledger: deps.ledger, signingKeys, transportConfig, infrakineticBaseUrl: deps.infrakineticBaseUrl, fetchImpl: deps.fetchImpl },
+          { ...operatorParams(ctx), engineKeyOrAlias: req.params.engineKey, reason: body.reason, recoveryIntent: body.recoveryIntent, metadata: typeof body.metadata === "object" && body.metadata !== null ? body.metadata as Record<string, unknown> : undefined },
+        );
+        res.status(201).json({ approval });
+      } catch (err) {
+        if (approvalErrorResponse(err, res)) return;
+        if (err instanceof UnknownEngineError) { res.status(404).json({ error: "UNKNOWN_ENGINE", message: err.message }); return; }
+        if (err instanceof MissingRecoveryIntentError) { res.status(400).json({ error: "RECOVERY_INTENT_REQUIRED", message: err.message }); return; }
+        if (err instanceof UnexpectedManagementApiResponseError || err instanceof ManagementApiUnreachableError) { res.status(502).json({ error: "MANAGEMENT_API_UPSTREAM_ERROR", message: err.message }); return; }
+        next(err);
+      }
+    },
+  );
+
   router.put(
     "/engine-state/:engineKey",
     requireScope("engines.platform_state.write", deps.auditSink),
-    (req, res, next) => {
-      const desiredState = (req.body as Record<string, unknown> | undefined)?.desiredState;
-      if (desiredState === "disabled") return requireStepUpForR4EngineState(req, res, next);
-      next();
-    },
     async (req, res, next) => {
       try {
         const ctx = req.operatorContext;
@@ -752,6 +782,11 @@ export function createManagementRouter(deps: ManagementRouterDeps): Router {
         const desiredState = body.desiredState;
         if (desiredState !== "operational" && desiredState !== "degraded" && desiredState !== "disabled") {
           res.status(400).json({ error: "INVALID_DESIRED_STATE" });
+          return;
+        }
+
+        if (desiredState === "disabled") {
+          res.status(409).json({ error: "ENGINE_APPROVAL_REQUIRED", message: "Global engine disable is R4 and requires maker-checker approval. Use /engine-state/:engineKey/disable/request." });
           return;
         }
 
@@ -2157,7 +2192,9 @@ export function createManagementRouter(deps: ManagementRouterDeps): Router {
     const scope = route.scope as Scope;
     const verb = route.method.toLowerCase() as "put" | "post" | "delete";
 
-    if (route.approval === "maker_checker") {
+    const staticApproval = route.approval === "maker_checker";
+    const conditionalApproval = route.approvalWhenNarrowing === "maker_checker";
+    if (staticApproval || conditionalApproval) {
       router.post(`${route.path}/request`, requireScope(scope, deps.auditSink), aiStepUp, async (req, res, next) => {
         try {
           const ctx = req.operatorContext;
@@ -2165,6 +2202,10 @@ export function createManagementRouter(deps: ManagementRouterDeps): Router {
           const body = (req.body ?? {}) as Record<string, unknown>;
           if (typeof body.reason !== "string" || body.reason.trim() === "") { res.status(400).json({ error: "REASON_REQUIRED" }); return; }
           const { reason, ...fields } = body;
+          if (conditionalApproval && !staticApproval && effectiveRisk(route, fields) !== "R4") {
+            res.status(409).json({ error: "AI_APPROVAL_NOT_REQUIRED", message: "This requested provider state is not an R4 narrowing; use the direct R2 route." });
+            return;
+          }
           const approval = await requestAiApproval(await aiDeps(), { ...operatorParams(ctx), routeId: route.id, pathParams: req.params, fields, reason });
           res.status(201).json({ approval });
         } catch (err) {
@@ -2173,12 +2214,12 @@ export function createManagementRouter(deps: ManagementRouterDeps): Router {
           next(err);
         }
       });
-      continue;
+      if (staticApproval) continue;
     }
 
     const guards: RequestHandler[] = [requireScope(scope, deps.auditSink)];
     if (route.stepUp) guards.push(aiStepUp);
-    else if (route.riskNarrowing) guards.push(aiStepUpWhenNarrowing);
+    else if (route.riskNarrowing && !conditionalApproval) guards.push(aiStepUpWhenNarrowing);
 
     router[verb](route.path, ...guards, async (req, res, next) => {
       try {
@@ -2187,6 +2228,10 @@ export function createManagementRouter(deps: ManagementRouterDeps): Router {
         const body = (req.body ?? {}) as Record<string, unknown>;
         if (!requireReasonAndKey(body, res)) return;
         const { idempotencyKey, reason, ...fields } = body;
+        if (route.approvalWhenNarrowing === "maker_checker" && effectiveRisk(route, fields) === "R4") {
+          res.status(409).json({ error: "AI_APPROVAL_REQUIRED", message: "This R4 narrowing requires maker-checker approval." });
+          return;
+        }
         const result = await executeAiCommand(await aiDeps(), { ...operatorParams(ctx), routeId: route.id, pathParams: req.params, fields, reason, idempotencyKey });
         res.status(200).json({ operation: result.operation, replay: result.replay });
       } catch (err) {
@@ -2537,6 +2582,7 @@ export function createManagementRouter(deps: ManagementRouterDeps): Router {
       Object.values(CREDENTIAL_R3_ACTIONS).find((entry) => entry.action === approval.requestedAction)?.scope ??
       paymentAdapterApprovalScope(approval) ??
       aiApprovalScope(approval) ??
+      engineDisableApprovalScope(approval) ??
       (isGlobalConfigRestoreApproval(approval) ? "global_config.restore.apply" : undefined)
     );
   }
@@ -2614,6 +2660,11 @@ export function createManagementRouter(deps: ManagementRouterDeps): Router {
         // (Governance never stored it); it must reproduce the digest bound at
         // request time. Kind/overlap/endpoint come from the approval itself —
         // any executor-supplied values for them are ignored.
+        if (isEngineDisableApproval(current)) {
+          const engineResult = await executeEngineDisableApproval({ ...approvalDeps, approvals: deps.approvals, fetchImpl: deps.fetchImpl }, executeParams);
+          res.status(200).json({ operation: engineResult.operation, approval: engineResult.approval, replay: engineResult.replay });
+          return;
+        }
         if (isGlobalConfigRestoreApproval(current)) {
           // 1A.14 — the approval binds package, before/after hashes and the
           // safe diff; nothing but the idempotency key comes from the executor.
