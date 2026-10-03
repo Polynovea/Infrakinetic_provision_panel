@@ -1,6 +1,6 @@
 // Deliberately separate from polynovea-api's own ecosystem.config.cjs —
 // different process name, different working directory, different log
-// path, different port (127.0.0.1:4100 only, never 0.0.0.0). Not deployed
+// path, different port (127.0.0.1:4101 only, never 0.0.0.0). Not deployed
 // by this scaffold — deploying this to the shared EC2 host is a separate,
 // explicitly-authorized step (master plan §7.1 item 6 / §14 same-EC2
 // deployment decision), not implied by this file's existence.
@@ -33,6 +33,7 @@ function parseDotEnv(filePath) {
 
 const dbSecrets = parseDotEnv(path.join(__dirname, ".db-secrets.env"));
 const cognitoSecrets = parseDotEnv(path.join(__dirname, ".cognito-secrets.env"));
+const onboardingSecrets = parseDotEnv(path.join(__dirname, ".onboarding-secrets.env"));
 
 module.exports = {
   apps: [
@@ -45,6 +46,7 @@ module.exports = {
       max_memory_restart: "256M",
       env: {
         NODE_ENV: "production",
+        GOVERNANCE_API_PORT: "4101",
         // GOVERNANCE_MANAGEMENT_ISSUER / _AUDIENCE are deployment-specific
         // hostnames/identifiers (master plan §2c.1: never hardcoded in
         // committed code) — the real EC2-local copy of this file sets them
@@ -53,9 +55,11 @@ module.exports = {
         GOVERNANCE_MANAGEMENT_SIGNING_PRIVATE_KEY_PEM: PRIVATE_KEY_PEM,
         ...dbSecrets,
         ...cognitoSecrets,
+        ...onboardingSecrets,
+        INFRAKINETIC_MANAGEMENT_BASE_URL: "http://127.0.0.1:4001",
       },
-      error_file: "./logs/governance-api-error.log",
-      out_file: "./logs/governance-api-out.log",
+      error_file: "/var/log/polynovea-governance/governance-api-error.log",
+      out_file: "/var/log/polynovea-governance/governance-api-out.log",
     },
   ],
 };
