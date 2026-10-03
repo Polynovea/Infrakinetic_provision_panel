@@ -1,0 +1,23 @@
+[Unit]
+Description=PM2 Polynovea Governance service manager
+Documentation=https://pm2.keymetrics.io/
+After=network.target
+
+[Service]
+Type=forking
+User=polynovea-governance
+Group=polynovea-governance
+LimitNOFILE=infinity
+LimitNPROC=infinity
+LimitCORE=infinity
+Environment=PATH=/usr/local/bin:/usr/bin:/usr/local/sbin:/usr/sbin:/bin
+Environment=HOME=/var/lib/polynovea-governance
+Environment=PM2_HOME=/var/lib/polynovea-governance/.pm2
+PIDFile=/var/lib/polynovea-governance/.pm2/pm2.pid
+Restart=on-failure
+ExecStart=/usr/lib/node_modules/pm2/bin/pm2 resurrect
+ExecReload=/usr/lib/node_modules/pm2/bin/pm2 reload all
+ExecStop=/usr/lib/node_modules/pm2/bin/pm2 kill
+
+[Install]
+WantedBy=multi-user.target
